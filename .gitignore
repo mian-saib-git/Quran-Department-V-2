@@ -1,0 +1,50 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+.env.local
+
+# Backend / Python
+backend/venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Environment files
+.env
+backend/.env
+
+# SQLite / old local databases
+*.sqlite
+*.sqlite3
+*.db
+server/*.db
+server/*.sqlite
+server/*.sqlite3
+backend/db.sqlite3
+
+# Temporary / backup files
+components.zip
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

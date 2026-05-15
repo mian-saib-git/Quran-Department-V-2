@@ -1,0 +1,77 @@
+export enum AttendanceStatus {
+  PRESENT = 'Present',
+  ABSENT = 'Absent',
+  LEAVE = 'Leave',
+}
+
+export enum EntityType {
+  STUDENT = 'Student',
+  TEACHER = 'Teacher',
+}
+
+export enum ClassType {
+  ONE_DAY = '1 day / week',
+  TWO_DAY = '2 days / week',
+  THREE_DAY = '3 days / week',
+  FOUR_DAY = '4 days / week',
+  FIVE_DAY = '5 days / week',
+  SIX_DAY = '6 days / week',
+  SEVEN_DAY = '7 days / week',
+}
+
+export interface Teacher {
+  id: string;
+  name: string;
+
+  fatherName: string;
+  email: string;
+  phone: string;
+  address: string;
+  joiningDate: string; // YYYY-MM-DD
+  notes: string;
+  photoUrl?: string;
+
+  // NEW: login for teacher
+  loginPin?: string; // 6-digit pin (optional for old saved data)
+  salary?: number;
+  subjects?: string[];
+}
+
+export interface Student {
+  id: string;
+  name: string;
+  teacherId: string;
+  timeSlot: string; // "HH:mm"
+  classType: ClassType;
+  classDays: string[];
+
+  // NEW: login for student
+  loginId?: string; // e.g. S123456 (optional for old saved data)
+
+}
+
+export interface AttendanceRecord {
+  id: string;
+  entityId: string;
+  entityType: EntityType;
+  date: string; // YYYY-MM-DD
+  classKey: string; // teacher: timeSlot, student: "" (or keep empty)
+  status: AttendanceStatus;
+  timestamp: number;
+}
+
+export interface AppState {
+  teachers: Teacher[];
+  students: Student[];
+  attendance: AttendanceRecord[];
+}
+
+export interface TimeSlotData {
+  time: string;
+  count: number;
+}
+
+export type Session =
+  | { role: 'coordinator' }
+  | { role: 'teacher'; teacherId: string }
+  | { role: 'student'; studentId: string };

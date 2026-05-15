@@ -1,0 +1,861 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  Global UI theme for the app.
+  Tailwind is loaded via CDN in index.html.
+  We keep reusable “UI styles + animations here.
+*/
+
+html, body, #root { height: 100%; }
+
+body {
+  font-family: "Plus Jakarta Sans", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+input, select, textarea { font-size: 16px; }
+
+/* ===============
+   Animated backdrop
+   =============== */
+
+/*
+  V5 UI Theme (Professional React Dashboard)
+  -----------------------------------------
+  The app uses Tailwind utility classes, but we keep the "design system" here.
+  This version is intentionally more "product dashboard" and less "effect-heavy":
+  crisp surfaces, consistent spacing, subtle motion.
+*/
+
+:root {
+  --bg: #f3f6fb;
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-strong: rgba(255, 255, 255, 0.98);
+  --border: rgba(15, 23, 42, 0.10);
+  --border-strong: rgba(15, 23, 42, 0.14);
+  --text: #0f172a;
+  --muted: rgba(15, 23, 42, 0.62);
+  --shadow: 0 18px 55px rgba(2, 6, 23, 0.10);
+  --shadow-soft: 0 10px 28px rgba(2, 6, 23, 0.08);
+  --shadow-card: 0 10px 24px rgba(2, 6, 23, 0.08);
+
+  --primary: #2563eb;     /* blue-600 */
+  --primary-2: #4f46e5;   /* indigo-600 */
+  --success: #16a34a;
+  --danger: #ef4444;
+}
+
+body {
+  background:
+    radial-gradient(1100px 700px at 10% 0%, rgba(37, 99, 235, 0.14), transparent 62%),
+    radial-gradient(900px 600px at 95% 8%, rgba(79, 70, 229, 0.12), transparent 58%),
+    radial-gradient(900px 600px at 45% 100%, rgba(22, 163, 74, 0.08), transparent 60%),
+    linear-gradient(180deg, #eef3ff 0%, var(--bg) 55%, #ffffff 100%);
+  background-attachment: fixed;
+  overflow-x: hidden;
+  color: var(--text);
+}
+
+/* light noise overlay (subtle) */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.04;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(2, 6, 23, 0.9) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+/* ===============
+   Reusable UI classes
+   =============== */
+
+.ui-glass {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-soft);
+}
+
+.ui-glass-strong {
+  background: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+}
+
+.ui-card {
+  border-radius: 24px;
+}
+
+.ui-card-hover {
+  transition: transform 180ms ease, box-shadow 220ms ease, border-color 220ms ease;
+}
+
+.ui-card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 18px 55px rgba(2, 6, 23, 0.14);
+}
+
+.ui-gradient-border {
+  position: relative;
+}
+
+.ui-btn {
+  transition: transform 160ms ease, box-shadow 200ms ease, filter 200ms ease;
+  will-change: transform;
+}
+
+.ui-btn:hover {
+  transform: translateY(-1px);
+}
+
+.ui-btn:active {
+  transform: translateY(0);
+}
+
+.ui-btn-primary {
+  color: white;
+  background: linear-gradient(135deg, var(--primary), var(--primary-2));
+  box-shadow: 0 12px 30px rgba(37, 99, 235, 0.22);
+}
+
+.ui-btn-primary:hover {
+  filter: brightness(1.02) saturate(1.05);
+  box-shadow: 0 14px 34px rgba(37, 99, 235, 0.22);
+}
+
+.ui-btn-danger {
+  color: white;
+  background: linear-gradient(135deg, #ef4444, #f97316);
+  box-shadow: 0 12px 28px rgba(239, 68, 68, 0.18);
+}
+
+.ui-pill {
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  box-shadow: 0 6px 16px rgba(2, 6, 23, 0.06);
+}
+
+/* small entrance animations */
+.anim-fade-up {
+  animation: fadeUp 420ms ease both;
+}
+
+.anim-pop {
+  animation: pop 240ms ease both;
+}
+
+.anim-slide-in-left {
+  animation: slideInLeft 360ms ease both;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pop {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* nicer scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: rgba(2, 6, 23, 0.04); }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.70), rgba(79, 70, 229, 0.70));
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.78), rgba(14, 165, 233, 0.78));
+}
+
+
+/* ===============
+   Extra polish: glow + shine + animated gradients
+   =============== */
+
+.ui-title-gradient {
+  background: linear-gradient(135deg, var(--primary), var(--primary-2), #0ea5e9);
+  background-size: 220% 220%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: gradientShift 12s ease infinite;
+}
+
+@keyframes gradientShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.ui-glow {
+  box-shadow:
+    0 18px 70px rgba(37, 99, 235, 0.12),
+    0 12px 40px rgba(79, 70, 229, 0.08);
+}
+
+.ui-shine {
+  position: relative;
+  overflow: hidden;
+}
+
+.ui-shine::after {
+  content: "";
+  position: absolute;
+  top: -40%;
+  left: -60%;
+  width: 60%;
+  height: 180%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45), transparent);
+  transform: rotate(18deg);
+  opacity: 0;
+  transition: opacity 220ms ease;
+  pointer-events: none;
+}
+
+.ui-shine:hover::after {
+  opacity: 1;
+  animation: shineSweep 900ms ease;
+}
+
+@keyframes shineSweep {
+  from { transform: translateX(-30%) rotate(18deg); }
+  to   { transform: translateX(220%) rotate(18deg); }
+}
+
+.ui-soft-ring {
+  box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.10), var(--shadow-soft);
+}
+
+.ui-press {
+  transition: transform 140ms ease, box-shadow 180ms ease;
+}
+.ui-press:active { transform: scale(0.985); }
+
+@media (prefers-reduced-motion: reduce) {
+  body::before, body::after, .ui-title-gradient { animation: none !important; }
+  .ui-card-hover:hover { transform: none !important; }
+  .ui-btn:hover, .ui-btn:active { transform: none !important; }
+  .anim-fade-up, .anim-pop, .anim-slide-in-left { animation: none !important; }
+}
+
+
+/* ===============
+   V5: Professional dashboard shell
+   =============== */
+
+.ui-shell { position: relative; }
+
+.ui-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+/* Sidebar becomes a clean product-style panel */
+.ui-sidebar {
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(15, 23, 42, 0.10) !important;
+  box-shadow: 0 18px 60px rgba(2, 6, 23, 0.08);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.ui-sidebar h1 { color: var(--text); }
+.ui-sidebar p { color: var(--muted); }
+
+/* Navigation button (React dashboard feel) */
+.ui-nav-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.03);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  color: rgba(15, 23, 42, 0.86);
+  transition: transform 160ms ease, box-shadow 200ms ease, background 200ms ease, border-color 200ms ease;
+  position: relative;
+}
+
+.ui-nav-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(37, 99, 235, 0.06);
+  border-color: rgba(37, 99, 235, 0.16);
+  box-shadow: 0 14px 34px rgba(2, 6, 23, 0.10);
+}
+
+.ui-nav-btn.is-active {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.14), rgba(79, 70, 229, 0.10));
+  border-color: rgba(37, 99, 235, 0.26);
+  box-shadow: 0 16px 38px rgba(37, 99, 235, 0.12);
+}
+
+.ui-nav-btn.is-active::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 9px;
+  bottom: 9px;
+  width: 4px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--primary), var(--primary-2));
+}
+
+.ui-nav-btn.is-active svg { color: var(--primary); }
+
+.ui-nav-logout {
+  background: rgba(239, 68, 68, 0.06);
+  border: 1px solid rgba(239, 68, 68, 0.14);
+  color: rgba(15, 23, 42, 0.86);
+}
+
+.ui-nav-logout:hover {
+  background: rgba(239, 68, 68, 0.10);
+  border-color: rgba(239, 68, 68, 0.22);
+}
+
+.ui-icon-btn {
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  transition: transform 160ms ease, box-shadow 200ms ease, background 200ms ease;
+}
+
+.ui-icon-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(37, 99, 235, 0.06);
+  box-shadow: 0 12px 30px rgba(2, 6, 23, 0.10);
+}
+
+.ui-avatar {
+  position: relative;
+}
+
+.ui-avatar::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.50), rgba(79, 70, 229, 0.42));
+  filter: blur(10px);
+  opacity: 0.28;
+  z-index: -1;
+}
+
+/* Subtle motion (professional) */
+@keyframes floaty {
+  0% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+  100% { transform: translateY(0); }
+}
+.animate-floaty { animation: floaty 4.6s ease-in-out infinite; }
+@media (min-width: 768px) {
+  aside.group {
+    will-change: width;
+  }
+}
+/* PERFORMANCE TUNING: reduce expensive blur/shadows */
+.ui-glass,
+.ui-glass-strong {
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
+}
+
+.ui-glass-strong {
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+}
+
+.ui-card {
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08) !important;
+}
+
+/* smoother animations (less heavy) */
+* {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+
+/* ============================================================
+   DARK THEME FOUNDATION
+   Works when App.tsx adds class "dark" on <html>
+   ============================================================ */
+
+html.dark {
+  --bg: #070b14;
+  --surface: rgba(15, 23, 42, 0.88);
+  --surface-strong: rgba(15, 23, 42, 0.96);
+  --border: rgba(148, 163, 184, 0.18);
+  --border-strong: rgba(148, 163, 184, 0.26);
+  --text: #f8fafc;
+  --muted: rgba(226, 232, 240, 0.66);
+  --shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  --shadow-soft: 0 16px 44px rgba(0, 0, 0, 0.32);
+  --shadow-card: 0 14px 34px rgba(0, 0, 0, 0.30);
+
+  --primary: #60a5fa;
+  --primary-2: #818cf8;
+  --success: #34d399;
+  --danger: #fb7185;
+}
+
+html.dark body {
+  color: var(--text);
+  background:
+    radial-gradient(900px 520px at 8% 0%, rgba(59, 130, 246, 0.18), transparent 62%),
+    radial-gradient(850px 560px at 90% 8%, rgba(129, 140, 248, 0.16), transparent 60%),
+    radial-gradient(900px 620px at 42% 100%, rgba(20, 184, 166, 0.10), transparent 62%),
+    linear-gradient(180deg, #050816 0%, #08111f 48%, #060914 100%);
+  background-attachment: fixed;
+}
+
+html.dark body::before {
+  opacity: 0.075;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.55) 1px, transparent 1px);
+}
+
+/* Main reusable cards */
+html.dark .ui-glass {
+  background: rgba(15, 23, 42, 0.78) !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  box-shadow:
+    0 18px 55px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+html.dark .ui-glass-strong {
+  background: rgba(15, 23, 42, 0.92) !important;
+  border-color: rgba(148, 163, 184, 0.24) !important;
+  box-shadow:
+    0 26px 80px rgba(0, 0, 0, 0.46),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+html.dark .ui-card {
+  box-shadow:
+    0 18px 55px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+}
+
+html.dark .ui-card-hover:hover {
+  box-shadow:
+    0 26px 76px rgba(0, 0, 0, 0.48),
+    0 0 0 1px rgba(129, 140, 248, 0.16) !important;
+}
+
+/* Pills and buttons */
+html.dark .ui-pill {
+  background: rgba(15, 23, 42, 0.88) !important;
+  border-color: rgba(148, 163, 184, 0.20) !important;
+  color: #e2e8f0 !important;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.28) !important;
+}
+
+html.dark .ui-btn-primary {
+  background: linear-gradient(135deg, #4f46e5, #2563eb, #0ea5e9) !important;
+  box-shadow:
+    0 18px 42px rgba(37, 99, 235, 0.28),
+    0 0 0 1px rgba(147, 197, 253, 0.18) !important;
+}
+
+/* Sidebar */
+html.dark .ui-sidebar {
+  background: rgba(15, 23, 42, 0.86) !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+html.dark .ui-sidebar h1,
+html.dark .ui-sidebar p {
+  color: #e2e8f0 !important;
+}
+
+html.dark .ui-nav-btn {
+  background: rgba(30, 41, 59, 0.62) !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  color: #dbeafe !important;
+}
+
+html.dark .ui-nav-btn:hover {
+  background: rgba(37, 99, 235, 0.16) !important;
+  border-color: rgba(96, 165, 250, 0.28) !important;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.34) !important;
+}
+
+html.dark .ui-nav-btn.is-active {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.32), rgba(79, 70, 229, 0.24)) !important;
+  border-color: rgba(147, 197, 253, 0.36) !important;
+  color: #ffffff !important;
+}
+
+html.dark .ui-nav-btn.is-active svg {
+  color: #bfdbfe !important;
+}
+
+html.dark .ui-nav-logout {
+  background: rgba(244, 63, 94, 0.12) !important;
+  border-color: rgba(251, 113, 133, 0.22) !important;
+  color: #fecdd3 !important;
+}
+
+/* Inputs */
+html.dark input,
+html.dark select,
+html.dark textarea {
+  color: #f8fafc;
+  background-color: rgba(15, 23, 42, 0.82);
+  border-color: rgba(148, 163, 184, 0.24);
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: rgba(203, 213, 225, 0.48);
+}
+
+html.dark input:focus,
+html.dark select:focus,
+html.dark textarea:focus {
+  border-color: rgba(96, 165, 250, 0.65);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.18);
+}
+
+/* Tailwind classes that are heavily used in your app */
+html.dark .bg-white,
+html.dark .bg-white\/70,
+html.dark .bg-white\/75,
+html.dark .bg-white\/80,
+html.dark .bg-white\/85,
+html.dark .bg-white\/90,
+html.dark .bg-white\/95 {
+  background-color: rgba(15, 23, 42, 0.86) !important;
+}
+
+html.dark .bg-slate-50,
+html.dark .bg-slate-50\/70,
+html.dark .bg-slate-50\/80,
+html.dark .bg-slate-100,
+html.dark .bg-slate-100\/70 {
+  background-color: rgba(30, 41, 59, 0.62) !important;
+}
+
+html.dark .text-slate-950,
+html.dark .text-slate-900,
+html.dark .text-slate-800,
+html.dark .text-slate-700 {
+  color: #f8fafc !important;
+}
+
+html.dark .text-slate-600,
+html.dark .text-slate-500,
+html.dark .text-slate-400 {
+  color: rgba(226, 232, 240, 0.68) !important;
+}
+
+html.dark .border-slate-100,
+html.dark .border-slate-200,
+html.dark .border-slate-200\/70,
+html.dark .border-slate-200\/80,
+html.dark .border-white,
+html.dark .border-white\/50,
+html.dark .border-white\/70,
+html.dark .border-white\/80,
+html.dark .border-white\/90 {
+  border-color: rgba(148, 163, 184, 0.18) !important;
+}
+
+html.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(148, 163, 184, 0.13) !important;
+}
+
+/* Table rows/cards */
+html.dark thead,
+html.dark .bg-gradient-to-r.from-slate-50,
+html.dark .bg-gradient-to-r.from-slate-50.to-white {
+  background: rgba(15, 23, 42, 0.94) !important;
+}
+
+html.dark tr:hover {
+  background-color: rgba(37, 99, 235, 0.10) !important;
+}
+
+/* Status badges keep readable */
+html.dark .bg-emerald-50 {
+  background-color: rgba(16, 185, 129, 0.13) !important;
+}
+
+html.dark .text-emerald-700,
+html.dark .text-emerald-600 {
+  color: #6ee7b7 !important;
+}
+
+html.dark .border-emerald-100 {
+  border-color: rgba(52, 211, 153, 0.26) !important;
+}
+
+html.dark .bg-rose-50 {
+  background-color: rgba(244, 63, 94, 0.13) !important;
+}
+
+html.dark .text-rose-700,
+html.dark .text-rose-600 {
+  color: #fda4af !important;
+}
+
+html.dark .border-rose-100,
+html.dark .border-rose-200 {
+  border-color: rgba(251, 113, 133, 0.24) !important;
+}
+
+html.dark .bg-indigo-50 {
+  background-color: rgba(79, 70, 229, 0.16) !important;
+}
+
+html.dark .text-indigo-700,
+html.dark .text-indigo-600 {
+  color: #c7d2fe !important;
+}
+
+html.dark .border-indigo-100,
+html.dark .border-indigo-200 {
+  border-color: rgba(129, 140, 248, 0.30) !important;
+}
+
+/* Modal backdrop and modal polish */
+html.dark .backdrop-blur-md {
+  background-color: rgba(0, 0, 0, 0.62) !important;
+}
+
+html.dark .ui-glow {
+  box-shadow:
+    0 24px 90px rgba(0, 0, 0, 0.48),
+    0 0 0 1px rgba(129, 140, 248, 0.10) !important;
+}
+
+/* Dark theme scrollbar */
+html.dark ::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.65);
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(96, 165, 250, 0.72), rgba(129, 140, 248, 0.72));
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(147, 197, 253, 0.88), rgba(165, 180, 252, 0.88));
+}
+
+/* Better dark animation tone */
+html.dark .ui-title-gradient {
+  background: linear-gradient(135deg, #93c5fd, #c4b5fd, #67e8f9);
+  background-size: 220% 220%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent !important;
+}
+
+/* Remove overly bright shine in dark mode */
+html.dark .ui-shine::after {
+  background: linear-gradient(90deg, transparent, rgba(147, 197, 253, 0.16), transparent);
+}
+
+/* ================================
+   Dark Theme Final Polish
+   ================================ */
+
+.dark body {
+  background:
+    radial-gradient(900px 600px at 12% 0%, rgba(79, 70, 229, 0.20), transparent 60%),
+    radial-gradient(800px 520px at 90% 8%, rgba(14, 165, 233, 0.14), transparent 58%),
+    radial-gradient(900px 600px at 50% 100%, rgba(16, 185, 129, 0.08), transparent 60%),
+    linear-gradient(180deg, #020617 0%, #07111f 55%, #020617 100%);
+  color: #e5edf8;
+}
+
+.dark body::before {
+  opacity: 0.08;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(148, 163, 184, 0.55) 1px, transparent 1px);
+}
+
+.dark .ui-glass,
+.dark .ui-glass-strong,
+.dark .ui-card {
+  background: rgba(15, 23, 42, 0.82) !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  box-shadow:
+    0 22px 60px rgba(0, 0, 0, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+.dark .ui-card-hover:hover {
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.48),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07) !important;
+}
+
+.dark .ui-pill {
+  background: rgba(15, 23, 42, 0.88);
+  border-color: rgba(148, 163, 184, 0.20);
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.30),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Fix hard white neumorphic shadows in dark mode */
+.dark aside,
+.dark header > div,
+.dark [class*="shadow-[-"],
+.dark [class*="shadow-[0_"],
+.dark [class*="shadow-sm"],
+.dark [class*="shadow-md"],
+.dark [class*="shadow-xl"] {
+  box-shadow:
+    0 18px 45px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Dark readable surfaces */
+.dark .bg-white,
+.dark .bg-white\/55,
+.dark .bg-white\/60,
+.dark .bg-white\/68,
+.dark .bg-white\/70,
+.dark .bg-white\/72,
+.dark .bg-white\/75,
+.dark .bg-white\/80,
+.dark .bg-white\/82,
+.dark .bg-white\/85,
+.dark .bg-white\/90,
+.dark .bg-white\/95 {
+  background-color: rgba(15, 23, 42, 0.84) !important;
+}
+
+.dark .bg-slate-50,
+.dark .bg-slate-50\/45,
+.dark .bg-slate-50\/70,
+.dark .bg-slate-50\/80 {
+  background-color: rgba(30, 41, 59, 0.55) !important;
+}
+
+.dark .text-slate-950,
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-slate-700 {
+  color: #f8fafc !important;
+}
+
+.dark .text-slate-600,
+.dark .text-slate-500,
+.dark .text-slate-400 {
+  color: #94a3b8 !important;
+}
+
+.dark .border-slate-100,
+.dark .border-slate-200,
+.dark .border-slate-200\/55,
+.dark .border-slate-200\/70,
+.dark .border-slate-200\/75,
+.dark .border-slate-200\/80 {
+  border-color: rgba(148, 163, 184, 0.18) !important;
+}
+
+.dark input,
+.dark select,
+.dark textarea {
+  background: rgba(2, 6, 23, 0.72) !important;
+  color: #f8fafc !important;
+  border-color: rgba(148, 163, 184, 0.24) !important;
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #64748b !important;
+}
+
+.dark table thead,
+.dark th {
+  background: rgba(15, 23, 42, 0.92) !important;
+}
+
+.dark td,
+.dark th {
+  border-color: rgba(148, 163, 184, 0.14) !important;
+}
+
+/* Scrollbar in dark mode */
+.dark ::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.75), rgba(14, 165, 233, 0.70));
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(129, 140, 248, 0.90), rgba(56, 189, 248, 0.85));
+}
+
+/* Keep success / danger badges readable */
+.dark .bg-emerald-50 {
+  background-color: rgba(6, 78, 59, 0.32) !important;
+}
+
+.dark .text-emerald-700,
+.dark .text-emerald-600 {
+  color: #6ee7b7 !important;
+}
+
+.dark .border-emerald-100 {
+  border-color: rgba(110, 231, 183, 0.22) !important;
+}
+
+.dark .bg-rose-50 {
+  background-color: rgba(127, 29, 29, 0.32) !important;
+}
+
+.dark .text-rose-700,
+.dark .text-rose-600 {
+  color: #fda4af !important;
+}
+
+.dark .border-rose-100,
+.dark .border-rose-200\/70 {
+  border-color: rgba(253, 164, 175, 0.22) !important;
+}
+
+.dark .bg-indigo-50 {
+  background-color: rgba(67, 56, 202, 0.24) !important;
+}
+
+.dark .text-indigo-700,
+.dark .text-indigo-600 {
+  color: #c7d2fe !important;
+}
+
+.dark .border-indigo-100,
+.dark .border-indigo-200 {
+  border-color: rgba(199, 210, 254, 0.22) !important;
+}

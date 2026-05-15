@@ -1,0 +1,5 @@
+{
+  "name": "Qur’an Academy Manager",
+  "description": "Internal management system for Iqra Virtual School coordinators to manage daily class schedules, enrollment, and attendance.",
+  "requestFramePermissions": []
+}
