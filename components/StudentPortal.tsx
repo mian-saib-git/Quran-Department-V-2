@@ -1,20 +1,18 @@
+// STUDENT_PORTAL_UPDATED_FINAL_VERSION_3_NO_SCHEDULE_FILTERS - cleaner schedule cards and today class status
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  Award,
   BookOpen,
   CalendarDays,
   CheckCircle2,
   ChevronRight,
   Clock,
-  GraduationCap,
   History,
   LayoutDashboard,
   Loader2,
   LogOut,
-  RefreshCw,
+  Moon,
   Search,
-  Sparkles,
-  UserRound,
+  Sun,
   XCircle,
   AlertCircle,
 } from "lucide-react";
@@ -30,6 +28,15 @@ type Props = {
 };
 
 type Tab = "overview" | "attendance" | "lessons" | "schedule";
+type FilterView = "all" | "daily" | "weekly" | "monthly" | "yearly";
+
+type ClockAngles = {
+  hour: number;
+  minute: number;
+  second: number;
+};
+
+const PAGE_SIZE = 9;
 
 const WEEKDAY_LABELS: Record<string, string> = {
   monday: "Monday",
@@ -51,16 +58,18 @@ const WEEKDAY_SHORT: Record<string, string> = {
   Sunday: "Sun",
 };
 
+const WEEKDAY_ORDER = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+];
+
 function today() {
   return new Date().toISOString().slice(0, 10);
-}
-
-function getCurrentTime() {
-  return new Date().toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  });
 }
 
 function getCurrentDate() {
@@ -73,6 +82,10 @@ function getCurrentDate() {
 
 function normalizeDay(day: string) {
   return WEEKDAY_LABELS[String(day || "").toLowerCase()] || day || "-";
+}
+
+function getTodayWeekday() {
+  return new Date().toLocaleDateString("en-US", { weekday: "long" });
 }
 
 function formatTime(value: string) {
@@ -103,24 +116,6 @@ function formatDate(value: string) {
   }
 }
 
-function monthKey(value: string) {
-  if (!value) return "unknown";
-  return value.slice(0, 7);
-}
-
-function formatMonth(value: string) {
-  if (!value || value === "unknown") return "Unknown Month";
-
-  try {
-    return new Date(`${value}-01T00:00:00`).toLocaleDateString("en-US", {
-      month: "long",
-      year: "numeric",
-    });
-  } catch {
-    return value;
-  }
-}
-
 function getInitials(name: string) {
   return (
     String(name || "")
@@ -131,6 +126,208 @@ function getInitials(name: string) {
       .join("")
       .toUpperCase() || "S"
   );
+}
+
+function timeToMinutes(value: string) {
+  const clean = String(value || "").slice(0, 5);
+  const [h, m] = clean.split(":").map(Number);
+
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
+
+  return h * 60 + m;
+}
+
+const PAKISTAN_TIME_ZONE = "Asia/Karachi";
+const LOCAL_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "Local time";
+const DEFAULT_CLASS_DURATION_MINUTES = 30;
+
+function weekdayIndex(day: string) {
+  const normalized = normalizeDay(day);
+  const index = WEEKDAY_ORDER.indexOf(normalized);
+  return index >= 0 ? index : 0;
+}
+
+function getPakistanDateParts(date: Date) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: PAKISTAN_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "long",
+  });
+
+  const parts = formatter.formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || "";
+
+  return {
+    year: Number(get("year")),
+    month: Number(get("month")),
+    day: Number(get("day")),
+    weekday: get("weekday"),
+  };
+}
+
+function addDaysUtc(date: Date, days: number) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function classDurationMinutes(schedule: any) {
+  const raw =
+    schedule?.duration_minutes ||
+    schedule?.class_duration_minutes ||
+    schedule?.duration ||
+    schedule?.lesson_duration;
+
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_CLASS_DURATION_MINUTES;
+}
+
+function getScheduleStartFromPakistanTime(schedule: any, now = new Date()) {
+  const pkNow = getPakistanDateParts(now);
+  const pkToday = new Date(Date.UTC(pkNow.year, pkNow.month - 1, pkNow.day));
+  const todayIndex = weekdayIndex(pkNow.weekday);
+  const targetIndex = weekdayIndex(schedule?.weekday);
+  const daysUntil = (targetIndex - todayIndex + 7) % 7;
+  const targetPkDate = addDaysUtc(pkToday, daysUntil);
+
+  const cleanTime = String(schedule?.time_slot || "00:00").slice(0, 5);
+  const [hours, minutes] = cleanTime.split(":").map(Number);
+  const safeHours = Number.isFinite(hours) ? hours : 0;
+  const safeMinutes = Number.isFinite(minutes) ? minutes : 0;
+
+  // Pakistan uses UTC+05:00. Schedules are saved in Pakistan time.
+  return new Date(
+    Date.UTC(
+      targetPkDate.getUTCFullYear(),
+      targetPkDate.getUTCMonth(),
+      targetPkDate.getUTCDate(),
+      safeHours - 5,
+      safeMinutes,
+      0,
+      0
+    )
+  );
+}
+
+function getScheduleTiming(schedule: any, now = new Date()) {
+  const duration = classDurationMinutes(schedule);
+  const thisWeekStart = getScheduleStartFromPakistanTime(schedule, now);
+  const thisWeekEnd = new Date(thisWeekStart.getTime() + duration * 60 * 1000);
+  const previousStart = new Date(thisWeekStart.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const previousEnd = new Date(previousStart.getTime() + duration * 60 * 1000);
+
+  let activeStart = thisWeekStart;
+
+  if (now >= previousStart && now < previousEnd) {
+    activeStart = previousStart;
+  } else if (now > thisWeekEnd) {
+    activeStart = new Date(thisWeekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
+  }
+
+  const activeEnd = new Date(activeStart.getTime() + duration * 60 * 1000);
+  const diffMinutes = Math.round((activeStart.getTime() - now.getTime()) / 60000);
+  const isLive = now >= activeStart && now < activeEnd;
+  const isPast = now >= activeEnd;
+  const isUpcoming = diffMinutes > 0;
+
+  return {
+    start: activeStart,
+    end: activeEnd,
+    duration,
+    diffMinutes,
+    isLive,
+    isPast,
+    isUpcoming,
+  };
+}
+
+function formatLocalClassTime(date: Date) {
+  return date.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function formatLocalClassDate(date: Date) {
+  return date.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function localDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function countdownFromMinutes(minutes: number) {
+  if (minutes <= 0) return "Starting now";
+  if (minutes === 1) return "1 min left";
+  if (minutes < 60) return `${minutes} min left`;
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  if (hours < 24) {
+    return remainingMinutes === 0
+      ? `${hours} hr left`
+      : `${hours} hr ${remainingMinutes} min left`;
+  }
+
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours === 0 ? `${days} day left` : `${days} day ${remainingHours} hr left`;
+}
+
+function nextClassLabel(schedule: any, now = new Date()) {
+  const timing = getScheduleTiming(schedule, now);
+
+  if (timing.isLive) return `Live now · ends at ${formatLocalClassTime(timing.end)}`;
+  if (timing.isUpcoming) return `${countdownFromMinutes(timing.diffMinutes)} · ${formatLocalClassDate(timing.start)}`;
+
+  return `Next class: ${formatLocalClassDate(timing.start)}`;
+}
+
+function getClockAngles(now: Date): ClockAngles {
+  const seconds = now.getSeconds();
+  const minutes = now.getMinutes();
+  const hours = now.getHours() % 12;
+
+  return {
+    hour: hours * 30 + minutes * 0.5,
+    minute: minutes * 6 + seconds * 0.1,
+    second: seconds * 6,
+  };
+}
+
+function parseDateOnly(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getWeekRange(dateValue: string) {
+  const date = parseDateOnly(dateValue);
+  if (!date) return { start: "", end: "" };
+
+  const day = date.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+
+  const start = new Date(date);
+  start.setDate(date.getDate() + diffToMonday);
+
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+
+  return {
+    start: start.toISOString().slice(0, 10),
+    end: end.toISOString().slice(0, 10),
+  };
 }
 
 function statusLabel(status?: string) {
@@ -153,32 +350,32 @@ function attendanceColor(status?: string) {
 
   if (value === "present") {
     return {
-      card: "bg-emerald-50 border-emerald-100 text-emerald-700",
-      badge: "bg-emerald-50 border-emerald-200 text-emerald-700",
-      dot: "bg-emerald-500",
+      card: "sp-status-card sp-status-card--emerald",
+      badge: "sp-status-badge sp-status-badge--emerald",
+      dot: "sp-dot sp-dot--emerald",
     };
   }
 
   if (value === "absent") {
     return {
-      card: "bg-rose-50 border-rose-100 text-rose-700",
-      badge: "bg-rose-50 border-rose-200 text-rose-700",
-      dot: "bg-rose-500",
+      card: "sp-status-card sp-status-card--rose",
+      badge: "sp-status-badge sp-status-badge--rose",
+      dot: "sp-dot sp-dot--rose",
     };
   }
 
   if (value === "leave") {
     return {
-      card: "bg-amber-50 border-amber-100 text-amber-700",
-      badge: "bg-amber-50 border-amber-200 text-amber-700",
-      dot: "bg-amber-500",
+      card: "sp-status-card sp-status-card--amber",
+      badge: "sp-status-badge sp-status-badge--amber",
+      dot: "sp-dot sp-dot--amber",
     };
   }
 
   return {
-    card: "bg-slate-50 border-slate-100 text-slate-600",
-    badge: "bg-slate-50 border-slate-200 text-slate-600",
-    dot: "bg-slate-400",
+    card: "sp-status-card sp-status-card--slate",
+    badge: "sp-status-badge sp-status-badge--slate",
+    dot: "sp-dot sp-dot--slate",
   };
 }
 
@@ -187,35 +384,35 @@ function progressColor(status?: string) {
 
   if (value === "excellent") {
     return {
-      badge: "bg-emerald-50 border-emerald-200 text-emerald-700",
-      dot: "bg-emerald-500",
+      badge: "sp-status-badge sp-status-badge--emerald",
+      dot: "sp-dot sp-dot--emerald",
     };
   }
 
   if (value === "good") {
     return {
-      badge: "bg-blue-50 border-blue-200 text-blue-700",
-      dot: "bg-blue-500",
+      badge: "sp-status-badge sp-status-badge--blue",
+      dot: "sp-dot sp-dot--blue",
     };
   }
 
   if (value === "satisfactory") {
     return {
-      badge: "bg-amber-50 border-amber-200 text-amber-700",
-      dot: "bg-amber-500",
+      badge: "sp-status-badge sp-status-badge--amber",
+      dot: "sp-dot sp-dot--amber",
     };
   }
 
   if (value === "needs_improvement") {
     return {
-      badge: "bg-rose-50 border-rose-200 text-rose-700",
-      dot: "bg-rose-500",
+      badge: "sp-status-badge sp-status-badge--rose",
+      dot: "sp-dot sp-dot--rose",
     };
   }
 
   return {
-    badge: "bg-slate-50 border-slate-200 text-slate-600",
-    dot: "bg-slate-400",
+    badge: "sp-status-badge sp-status-badge--slate",
+    dot: "sp-dot sp-dot--slate",
   };
 }
 
@@ -228,9 +425,32 @@ function markedByLabel(item: any) {
   const role = String(item?.marked_by_role || "coordinator").toLowerCase();
 
   if (role === "teacher") return `Marked by Teacher ${name}`;
-  if (role === "coordinator") return `Marked by Coordinator ${name === "Coordinator" ? "" : name}`.trim();
+  if (role === "coordinator") {
+    return `Marked by Coordinator ${name === "Coordinator" ? "" : name}`.trim();
+  }
 
   return `Marked by ${name}`;
+}
+
+function scheduleStudentName(schedule: any) {
+  return (
+    schedule?.student?.name ||
+    schedule?.student_name ||
+    schedule?.student?.username ||
+    "Student"
+  );
+}
+
+function paginateItems<T>(items: T[], page: number, pageSize = PAGE_SIZE) {
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.min(Math.max(page, 1), totalPages);
+  const start = (safePage - 1) * pageSize;
+
+  return {
+    items: items.slice(start, start + pageSize),
+    totalPages,
+    safePage,
+  };
 }
 
 export function StudentPortal({ onLogout }: Props) {
@@ -239,8 +459,24 @@ export function StudentPortal({ onLogout }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState("");
-  const [search, setSearch] = useState("");
-  const [currentTime, setCurrentTime] = useState(getCurrentTime());
+
+  const [clockNow, setClockNow] = useState(new Date());
+  const [studentTheme, setStudentTheme] = useState<"light" | "dark">("light");
+
+  const [lessonSearch, setLessonSearch] = useState("");
+  const [lessonView, setLessonView] = useState<FilterView>("all");
+  const [lessonDateFilter, setLessonDateFilter] = useState(today());
+  const [lessonMonthFilter, setLessonMonthFilter] = useState(new Date().getMonth() + 1);
+  const [lessonYearFilter, setLessonYearFilter] = useState(new Date().getFullYear());
+  const [lessonPage, setLessonPage] = useState(1);
+
+  const [attendanceView, setAttendanceView] = useState<FilterView>("all");
+  const [attendanceDateFilter, setAttendanceDateFilter] = useState(today());
+  const [attendanceMonthFilter, setAttendanceMonthFilter] = useState(new Date().getMonth() + 1);
+  const [attendanceYearFilter, setAttendanceYearFilter] = useState(new Date().getFullYear());
+  const [attendancePage, setAttendancePage] = useState(1);
+
+  const [schedulePage, setSchedulePage] = useState(1);
 
   const loadDashboard = async (silent = false) => {
     try {
@@ -261,13 +497,22 @@ export function StudentPortal({ onLogout }: Props) {
     void loadDashboard();
 
     const timer = window.setInterval(() => void loadDashboard(true), 15000);
-    const clockTimer = window.setInterval(() => setCurrentTime(getCurrentTime()), 1000);
+    const clockTimer = window.setInterval(() => setClockNow(new Date()), 1000);
 
     return () => {
       window.clearInterval(timer);
       window.clearInterval(clockTimer);
     };
   }, []);
+
+  useEffect(() => {
+    setLessonPage(1);
+  }, [lessonSearch, lessonView, lessonDateFilter, lessonMonthFilter, lessonYearFilter]);
+
+  useEffect(() => {
+    setAttendancePage(1);
+  }, [attendanceView, attendanceDateFilter, attendanceMonthFilter, attendanceYearFilter]);
+
 
   const student = dashboard?.student;
   const studentName = student?.name || dashboard?.user?.username || "Student";
@@ -276,9 +521,15 @@ export function StudentPortal({ onLogout }: Props) {
   const schedules = dashboard?.schedules || [];
   const attendance = dashboard?.attendance || [];
   const lessons = dashboard?.lessons || [];
-  const assignedSubjects = student?.assigned_subjects || [];
 
   const todayDate = today();
+  const todayWeekday = getTodayWeekday();
+  const currentTime = clockNow.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+  const clockAngles = getClockAngles(clockNow);
 
   const sortedAttendance = useMemo(() => {
     return [...attendance].sort((a: any, b: any) => {
@@ -295,75 +546,226 @@ export function StudentPortal({ onLogout }: Props) {
     return sortedAttendance.find((item: any) => item.date === todayDate);
   }, [sortedAttendance, todayDate]);
 
-  const presentCount = sortedAttendance.filter((item: any) => item.status === "present").length;
-  const absentCount = sortedAttendance.filter((item: any) => item.status === "absent").length;
-  const leaveCount = sortedAttendance.filter((item: any) => item.status === "leave").length;
+  const filteredAttendance = useMemo(() => {
+    let rows = sortedAttendance;
 
-  const filteredLessons = useMemo(() => {
-    const q = search.trim().toLowerCase();
-
-    return lessons.filter((lesson: any) => {
-      if (!q) return true;
-
-      return [
-        lesson.subject,
-        lesson.topic_summary,
-        lesson.title,
-        lesson.remarks,
-        lesson.notes,
-        lesson.teacher_name,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(q);
-    });
-  }, [lessons, search]);
-
-  const lessonMonthGroups = useMemo(() => {
-    const grouped = new Map<string, any[]>();
-
-    for (const lesson of filteredLessons) {
-      const key = monthKey(lesson.date);
-      const list = grouped.get(key) || [];
-      list.push(lesson);
-      grouped.set(key, list);
+    if (attendanceView === "daily") {
+      rows = rows.filter((item: any) => item.date === attendanceDateFilter);
     }
 
-    return Array.from(grouped.entries())
-      .map(([month, items]) => ({
-        month,
-        items: items.sort((a, b) => {
-          const dateCompare = String(b.date || "").localeCompare(String(a.date || ""));
-          if (dateCompare !== 0) return dateCompare;
+    if (attendanceView === "weekly") {
+      const { start, end } = getWeekRange(attendanceDateFilter);
+      rows = rows.filter((item: any) => item.date >= start && item.date <= end);
+    }
 
-          return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
-        }),
-      }))
-      .sort((a, b) => b.month.localeCompare(a.month));
-  }, [filteredLessons]);
+    if (attendanceView === "monthly") {
+      const month = String(attendanceMonthFilter).padStart(2, "0");
+      const year = String(attendanceYearFilter);
+      rows = rows.filter((item: any) => String(item.date || "").startsWith(`${year}-${month}`));
+    }
 
-  const scheduleGroups = useMemo(() => {
+    if (attendanceView === "yearly") {
+      const year = String(attendanceYearFilter);
+      rows = rows.filter((item: any) => String(item.date || "").startsWith(`${year}-`));
+    }
+
+    return rows;
+  }, [
+    sortedAttendance,
+    attendanceView,
+    attendanceDateFilter,
+    attendanceMonthFilter,
+    attendanceYearFilter,
+  ]);
+
+  const filteredPresentCount = filteredAttendance.filter((item: any) => item.status === "present").length;
+  const filteredAbsentCount = filteredAttendance.filter((item: any) => item.status === "absent").length;
+  const filteredLeaveCount = filteredAttendance.filter((item: any) => item.status === "leave").length;
+
+  const allPresentCount = sortedAttendance.filter((item: any) => item.status === "present").length;
+  const allAbsentCount = sortedAttendance.filter((item: any) => item.status === "absent").length;
+  const allLeaveCount = sortedAttendance.filter((item: any) => item.status === "leave").length;
+
+  const filteredLessons = useMemo(() => {
+    const q = lessonSearch.trim().toLowerCase();
+
+    let rows = [...lessons];
+
+    if (lessonView === "daily") {
+      rows = rows.filter((lesson: any) => lesson.date === lessonDateFilter);
+    }
+
+    if (lessonView === "weekly") {
+      const { start, end } = getWeekRange(lessonDateFilter);
+      rows = rows.filter((lesson: any) => lesson.date >= start && lesson.date <= end);
+    }
+
+    if (lessonView === "monthly") {
+      const month = String(lessonMonthFilter).padStart(2, "0");
+      const year = String(lessonYearFilter);
+      rows = rows.filter((lesson: any) => String(lesson.date || "").startsWith(`${year}-${month}`));
+    }
+
+    if (lessonView === "yearly") {
+      const year = String(lessonYearFilter);
+      rows = rows.filter((lesson: any) => String(lesson.date || "").startsWith(`${year}-`));
+    }
+
+    if (q) {
+      rows = rows.filter((lesson: any) => {
+        return [
+          lesson.topic_summary,
+          lesson.title,
+          lesson.remarks,
+          lesson.notes,
+          lesson.teacher_name,
+          lesson.created_by_name,
+          lesson.date,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+      });
+    }
+
+    return rows.sort((a: any, b: any) => {
+      const dateCompare = String(b.date || "").localeCompare(String(a.date || ""));
+      if (dateCompare !== 0) return dateCompare;
+
+      return String(b.updated_at || b.created_at || "").localeCompare(
+        String(a.updated_at || a.created_at || "")
+      );
+    });
+  }, [
+    lessons,
+    lessonSearch,
+    lessonView,
+    lessonDateFilter,
+    lessonMonthFilter,
+    lessonYearFilter,
+  ]);
+
+  const sortedSchedules = useMemo(() => {
     return [...schedules].sort((a: any, b: any) => {
-      const order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-
       const aDay = normalizeDay(a.weekday);
       const bDay = normalizeDay(b.weekday);
 
-      const dayCompare = order.indexOf(aDay) - order.indexOf(bDay);
+      const dayCompare = WEEKDAY_ORDER.indexOf(aDay) - WEEKDAY_ORDER.indexOf(bDay);
       if (dayCompare !== 0) return dayCompare;
 
       return String(a.time_slot || "").localeCompare(String(b.time_slot || ""));
     });
   }, [schedules]);
 
-  const latestLesson = lessons[0];
+  const todaySchedules = useMemo(() => {
+    return sortedSchedules
+      .filter((row: any) => {
+        const timing = getScheduleTiming(row, clockNow);
+        return localDateKey(timing.start) === todayDate;
+      })
+      .sort((a: any, b: any) => {
+        return getScheduleTiming(a, clockNow).start.getTime() - getScheduleTiming(b, clockNow).start.getTime();
+      });
+  }, [sortedSchedules, clockNow, todayDate]);
+
+  const liveNowSchedules = useMemo(() => {
+    return sortedSchedules
+      .filter((row: any) => getScheduleTiming(row, clockNow).isLive)
+      .sort((a: any, b: any) => {
+        return getScheduleTiming(a, clockNow).start.getTime() - getScheduleTiming(b, clockNow).start.getTime();
+      });
+  }, [sortedSchedules, clockNow]);
+
+  const upNextSchedules = useMemo(() => {
+    return sortedSchedules
+      .filter((row: any) => {
+        const timing = getScheduleTiming(row, clockNow);
+        return timing.isUpcoming && timing.diffMinutes <= 60;
+      })
+      .sort((a: any, b: any) => {
+        return getScheduleTiming(a, clockNow).start.getTime() - getScheduleTiming(b, clockNow).start.getTime();
+      })
+      .slice(0, 4);
+  }, [sortedSchedules, clockNow]);
+
+  const nextClass = useMemo(() => {
+    return sortedSchedules
+      .filter((row: any) => getScheduleTiming(row, clockNow).isUpcoming)
+      .sort((a: any, b: any) => {
+        return getScheduleTiming(a, clockNow).start.getTime() - getScheduleTiming(b, clockNow).start.getTime();
+      })[0] || null;
+  }, [sortedSchedules, clockNow]);
+
+  const displayedUpNextSchedules = upNextSchedules.length > 0 ? upNextSchedules : nextClass ? [nextClass] : [];
+  const todayClassSummary = useMemo(() => {
+    if (todaySchedules.length === 0) {
+      return {
+        title: "No Class",
+        detail: nextClass
+          ? `Next class ${formatLocalClassDate(getScheduleTiming(nextClass, clockNow).start)}`
+          : "No class scheduled",
+      };
+    }
+
+    const liveClass = todaySchedules.find((schedule: any) => getScheduleTiming(schedule, clockNow).isLive);
+    if (liveClass) {
+      const timing = getScheduleTiming(liveClass, clockNow);
+      return {
+        title: "Live Now",
+        detail: `Ends at ${formatLocalClassTime(timing.end)}`,
+      };
+    }
+
+    const nextTodayClass = todaySchedules.find((schedule: any) => {
+      const timing = getScheduleTiming(schedule, clockNow);
+      return timing.isUpcoming;
+    });
+
+    if (nextTodayClass) {
+      const timing = getScheduleTiming(nextTodayClass, clockNow);
+      return {
+        title: "Upcoming",
+        detail: `${formatLocalClassTime(timing.start)} · ${countdownFromMinutes(timing.diffMinutes)}`,
+      };
+    }
+
+    return {
+      title: "Completed",
+      detail: "Today’s class is done",
+    };
+  }, [todaySchedules, nextClass, clockNow]);
+
+
+  const filteredSchedules = sortedSchedules;
+
+  const latestLesson = filteredLessons[0] || lessons[0];
   const todayColor = attendanceColor(todayAttendance?.status);
+
+  const paginatedAttendance = paginateItems(filteredAttendance, attendancePage);
+  const paginatedLessons = paginateItems(filteredLessons, lessonPage);
+  const paginatedSchedules = paginateItems(filteredSchedules, schedulePage);
 
   const handleLogout = () => {
     logoutFromDjango();
     onLogout();
   };
+
+  const resetAttendanceFilters = () => {
+    setAttendanceView("all");
+    setAttendanceDateFilter(today());
+    setAttendanceMonthFilter(new Date().getMonth() + 1);
+    setAttendanceYearFilter(new Date().getFullYear());
+  };
+
+  const resetLessonFilters = () => {
+    setLessonSearch("");
+    setLessonView("all");
+    setLessonDateFilter(today());
+    setLessonMonthFilter(new Date().getMonth() + 1);
+    setLessonYearFilter(new Date().getFullYear());
+  };
+
 
   const NAV_ITEMS: { tab: Tab; icon: React.ReactNode; label: string }[] = [
     { tab: "overview", icon: <LayoutDashboard size={18} />, label: "Overview" },
@@ -391,24 +793,24 @@ export function StudentPortal({ onLogout }: Props) {
   }
 
   return (
-    <div className="sp-root h-screen flex overflow-hidden">
+    <div className={`sp-root h-screen flex overflow-hidden ${studentTheme === "dark" ? "sp-dark" : ""}`}>
       <aside className="sp-sidebar hidden lg:flex flex-col">
         <div className="sp-sidebar-logo">
           <div className="sp-logo-icon">
-            <span className="text-white text-xs font-black">IVS</span>
+            <img src="/ivs-logo.png" alt="Iqra Virtual School" className="sp-sidebar-logo-img" />
           </div>
 
-          <div>
-            <div className="text-sm font-bold text-white leading-tight">
+          <div className="min-w-0">
+            <div className="text-sm font-black text-slate-950 leading-tight truncate">
               Iqra Virtual School
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">
+            <div className="text-[11px] font-bold text-slate-500 mt-0.5">
               Student Portal
             </div>
           </div>
         </div>
 
-        <nav className="flex-1 px-3 py-4 space-y-1">
+        <nav className="flex-1 px-3 py-5 space-y-3">
           {NAV_ITEMS.map(({ tab, icon, label }) => (
             <button
               key={tab}
@@ -417,17 +819,17 @@ export function StudentPortal({ onLogout }: Props) {
             >
               {icon}
               <span>{label}</span>
-              {activeTab === tab && <ChevronRight size={14} className="ml-auto opacity-60" />}
+              {activeTab === tab && <ChevronRight size={16} className="ml-auto opacity-70" />}
             </button>
           ))}
         </nav>
 
-        <div className="px-3 py-4 border-t border-white/10">
+        <div className="px-3 py-4 border-t border-slate-200">
           <div className="sp-student-card">
             <div className="sp-avatar-sm">{getInitials(studentName)}</div>
             <div className="min-w-0">
-              <div className="text-xs font-bold text-white truncate">{studentName}</div>
-              <div className="text-[10px] text-slate-400 mt-0.5">Student</div>
+              <div className="text-xs font-black text-slate-900 truncate">{studentName}</div>
+              <div className="text-[10px] font-bold text-slate-500 mt-0.5">Student access</div>
             </div>
           </div>
 
@@ -454,40 +856,31 @@ export function StudentPortal({ onLogout }: Props) {
             </div>
 
             <div className="hidden lg:block min-w-0">
-              <h1 className="text-lg font-bold text-slate-800">
+              <h1 className="text-lg font-black text-slate-900">
                 {activeTab === "overview" && "Student Dashboard"}
                 {activeTab === "attendance" && "My Attendance"}
                 {activeTab === "lessons" && "My Lessons"}
                 {activeTab === "schedule" && "My Schedule"}
               </h1>
-              <p className="text-xs text-slate-500 mt-0.5">{getCurrentDate()}</p>
+              <p className="text-xs font-semibold text-slate-500 mt-0.5">{getCurrentDate()}</p>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            <div className="sp-time-chip">
-              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-xs font-bold text-slate-700">{currentTime}</span>
-            </div>
+            <ClockCard
+              currentTime={currentTime}
+              currentDate={getCurrentDate()}
+              clockAngles={clockAngles}
+            />
 
             <button
-              onClick={() => void loadDashboard()}
-              disabled={refreshing}
-              className="sp-icon-btn"
-              title="Refresh"
+              type="button"
+              onClick={() => setStudentTheme((value) => (value === "light" ? "dark" : "light"))}
+              className="sp-theme-btn"
+              title="Toggle student portal theme"
             >
-              {refreshing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+              {studentTheme === "light" ? <Moon size={18} /> : <Sun size={18} />}
             </button>
-
-            <div className="sp-avatar-chip">
-              <div className="sp-avatar-sm">{getInitials(studentName)}</div>
-              <div className="hidden sm:block">
-                <div className="text-xs font-bold text-slate-800 leading-tight">
-                  {studentName}
-                </div>
-                <div className="text-[10px] text-slate-500">Student</div>
-              </div>
-            </div>
           </div>
         </header>
 
@@ -500,134 +893,113 @@ export function StudentPortal({ onLogout }: Props) {
 
         <div className="flex-1 min-h-0 overflow-y-auto p-6 sp-page-scroll">
           {activeTab === "overview" && (
-            <div className="space-y-5">
-              <section className="sp-hero">
-                <div className="sp-hero-glow-one" />
-                <div className="sp-hero-glow-two" />
-
-                <div className="relative flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-                  <div className="flex items-center gap-5">
-                    <div className="sp-big-avatar">
-                      {getInitials(studentName)}
-                    </div>
-
+            <div className="space-y-6">
+              <section className="sp-hero-panel">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                  <div className="sp-hero-stat">
                     <div>
-                      <div className="inline-flex items-center gap-2 rounded-full bg-white/70 border border-white/80 px-3 py-1 text-xs font-black text-indigo-700">
-                        <Sparkles size={13} />
-                        Student Learning Dashboard
-                      </div>
-
-                      <h2 className="mt-3 text-3xl font-black text-slate-950 tracking-tight">
-                        Assalamu Alaikum, {studentName}
-                      </h2>
-
-                      <p className="mt-2 text-sm text-slate-600 max-w-2xl">
-                        Your teacher is <span className="font-black text-slate-900">{teacherName}</span>. Here you can view your attendance, class schedule, and all saved lesson reports.
-                      </p>
-
-                      {assignedSubjects.length > 0 && (
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          {assignedSubjects.map((subject: any) => (
-                            <span
-                              key={subject.id || subject.display_name}
-                              className="rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1.5 text-xs font-black text-indigo-700"
-                            >
-                              {subject.display_name || subject.subject}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                      <p className="sp-hero-label">Attendance Records</p>
+                      <h3 className="sp-hero-number text-emerald-600">{sortedAttendance.length}</h3>
+                    </div>
+                    <div className="sp-hero-icon bg-emerald-50 text-emerald-600">
+                      <CheckCircle2 size={20} />
                     </div>
                   </div>
 
-                  <div className={`rounded-3xl border px-5 py-4 ${todayColor.card}`}>
-                    <div className="text-xs font-black uppercase tracking-widest opacity-70">
-                      Today Attendance
+                  <div className="sp-hero-stat">
+                    <div>
+                      <p className="sp-hero-label">Lesson Reports</p>
+                      <h3 className="sp-hero-number text-blue-600">{lessons.length}</h3>
                     </div>
-                    <div className="mt-2 flex items-center gap-3">
-                      <span className={`h-3 w-3 rounded-full ${todayColor.dot}`} />
-                      <div className="text-xl font-black">
-                        {todayAttendance ? statusLabel(todayAttendance.status) : "Not Marked"}
-                      </div>
+                    <div className="sp-hero-icon bg-blue-50 text-blue-600">
+                      <BookOpen size={20} />
                     </div>
-                    <div className="mt-1 text-xs font-semibold opacity-80">
-                      {todayDate}
+                  </div>
+
+                  <div className="sp-hero-stat">
+                    <div>
+                      <p className="sp-hero-label">Today Class</p>
+                      <h3 className="sp-hero-number text-slate-900">
+                        {todayClassSummary.title}
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1">
+                        {todayClassSummary.detail}
+                      </p>
                     </div>
+                    <div className="sp-live-dot">
+                      <span />
+                    </div>
+                  </div>
+
+                  <div className="sp-hero-stat">
+                    <div>
+                      <p className="sp-hero-label">Up Next</p>
+                      <h3 className="sp-hero-number text-slate-900">
+                        {nextClass ? formatLocalClassTime(getScheduleTiming(nextClass, clockNow).start) : "--"}
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1">
+                        {nextClass
+                          ? nextClassLabel(nextClass, clockNow)
+                          : "No upcoming class"}
+                      </p>
+                    </div>
+                    <ChevronRight size={20} className="text-slate-400" />
                   </div>
                 </div>
               </section>
 
-              <section className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-                {[
-                  {
-                    label: "Attendance Records",
-                    value: sortedAttendance.length,
-                    icon: <CheckCircle2 size={18} />,
-                    color: "emerald",
-                  },
-                  {
-                    label: "Lessons",
-                    value: lessons.length,
-                    icon: <BookOpen size={18} />,
-                    color: "indigo",
-                  },
-                  {
-                    label: "Schedules",
-                    value: schedules.length,
-                    icon: <CalendarDays size={18} />,
-                    color: "blue",
-                  },
-                  {
-                    label: "Subjects",
-                    value: assignedSubjects.length,
-                    icon: <Award size={18} />,
-                    color: "violet",
-                  },
-                ].map((item) => (
-                  <div key={item.label} className="sp-stat-card">
-                    <div className={`sp-stat-icon sp-stat-icon--${item.color}`}>
-                      {item.icon}
-                    </div>
-                    <div className="mt-3">
-                      <div className="text-xs font-semibold text-slate-500">
-                        {item.label}
-                      </div>
-                      <div className="text-2xl font-black text-slate-900 mt-0.5">
-                        {item.value}
-                      </div>
+              <section className="sp-welcome-card">
+                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-5">
+                  <div className="flex items-center gap-4">
+                    <div className="sp-big-avatar">{getInitials(studentName)}</div>
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-950 tracking-tight">
+                        Assalamu Alaikum, {studentName}
+                      </h2>
+                      <p className="mt-2 text-sm text-slate-600 max-w-2xl">
+                        Your teacher is{" "}
+                        <span className="font-black text-slate-900">{teacherName}</span>.
+                        You can view your class schedule, attendance, and saved lesson reports here.
+                      </p>
                     </div>
                   </div>
-                ))}
+
+                  <div className={todayColor.card}>
+                    <div className="text-xs font-black uppercase tracking-widest opacity-70">
+                      Today Attendance
+                    </div>
+                    <div className="mt-2 flex items-center gap-3">
+                      <span className={todayColor.dot} />
+                      <div className="text-xl font-black">
+                        {todayAttendance ? statusLabel(todayAttendance.status) : "Not Marked"}
+                      </div>
+                    </div>
+                    <div className="mt-1 text-xs font-semibold opacity-80">{todayDate}</div>
+                  </div>
+                </div>
               </section>
 
               <section className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-5">
                 <div className="sp-card">
                   <div className="flex items-center justify-between mb-4">
                     <div>
-                      <h2 className="text-base font-bold text-slate-800">
-                        Latest Lesson
-                      </h2>
+                      <h2 className="text-base font-black text-slate-900">Latest Lesson</h2>
                       <p className="text-xs text-slate-500 mt-0.5">
-                        Your most recent teacher lesson report
+                        Your most recent teacher lesson report.
                       </p>
                     </div>
 
-                    <button
-                      onClick={() => setActiveTab("lessons")}
-                      className="sp-soft-btn"
-                    >
+                    <button onClick={() => setActiveTab("lessons")} className="sp-soft-btn">
                       View all
                     </button>
                   </div>
 
                   {!latestLesson ? (
-                    <div className="sp-empty-state">
-                      <BookOpen size={28} className="text-slate-300 mx-auto mb-3" />
-                      <div className="font-bold text-slate-600">No lessons yet</div>
-                      <div className="text-xs text-slate-400 mt-1">
-                        Your teacher has not saved a lesson report yet.
-                      </div>
-                    </div>
+                    <EmptyState
+                      icon={<BookOpen size={28} />}
+                      title="No lessons yet"
+                      description="Your teacher has not saved a lesson report yet."
+                    />
                   ) : (
                     <LessonCard lesson={latestLesson} compact />
                   )}
@@ -636,99 +1008,63 @@ export function StudentPortal({ onLogout }: Props) {
                 <div className="sp-card">
                   <div className="flex items-center justify-between mb-4">
                     <div>
-                      <h2 className="text-base font-bold text-slate-800">
-                        Attendance Snapshot
-                      </h2>
+                      <h2 className="text-base font-black text-slate-900">Attendance Snapshot</h2>
                       <p className="text-xs text-slate-500 mt-0.5">
-                        Your attendance overview
+                        Your complete attendance overview.
                       </p>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-3 gap-3">
-                    <MiniAttendanceStat label="Present" value={presentCount} tone="emerald" />
-                    <MiniAttendanceStat label="Absent" value={absentCount} tone="rose" />
-                    <MiniAttendanceStat label="Leave" value={leaveCount} tone="amber" />
+                    <MiniAttendanceStat label="Present" value={allPresentCount} tone="emerald" />
+                    <MiniAttendanceStat label="Absent" value={allAbsentCount} tone="rose" />
+                    <MiniAttendanceStat label="Leave" value={allLeaveCount} tone="amber" />
                   </div>
 
-                  <button
-                    onClick={() => setActiveTab("attendance")}
-                    className="sp-save-btn w-full mt-4"
-                  >
+                  <button onClick={() => setActiveTab("attendance")} className="sp-save-btn w-full mt-4">
                     <History size={15} />
                     View Attendance History
                   </button>
                 </div>
               </section>
-            </div>
-          )}
 
-          {activeTab === "attendance" && (
-            <div className="space-y-5">
-              <section className="grid grid-cols-3 gap-4">
-                <MiniAttendanceStat label="Present" value={presentCount} tone="emerald" large />
-                <MiniAttendanceStat label="Absent" value={absentCount} tone="rose" large />
-                <MiniAttendanceStat label="Leave" value={leaveCount} tone="amber" large />
-              </section>
+              <section className="sp-card">
+                <div className="flex items-center justify-between mb-5">
+                  <div>
+                    <h2 className="text-base font-black text-slate-900">Today’s Scheduled Classes</h2>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Your assigned classes for {todayWeekday}.
+                    </p>
+                  </div>
 
-              <section className="sp-card p-0 overflow-hidden">
-                <div className="px-5 py-4 border-b border-slate-100">
-                  <h2 className="text-base font-bold text-slate-800">
-                    Attendance Records
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    These records are marked by coordinator or teacher.
-                  </p>
+                  <button onClick={() => setActiveTab("schedule")} className="sp-soft-btn">
+                    Full schedule
+                  </button>
                 </div>
 
-                {sortedAttendance.length === 0 ? (
-                  <div className="p-12">
-                    <div className="sp-empty-state">
-                      <CheckCircle2 size={28} className="text-slate-300 mx-auto mb-3" />
-                      <div className="font-bold text-slate-600">
-                        No attendance records
-                      </div>
-                      <div className="text-xs text-slate-400 mt-1">
-                        Attendance will appear here after it is marked.
-                      </div>
-                    </div>
-                  </div>
+                {todaySchedules.length === 0 ? (
+                  <EmptyState
+                    icon={<CalendarDays size={28} />}
+                    title="No classes today"
+                    description="Your classes for today will appear here in your local time."
+                  />
                 ) : (
-                  <div className="divide-y divide-slate-50">
-                    {sortedAttendance.map((item: any) => {
-                      const color = attendanceColor(item.status);
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {todaySchedules.map((schedule: any) => {
+                      const timing = getScheduleTiming(schedule, clockNow);
+                      const isLive = timing.isLive;
+                      const isUpcoming = timing.isUpcoming && timing.diffMinutes <= 60;
+                      const isPast = timing.isPast;
 
                       return (
-                        <div
-                          key={item.id}
-                          className="px-5 py-4 hover:bg-slate-50/70 transition"
-                        >
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                            <div className="flex items-center gap-3">
-                              <div className={`h-11 w-11 rounded-2xl border flex items-center justify-center ${color.card}`}>
-                                {item.status === "absent" ? (
-                                  <XCircle size={20} />
-                                ) : (
-                                  <CheckCircle2 size={20} />
-                                )}
-                              </div>
-
-                              <div>
-                                <div className="font-black text-slate-900">
-                                  {formatDate(item.date)}
-                                </div>
-                                <div className="text-xs text-slate-500 mt-0.5">
-                                  {markedByLabel(item)}
-                                </div>
-                              </div>
-                            </div>
-
-                            <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-black ${color.badge}`}>
-                              <span className={`h-1.5 w-1.5 rounded-full ${color.dot}`} />
-                              {statusLabel(item.status)}
-                            </span>
-                          </div>
-                        </div>
+                        <ScheduleCard
+                          key={schedule.id}
+                          schedule={schedule}
+                          teacherName={teacherName}
+                          isLive={isLive}
+                          isUpcoming={isUpcoming}
+                          isPast={isPast}
+                        />
                       );
                     })}
                   </div>
@@ -737,64 +1073,170 @@ export function StudentPortal({ onLogout }: Props) {
             </div>
           )}
 
+          {activeTab === "attendance" && (
+            <div className="space-y-5">
+              <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <MiniAttendanceStat label="Present" value={filteredPresentCount} tone="emerald" large />
+                <MiniAttendanceStat label="Absent" value={filteredAbsentCount} tone="rose" large />
+                <MiniAttendanceStat label="Leave" value={filteredLeaveCount} tone="amber" large />
+              </section>
+
+              <section className="sp-card p-0 overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-100">
+                  <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                    <div>
+                      <h2 className="text-base font-black text-slate-900">Attendance Records</h2>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        These records are marked by coordinator or teacher.
+                      </p>
+                    </div>
+
+                    <button type="button" onClick={resetAttendanceFilters} className="sp-soft-btn">
+                      Reset Filters
+                    </button>
+                  </div>
+
+                  <AttendanceFilters
+                    view={attendanceView}
+                    setView={setAttendanceView}
+                    dateFilter={attendanceDateFilter}
+                    setDateFilter={setAttendanceDateFilter}
+                    monthFilter={attendanceMonthFilter}
+                    setMonthFilter={setAttendanceMonthFilter}
+                    yearFilter={attendanceYearFilter}
+                    setYearFilter={setAttendanceYearFilter}
+                  />
+                </div>
+
+                {filteredAttendance.length === 0 ? (
+                  <div className="p-12">
+                    <EmptyState
+                      icon={<CheckCircle2 size={28} />}
+                      title="No attendance records"
+                      description="Attendance will appear here after it is marked."
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-sm">
+                        <thead>
+                          <tr className="sp-table-head">
+                            {["Date", "Status", "Marked By", "Updated"].map((heading) => (
+                              <th key={heading} className="px-5 py-3 text-xs font-black uppercase tracking-wide">
+                                {heading}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                          {paginatedAttendance.items.map((item: any) => {
+                            const color = attendanceColor(item.status);
+
+                            return (
+                              <tr key={item.id} className="sp-table-row">
+                                <td className="px-5 py-4 font-black text-slate-900">
+                                  {formatDate(item.date)}
+                                </td>
+                                <td className="px-5 py-4">
+                                  <span className={color.badge}>
+                                    <span className={color.dot} />
+                                    {statusLabel(item.status)}
+                                  </span>
+                                </td>
+                                <td className="px-5 py-4 text-slate-700 font-semibold">
+                                  {markedByLabel(item)}
+                                </td>
+                                <td className="px-5 py-4 text-slate-500 text-xs font-semibold">
+                                  {item.updated_at ? new Date(item.updated_at).toLocaleString() : "-"}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <Pagination
+                      page={paginatedAttendance.safePage}
+                      totalPages={paginatedAttendance.totalPages}
+                      totalItems={filteredAttendance.length}
+                      onPageChange={setAttendancePage}
+                    />
+                  </>
+                )}
+              </section>
+            </div>
+          )}
+
           {activeTab === "lessons" && (
             <div className="space-y-5">
               <section className="sp-card">
-                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
                   <div>
-                    <h2 className="text-base font-bold text-slate-800">
-                      My Lesson History
-                    </h2>
+                    <h2 className="text-base font-black text-slate-900">My Lesson History</h2>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      View all saved lesson reports from your teacher.
+                      View saved lesson reports from your teacher.
                     </p>
                   </div>
 
-                  <div className="relative lg:w-80">
-                    <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input
-                      value={search}
-                      onChange={(event) => setSearch(event.target.value)}
-                      placeholder="Search lessons..."
-                      className="sp-search-input"
+                  <button type="button" onClick={resetLessonFilters} className="sp-soft-btn">
+                    Reset Filters
+                  </button>
+                </div>
+
+                <div className="sp-filter-shell mt-4">
+                  <div className="sp-filter-grid">
+                    <div className="sp-field md:col-span-2">
+                      <label className="sp-label">Search</label>
+                      <div className="relative">
+                        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          value={lessonSearch}
+                          onChange={(event) => setLessonSearch(event.target.value)}
+                          placeholder="Search lesson, teacher, note, or date..."
+                          className="sp-search-input"
+                        />
+                      </div>
+                    </div>
+
+                    <DateFilterFields
+                      view={lessonView}
+                      setView={setLessonView}
+                      dateFilter={lessonDateFilter}
+                      setDateFilter={setLessonDateFilter}
+                      monthFilter={lessonMonthFilter}
+                      setMonthFilter={setLessonMonthFilter}
+                      yearFilter={lessonYearFilter}
+                      setYearFilter={setLessonYearFilter}
                     />
                   </div>
                 </div>
               </section>
 
-              {lessonMonthGroups.length === 0 ? (
+              {filteredLessons.length === 0 ? (
                 <div className="sp-card">
-                  <div className="sp-empty-state">
-                    <BookOpen size={28} className="text-slate-300 mx-auto mb-3" />
-                    <div className="font-bold text-slate-600">No lessons found</div>
-                    <div className="text-xs text-slate-400 mt-1">
-                      Try changing the search, or wait until your teacher saves lessons.
-                    </div>
-                  </div>
+                  <EmptyState
+                    icon={<BookOpen size={28} />}
+                    title="No lessons found"
+                    description="Try changing the search or date filter."
+                  />
                 </div>
               ) : (
-                <div className="space-y-5">
-                  {lessonMonthGroups.map((group) => (
-                    <section key={group.month} className="sp-card p-0 overflow-hidden">
-                      <div className="bg-slate-50/80 px-5 py-3 border-b border-slate-100 flex items-center justify-between">
-                        <div className="inline-flex items-center gap-2 text-sm font-black text-slate-800">
-                          <CalendarDays size={16} className="text-indigo-600" />
-                          {formatMonth(group.month)}
-                        </div>
+                <section className="sp-card">
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    {paginatedLessons.items.map((lesson: any) => (
+                      <LessonCard key={lesson.id} lesson={lesson} />
+                    ))}
+                  </div>
 
-                        <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-black text-slate-600">
-                          {group.items.length} lesson{group.items.length === 1 ? "" : "s"}
-                        </span>
-                      </div>
-
-                      <div className="space-y-4 p-5">
-                        {group.items.map((lesson: any) => (
-                          <LessonCard key={lesson.id} lesson={lesson} />
-                        ))}
-                      </div>
-                    </section>
-                  ))}
-                </div>
+                  <Pagination
+                    page={paginatedLessons.safePage}
+                    totalPages={paginatedLessons.totalPages}
+                    totalItems={filteredLessons.length}
+                    onPageChange={setLessonPage}
+                  />
+                </section>
               )}
             </div>
           )}
@@ -802,63 +1244,118 @@ export function StudentPortal({ onLogout }: Props) {
           {activeTab === "schedule" && (
             <div className="space-y-5">
               <section className="sp-card">
-                <h2 className="text-base font-bold text-slate-800">
-                  My Class Schedule
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Your assigned class days, timings, and teacher.
-                </p>
+                <div>
+                  <h2 className="text-base font-black text-slate-900">My Class Schedule</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Your assigned class days, timings, and teacher.
+                  </p>
+                </div>
               </section>
 
-              {scheduleGroups.length === 0 ? (
-                <div className="sp-card">
-                  <div className="sp-empty-state">
-                    <CalendarDays size={28} className="text-slate-300 mx-auto mb-3" />
-                    <div className="font-bold text-slate-600">No schedule found</div>
-                    <div className="text-xs text-slate-400 mt-1">
-                      Coordinator has not assigned your schedule yet.
-                    </div>
+              <section className="grid grid-cols-1 xl:grid-cols-[1fr_1fr] gap-5">
+                <div className="space-y-4">
+                  <SectionTitle
+                    title="Live Now"
+                    time={liveNowSchedules[0] ? formatLocalClassTime(getScheduleTiming(liveNowSchedules[0], clockNow).start) : currentTime}
+                    live
+                  />
+
+                  {liveNowSchedules.length === 0 ? (
+                    <EmptyState
+                      icon={<CalendarDays size={28} />}
+                      title="No live class right now"
+                      description="Upcoming classes will appear on the right side."
+                    />
+                  ) : (
+                    liveNowSchedules.map((schedule: any) => (
+                      <ScheduleCard
+                        key={schedule.id}
+                        schedule={schedule}
+                        teacherName={teacherName}
+                        isLive
+                        large
+                      />
+                    ))
+                  )}
+                </div>
+
+                <div className="space-y-4">
+                  <SectionTitle
+                    title="Up Next"
+                    time={nextClass ? formatLocalClassTime(getScheduleTiming(nextClass, clockNow).start) : "--"}
+                  />
+
+                  {displayedUpNextSchedules.length === 0 ? (
+                    <EmptyState
+                      icon={<CalendarDays size={28} />}
+                      title="No upcoming class"
+                      description="Your next class will appear here when it is scheduled."
+                    />
+                  ) : (
+                    displayedUpNextSchedules.map((schedule: any) => (
+                      <ScheduleCard
+                        key={schedule.id}
+                        schedule={schedule}
+                        teacherName={teacherName}
+                        isUpcoming
+                        large
+                      />
+                    ))
+                  )}
+                </div>
+              </section>
+
+              <section className="sp-card">
+                <div className="flex items-center justify-between gap-4 mb-5">
+                  <div>
+                    <h2 className="text-base font-black text-slate-900">All Scheduled Classes</h2>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Class times converted from Pakistan time to your local time.
+                    </p>
                   </div>
+
+                  <span className="sp-count-pill">
+                    {filteredSchedules.length} class{filteredSchedules.length === 1 ? "" : "es"}
+                  </span>
                 </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {scheduleGroups.map((schedule: any) => {
-                    const day = normalizeDay(schedule.weekday);
 
-                    return (
-                      <div key={schedule.id} className="sp-schedule-card">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500">
-                              {WEEKDAY_SHORT[day] || day}
-                            </div>
-                            <div className="mt-1 text-2xl font-black text-slate-950">
-                              {formatTime(schedule.time_slot)}
-                            </div>
-                          </div>
+                {filteredSchedules.length === 0 ? (
+                  <EmptyState
+                    icon={<CalendarDays size={28} />}
+                    title="No schedule found"
+                    description="Coordinator has not assigned your schedule yet."
+                  />
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {paginatedSchedules.items.map((schedule: any) => {
+                        const timing = getScheduleTiming(schedule, clockNow);
+                        const isLive = timing.isLive;
+                        const isUpcoming = timing.isUpcoming && timing.diffMinutes <= 60;
+                        const isPast = timing.isPast;
 
-                          <div className="h-12 w-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
-                            <Clock size={22} />
-                          </div>
-                        </div>
+                        return (
+                          <ScheduleCard
+                            key={schedule.id}
+                            schedule={schedule}
+                            teacherName={teacherName}
+                            isLive={isLive}
+                            isUpcoming={isUpcoming}
+                            isPast={isPast}
+                          />
+                        );
+                      })}
+                    </div>
 
-                        <div className="mt-4 border-t border-slate-100 pt-4">
-                          <div className="text-xs font-semibold text-slate-500">
-                            Teacher
-                          </div>
-                          <div className="mt-1 font-black text-slate-800">
-                            {schedule.teacher?.name || teacherName}
-                          </div>
-                        </div>
-
-                        <div className="mt-3 inline-flex items-center rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
-                          Active Class
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                    <Pagination
+                      page={paginatedSchedules.safePage}
+                      totalPages={paginatedSchedules.totalPages}
+                      totalItems={filteredSchedules.length}
+                      onPageChange={setSchedulePage}
+                    />
+                  </>
+                )}
+              </section>
             </div>
           )}
         </div>
@@ -867,8 +1364,8 @@ export function StudentPortal({ onLogout }: Props) {
       <style>{`
         .sp-root {
           background:
-            radial-gradient(circle at top left, rgba(99,102,241,0.12), transparent 34%),
-            radial-gradient(circle at top right, rgba(16,185,129,0.12), transparent 30%),
+            radial-gradient(circle at top left, rgba(99,102,241,0.10), transparent 34%),
+            radial-gradient(circle at top right, rgba(16,185,129,0.10), transparent 30%),
             #f8fafc;
           font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
         }
@@ -897,143 +1394,249 @@ export function StudentPortal({ onLogout }: Props) {
         }
 
         .sp-sidebar {
-          width: 230px;
+          width: 260px;
           min-height: 100vh;
-          background: #0f172a;
+          background:
+            linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,250,252,0.96) 100%);
+          border-right: 1px solid #e8eef7;
           flex-shrink: 0;
           overflow: hidden;
+          padding: 18px 14px;
+          box-shadow: 16px 0 50px rgba(15, 23, 42, 0.06);
         }
 
         .sp-sidebar-logo {
           display: flex;
           align-items: center;
-          gap: 10px;
-          padding: 18px 16px 14px;
-          border-bottom: 1px solid rgba(255,255,255,0.07);
+          gap: 12px;
+          padding: 12px;
+          border-radius: 24px;
+          background: #ffffff;
+          border: 1px solid #edf2f7;
+          box-shadow:
+            0 24px 48px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255,255,255,0.9);
         }
 
         .sp-logo-icon {
-          width: 36px;
-          height: 36px;
-          border-radius: 12px;
-          background: linear-gradient(135deg, #10b981, #6366f1);
+          width: 52px;
+          height: 52px;
+          border-radius: 18px;
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
           display: flex;
           align-items: center;
           justify-content: center;
           flex-shrink: 0;
+          overflow: hidden;
+          box-shadow:
+            0 14px 28px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255,255,255,0.9);
+        }
+
+        .sp-sidebar-logo-img {
+          width: 42px;
+          height: 42px;
+          object-fit: contain;
+          display: block;
         }
 
         .sp-nav-btn {
+          position: relative;
           display: flex;
           align-items: center;
-          gap: 10px;
-          padding: 9px 12px;
-          border-radius: 12px;
-          font-size: 13px;
-          font-weight: 700;
-          color: #94a3b8;
-          transition: all 0.15s;
+          gap: 13px;
+          padding: 13px 14px;
+          border-radius: 20px;
+          font-size: 14px;
+          font-weight: 950;
+          color: #334155;
+          transition: all 0.18s ease;
           text-align: left;
           background: transparent;
-          border: none;
+          border: 1px solid transparent;
           cursor: pointer;
         }
 
+        .sp-nav-btn svg {
+          width: 40px;
+          height: 40px;
+          padding: 10px;
+          border-radius: 15px;
+          color: #64748b;
+          background: #ffffff;
+          border: 1px solid #e8eef7;
+          box-shadow: 0 10px 22px rgba(15, 23, 42, 0.06);
+        }
+
         .sp-nav-btn:hover {
-          background: rgba(255,255,255,0.07);
-          color: #e2e8f0;
+          background: rgba(255,255,255,0.86);
+          color: #1e293b;
+          transform: translateX(2px);
+          box-shadow: 0 12px 30px rgba(15,23,42,0.06);
         }
 
         .sp-nav-btn.active {
-          background: rgba(16,185,129,0.16);
-          color: #a7f3d0;
+          background: #ffffff;
+          color: #4f46e5;
+          border-color: #111827;
+          box-shadow:
+            0 18px 42px rgba(15, 23, 42, 0.10),
+            inset 0 1px 0 rgba(255,255,255,0.95);
+        }
+
+        .sp-nav-btn.active svg {
+          color: #4f46e5;
+          background: #eef2ff;
+          border-color: #dbe5ff;
         }
 
         .sp-student-card {
           display: flex;
           align-items: center;
           gap: 10px;
-          padding: 10px 12px;
-          background: rgba(255,255,255,0.05);
-          border-radius: 12px;
+          padding: 12px;
+          background: linear-gradient(135deg, #ffffff, #f8fafc);
+          border: 1px solid #e8eef7;
+          border-radius: 20px;
+          box-shadow: 0 16px 36px rgba(15, 23, 42, 0.08);
         }
 
         .sp-logout-btn {
           display: flex;
           align-items: center;
           justify-content: center;
-          gap: 6px;
-          padding: 8px 12px;
-          border-radius: 12px;
-          font-size: 12px;
-          font-weight: 800;
-          color: #f87171;
-          background: rgba(239,68,68,0.1);
-          border: 1px solid rgba(239,68,68,0.2);
+          gap: 8px;
+          padding: 13px 14px;
+          border-radius: 18px;
+          font-size: 13px;
+          font-weight: 950;
+          color: #e11d48;
+          background: #fff1f2;
+          border: 1px solid #ffe4e6;
           transition: all 0.15s;
           cursor: pointer;
         }
 
         .sp-logout-btn:hover {
-          background: rgba(239,68,68,0.18);
+          background: #ffe4e6;
+          transform: translateY(-1px);
         }
 
         .sp-topbar {
-          background: rgba(255,255,255,0.86);
+          background: rgba(255,255,255,0.88);
           backdrop-filter: blur(16px);
           border-bottom: 1px solid #f1f5f9;
           flex-shrink: 0;
         }
 
-        .sp-time-chip {
+        .sp-clock-card {
           display: flex;
           align-items: center;
-          gap: 6px;
-          padding: 6px 12px;
-          border: 1px solid #e2e8f0;
-          border-radius: 20px;
-          background: #f8fafc;
+          gap: 12px;
+          min-height: 58px;
+          padding: 8px 14px 8px 8px;
+          border-radius: 24px;
+          background: #ffffff;
+          border: 1px solid #e8eef7;
+          box-shadow: 0 14px 36px rgba(15, 23, 42, 0.07);
         }
 
-        .sp-icon-btn {
-          width: 34px;
-          height: 34px;
-          border-radius: 10px;
+        .sp-analog-clock {
+          position: relative;
+          width: 48px;
+          height: 48px;
+          border-radius: 999px;
+          background:
+            radial-gradient(circle at center, #ffffff 0%, #f8fafc 62%, #eef2ff 100%);
           border: 1px solid #e2e8f0;
-          background: white;
+          box-shadow:
+            inset 0 3px 8px rgba(15, 23, 42, 0.06),
+            0 8px 20px rgba(15, 23, 42, 0.08);
+        }
+
+        .sp-clock-mark {
+          position: absolute;
+          font-size: 6px;
+          font-weight: 950;
+          color: #94a3b8;
+          line-height: 1;
+        }
+
+        .sp-clock-mark-12 { top: 6px; left: 50%; transform: translateX(-50%); }
+        .sp-clock-mark-3 { right: 5px; top: 50%; transform: translateY(-50%); }
+        .sp-clock-mark-6 { bottom: 5px; left: 50%; transform: translateX(-50%); }
+        .sp-clock-mark-9 { left: 5px; top: 50%; transform: translateY(-50%); }
+
+        .sp-clock-hand {
+          position: absolute;
+          left: 50%;
+          bottom: 50%;
+          transform-origin: bottom center;
+          border-radius: 999px;
+        }
+
+        .sp-clock-hour {
+          width: 3px;
+          height: 13px;
+          background: #0f172a;
+        }
+
+        .sp-clock-minute {
+          width: 2px;
+          height: 17px;
+          background: #64748b;
+        }
+
+        .sp-clock-second {
+          width: 1.5px;
+          height: 19px;
+          background: #ef4444;
+        }
+
+        .sp-clock-center {
+          position: absolute;
+          width: 7px;
+          height: 7px;
+          border-radius: 999px;
+          background: #ef4444;
+          border: 2px solid #ffffff;
+          left: 50%;
+          top: 50%;
+          transform: translate(-50%, -50%);
+          box-shadow: 0 2px 5px rgba(239, 68, 68, 0.35);
+        }
+
+        .sp-theme-btn {
+          width: 46px;
+          height: 46px;
+          border-radius: 17px;
+          border: 1px solid #e8eef7;
+          background: #ffffff;
+          color: #475569;
           display: flex;
           align-items: center;
           justify-content: center;
-          color: #64748b;
-          cursor: pointer;
-          transition: all 0.15s;
+          box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
+          transition: all 180ms ease;
         }
 
-        .sp-icon-btn:hover {
-          background: #f8fafc;
-          color: #1e293b;
-        }
-
-        .sp-avatar-chip {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          padding: 4px 10px 4px 4px;
-          border: 1px solid #e2e8f0;
-          border-radius: 20px;
-          background: white;
+        .sp-theme-btn:hover {
+          transform: translateY(-1px);
+          color: #4f46e5;
+          background: #eef2ff;
         }
 
         .sp-avatar-sm {
-          width: 28px;
-          height: 28px;
-          border-radius: 9px;
+          width: 32px;
+          height: 32px;
+          border-radius: 10px;
           background: linear-gradient(135deg, #10b981, #6366f1);
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 10px;
-          font-weight: 900;
+          font-size: 11px;
+          font-weight: 950;
           color: white;
           flex-shrink: 0;
         }
@@ -1054,12 +1657,12 @@ export function StudentPortal({ onLogout }: Props) {
         }
 
         .sp-card {
-          background: rgba(255,255,255,0.86);
+          background: rgba(255,255,255,0.92);
           backdrop-filter: blur(14px);
-          border-radius: 18px;
+          border-radius: 22px;
           border: 1px solid #f1f5f9;
-          padding: 20px;
-          box-shadow: 0 1px 4px rgba(15,23,42,0.05);
+          padding: 22px;
+          box-shadow: 0 18px 46px rgba(15,23,42,0.06);
         }
 
         .sp-brand-icon {
@@ -1073,92 +1676,98 @@ export function StudentPortal({ onLogout }: Props) {
           color: white;
         }
 
-        .sp-hero {
-          position: relative;
-          overflow: hidden;
+        .sp-hero-panel {
           border-radius: 28px;
-          border: 1px solid rgba(226,232,240,0.85);
-          background: rgba(255,255,255,0.76);
-          backdrop-filter: blur(18px);
           padding: 28px;
-          box-shadow: 0 20px 60px rgba(15,23,42,0.08);
+          background:
+            radial-gradient(circle at 10% 10%, rgba(16, 185, 129, 0.12), transparent 30%),
+            radial-gradient(circle at 85% 10%, rgba(99, 102, 241, 0.18), transparent 35%),
+            linear-gradient(135deg, #ffffff, #f7f7ff);
+          border: 1px solid #eef2ff;
+          box-shadow: 0 24px 70px rgba(15, 23, 42, 0.08);
         }
 
-        .sp-hero-glow-one {
-          position: absolute;
-          top: -90px;
-          right: -90px;
-          width: 280px;
-          height: 280px;
-          border-radius: 999px;
-          background: rgba(99,102,241,0.18);
-          filter: blur(50px);
+        .sp-hero-stat {
+          min-height: 108px;
+          border-radius: 20px;
+          padding: 20px;
+          background: rgba(255,255,255,0.92);
+          border: 1px solid #e9eef8;
+          box-shadow: 0 16px 38px rgba(15, 23, 42, 0.06);
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
         }
 
-        .sp-hero-glow-two {
-          position: absolute;
-          bottom: -110px;
-          left: -80px;
-          width: 300px;
-          height: 300px;
-          border-radius: 999px;
-          background: rgba(16,185,129,0.16);
-          filter: blur(50px);
+        .sp-hero-label {
+          font-size: 12px;
+          font-weight: 800;
+          color: #64748b;
         }
 
-        .sp-stat-card {
-          background: rgba(255,255,255,0.9);
-          border: 1px solid #f1f5f9;
-          border-radius: 18px;
-          padding: 16px;
-          box-shadow: 0 1px 3px rgba(15,23,42,0.05);
+        .sp-hero-number {
+          font-size: 30px;
+          line-height: 1;
+          font-weight: 950;
+          margin-top: 8px;
         }
 
-        .sp-stat-icon {
-          width: 38px;
-          height: 38px;
-          border-radius: 12px;
+        .sp-hero-icon {
+          width: 44px;
+          height: 44px;
+          border-radius: 16px;
           display: flex;
           align-items: center;
           justify-content: center;
         }
 
-        .sp-stat-icon--emerald {
-          background: #ecfdf5;
-          color: #10b981;
+        .sp-live-dot {
+          width: 44px;
+          height: 44px;
+          border-radius: 16px;
+          background: #fff1f2;
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
 
-        .sp-stat-icon--indigo {
-          background: #eef2ff;
-          color: #6366f1;
+        .sp-live-dot span {
+          width: 9px;
+          height: 9px;
+          border-radius: 999px;
+          background: #fb7185;
+          box-shadow: 0 0 0 8px rgba(251, 113, 133, 0.12);
         }
 
-        .sp-stat-icon--blue {
-          background: #eff6ff;
-          color: #2563eb;
-        }
-
-        .sp-stat-icon--violet {
-          background: #f5f3ff;
-          color: #8b5cf6;
+        .sp-welcome-card {
+          position: relative;
+          overflow: hidden;
+          border-radius: 28px;
+          border: 1px solid rgba(226,232,240,0.85);
+          background: rgba(255,255,255,0.84);
+          backdrop-filter: blur(18px);
+          padding: 28px;
+          box-shadow: 0 20px 60px rgba(15,23,42,0.08);
         }
 
         .sp-soft-btn {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          border-radius: 12px;
+          border-radius: 14px;
           border: 1px solid #e0e7ff;
           background: #eef2ff;
           color: #4f46e5;
-          padding: 8px 12px;
+          padding: 9px 14px;
           font-size: 12px;
-          font-weight: 900;
+          font-weight: 950;
           transition: all 0.15s;
+          white-space: nowrap;
         }
 
         .sp-soft-btn:hover {
           background: #e0e7ff;
+          transform: translateY(-1px);
         }
 
         .sp-save-btn {
@@ -1166,10 +1775,10 @@ export function StudentPortal({ onLogout }: Props) {
           align-items: center;
           justify-content: center;
           gap: 8px;
-          padding: 10px 20px;
-          border-radius: 12px;
+          padding: 11px 20px;
+          border-radius: 14px;
           font-size: 13px;
-          font-weight: 900;
+          font-weight: 950;
           background: linear-gradient(135deg, #10b981, #6366f1);
           color: white;
           border: none;
@@ -1187,48 +1796,289 @@ export function StudentPortal({ onLogout }: Props) {
           text-align: center;
           padding: 40px 20px;
           background: #f8fafc;
-          border-radius: 16px;
+          border-radius: 18px;
           border: 1px dashed #e2e8f0;
         }
 
-        .sp-search-input {
+        .sp-filter-shell {
+          border-radius: 18px;
+          padding: 16px;
+          background: #f8fafc;
+          border: 1px solid #e8eef7;
+        }
+
+        .sp-filter-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+        }
+
+        .sp-field {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .sp-label {
+          font-size: 11px;
+          font-weight: 850;
+          color: #64748b;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          margin-bottom: 6px;
+        }
+
+        .sp-search-input,
+        .sp-select,
+        .sp-input-el {
           width: 100%;
-          padding: 10px 12px 10px 36px;
+          padding: 10px 12px;
           border: 1px solid #e2e8f0;
           border-radius: 14px;
           font-size: 13px;
-          font-weight: 650;
+          font-weight: 700;
           color: #1e293b;
-          background: #f8fafc;
+          background: #ffffff;
           outline: none;
           transition: all 0.15s;
         }
 
-        .sp-search-input:focus {
+        .sp-search-input {
+          padding-left: 36px;
+        }
+
+        .sp-search-input:focus,
+        .sp-select:focus,
+        .sp-input-el:focus {
           border-color: #a5b4fc;
           box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
           background: white;
         }
 
         .sp-schedule-card {
-          background: rgba(255,255,255,0.9);
-          border: 1px solid #f1f5f9;
-          border-radius: 20px;
-          padding: 18px;
-          box-shadow: 0 1px 4px rgba(15,23,42,0.05);
+          background: rgba(255,255,255,0.94);
+          border: 1px solid #e8eef7;
+          border-radius: 22px;
+          padding: 20px;
+          box-shadow: 0 16px 38px rgba(15,23,42,0.06);
           transition: all 0.2s;
         }
 
         .sp-schedule-card:hover {
-          box-shadow: 0 12px 28px rgba(15,23,42,0.08);
+          box-shadow: 0 20px 44px rgba(15,23,42,0.10);
+          transform: translateY(-2px);
+        }
+
+        .sp-schedule-card.live {
+          border-color: #86efac;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(34,197,94,0.12), transparent 32%),
+            #ffffff;
+        }
+
+        .sp-schedule-card.past {
+          opacity: 0.72;
+        }
+
+        .sp-time-pill,
+        .sp-count-pill {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 999px;
+          border: 1px solid #e2e8f0;
+          background: #ffffff;
+          padding: 7px 13px;
+          font-size: 12px;
+          font-weight: 950;
+          color: #334155;
+          box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+        }
+
+        .sp-soft-pill {
+          display: inline-flex;
+          align-items: center;
+          border-radius: 999px;
+          border: 1px solid #e2e8f0;
+          background: #f8fafc;
+          padding: 5px 12px;
+          font-size: 12px;
+          font-weight: 900;
+          color: #475569;
+        }
+
+        .sp-live-badge,
+        .sp-upnext-badge,
+        .sp-countdown-badge,
+        .sp-past-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          border-radius: 999px;
+          padding: 5px 11px;
+          font-size: 11px;
+          font-weight: 950;
+        }
+
+        .sp-live-badge {
+          color: #047857;
+          background: #d1fae5;
+          border: 1px solid #a7f3d0;
+        }
+
+        .sp-upnext-badge {
+          color: #4f46e5;
+          background: #eef2ff;
+          border: 1px solid #dbe5ff;
+        }
+
+        .sp-countdown-badge {
+          color: #7c3aed;
+          background: #f5f3ff;
+          border: 1px solid #ddd6fe;
+        }
+
+        .sp-past-badge {
+          color: #64748b;
+          background: #f1f5f9;
+          border: 1px solid #e2e8f0;
+        }
+
+        .sp-section-title {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 17px;
+          font-weight: 950;
+          color: #111827;
+        }
+
+        .sp-table-head {
+          background: #f8fafc;
+          border-bottom: 1px solid #f1f5f9;
+          color: #64748b;
+        }
+
+        .sp-table-row {
+          transition: all 0.15s;
+        }
+
+        .sp-table-row:hover {
+          background: rgba(248, 250, 252, 0.82);
+        }
+
+        .sp-status-card {
+          border-radius: 24px;
+          border: 1px solid transparent;
+          padding: 18px;
+          min-width: 220px;
+        }
+
+        .sp-status-card--emerald { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+        .sp-status-card--rose { background: #fff1f2; border-color: #fecdd3; color: #9f1239; }
+        .sp-status-card--amber { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+        .sp-status-card--slate { background: #f8fafc; border-color: #e2e8f0; color: #475569; }
+
+        .sp-status-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          border-radius: 999px;
+          border: 1px solid transparent;
+          padding: 6px 11px;
+          font-size: 12px;
+          font-weight: 950;
+          white-space: nowrap;
+        }
+
+        .sp-status-badge--emerald { background: #ecfdf5; border-color: #a7f3d0; color: #047857; }
+        .sp-status-badge--rose { background: #fff1f2; border-color: #fecdd3; color: #be123c; }
+        .sp-status-badge--amber { background: #fffbeb; border-color: #fde68a; color: #b45309; }
+        .sp-status-badge--blue { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+        .sp-status-badge--slate { background: #f8fafc; border-color: #e2e8f0; color: #475569; }
+
+        .sp-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 999px;
+          display: inline-flex;
+          flex-shrink: 0;
+        }
+
+        .sp-dot--emerald { background: #10b981; }
+        .sp-dot--rose { background: #f43f5e; }
+        .sp-dot--amber { background: #f59e0b; }
+        .sp-dot--blue { background: #3b82f6; }
+        .sp-dot--slate { background: #94a3b8; }
+
+        .sp-att-stat {
+          border-radius: 22px;
+          padding: 18px;
+          border: 1px solid transparent;
+          min-height: 106px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
+        }
+
+        .sp-att-stat--emerald { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+        .sp-att-stat--rose { background: #fff1f2; border-color: #fecdd3; color: #9f1239; }
+        .sp-att-stat--amber { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+
+        .sp-lesson-card {
+          border-radius: 24px;
+          border: 1px solid #e8eef7;
+          background: #ffffff;
+          padding: 20px;
+          box-shadow: 0 14px 34px rgba(15,23,42,0.06);
+          transition: all 0.18s;
+        }
+
+        .sp-lesson-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 20px 44px rgba(15,23,42,0.10);
+        }
+
+        .sp-pagination {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          border-top: 1px solid #f1f5f9;
+          margin-top: 18px;
+          padding-top: 16px;
+        }
+
+        .sp-page-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 12px;
+          border: 1px solid #e0e7ff;
+          background: #eef2ff;
+          color: #4f46e5;
+          padding: 8px 12px;
+          font-size: 12px;
+          font-weight: 950;
+          transition: all 0.15s;
+        }
+
+        .sp-page-btn:hover:not(:disabled) {
+          background: #e0e7ff;
           transform: translateY(-1px);
+        }
+
+        .sp-page-btn:disabled {
+          opacity: 0.48;
+          cursor: not-allowed;
         }
 
         .sp-mob-tab {
           padding: 6px 10px;
           border-radius: 10px;
           font-size: 11px;
-          font-weight: 900;
+          font-weight: 950;
           border: 1px solid #e2e8f0;
           background: white;
           color: #64748b;
@@ -1242,8 +2092,416 @@ export function StudentPortal({ onLogout }: Props) {
           color: white;
           border-color: #10b981;
         }
+
+        @media (max-width: 1100px) {
+          .sp-filter-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 640px) {
+          .sp-filter-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .sp-status-card {
+            min-width: 100%;
+          }
+        }
+
+        .sp-dark,
+        .sp-dark main,
+        .sp-dark .sp-page-scroll {
+          background: #071224 !important;
+          color: #e2e8f0 !important;
+        }
+
+        .sp-dark .sp-topbar {
+          background: #0b1220 !important;
+          border-bottom-color: rgba(255,255,255,0.08) !important;
+        }
+
+        .sp-dark .sp-sidebar {
+          background: linear-gradient(180deg, #08111f 0%, #0b1220 100%) !important;
+          border-right-color: rgba(255,255,255,0.08) !important;
+          box-shadow: 16px 0 50px rgba(0,0,0,0.24) !important;
+        }
+
+        .sp-dark .sp-sidebar-logo,
+        .sp-dark .sp-student-card,
+        .sp-dark .sp-card,
+        .sp-dark .sp-welcome-card,
+        .sp-dark .sp-hero-stat,
+        .sp-dark .sp-filter-shell,
+        .sp-dark .sp-clock-card,
+        .sp-dark .sp-schedule-card,
+        .sp-dark .sp-lesson-card {
+          background: #0f172a !important;
+          border-color: rgba(255,255,255,0.10) !important;
+          box-shadow: 0 18px 44px rgba(0,0,0,0.24) !important;
+        }
+
+        .sp-dark .sp-hero-panel {
+          background:
+            radial-gradient(circle at 12% 12%, rgba(16, 185, 129, 0.14), transparent 30%),
+            radial-gradient(circle at 86% 8%, rgba(99, 102, 241, 0.26), transparent 34%),
+            linear-gradient(135deg, #101827, #111827) !important;
+          border-color: rgba(255,255,255,0.10) !important;
+        }
+
+        .sp-dark .sp-logo-icon {
+          background: #162033 !important;
+          border-color: rgba(255,255,255,0.10) !important;
+        }
+
+        .sp-dark .sp-nav-btn {
+          color: #cbd5e1 !important;
+        }
+
+        .sp-dark .sp-nav-btn svg {
+          background: #162033 !important;
+          color: #cbd5e1 !important;
+          border-color: rgba(255,255,255,0.10) !important;
+        }
+
+        .sp-dark .sp-nav-btn:hover {
+          background: rgba(255,255,255,0.06) !important;
+          color: #ffffff !important;
+        }
+
+        .sp-dark .sp-nav-btn.active {
+          background: #ffffff !important;
+          color: #4f46e5 !important;
+          border-color: #ffffff !important;
+        }
+
+        .sp-dark .sp-nav-btn.active svg {
+          background: #eef2ff !important;
+          color: #4f46e5 !important;
+          border-color: #dbe5ff !important;
+        }
+
+        .sp-dark .sp-search-input,
+        .sp-dark .sp-select,
+        .sp-dark .sp-input-el {
+          background: #071224 !important;
+          color: #f8fafc !important;
+          border-color: rgba(255,255,255,0.14) !important;
+        }
+
+        .sp-dark .sp-search-input::placeholder,
+        .sp-dark .sp-input-el::placeholder {
+          color: #94a3b8 !important;
+        }
+
+        .sp-dark select option {
+          background: #0f172a !important;
+          color: #ffffff !important;
+        }
+
+        .sp-dark input[type="date"]::-webkit-calendar-picker-indicator {
+          filter: invert(1);
+          opacity: 0.85;
+        }
+
+        .sp-dark .sp-label,
+        .sp-dark .text-slate-500,
+        .sp-dark .text-slate-400 {
+          color: #94a3b8 !important;
+        }
+
+        .sp-dark .text-slate-950,
+        .sp-dark .text-slate-900,
+        .sp-dark .text-slate-800,
+        .sp-dark .text-slate-700,
+        .sp-dark .text-slate-600 {
+          color: #f8fafc !important;
+        }
+
+        .sp-dark .sp-hero-stat .text-emerald-600 {
+          color: #6ee7b7 !important;
+        }
+
+        .sp-dark .sp-hero-stat .text-blue-600 {
+          color: #93c5fd !important;
+        }
+
+        .sp-dark .sp-soft-pill,
+        .sp-dark .sp-time-pill,
+        .sp-dark .sp-count-pill {
+          background: #ffffff !important;
+          color: #0f172a !important;
+          border-color: #e2e8f0 !important;
+        }
+
+        .sp-dark .sp-soft-btn,
+        .sp-dark .sp-page-btn {
+          background: #eef2ff !important;
+          color: #4f46e5 !important;
+          border-color: #dbe5ff !important;
+        }
+
+        .sp-dark .sp-empty-state {
+          background: #071224 !important;
+          border-color: rgba(255,255,255,0.12) !important;
+        }
+
+        .sp-dark .sp-table-head {
+          background: #071224 !important;
+          color: #94a3b8 !important;
+          border-color: rgba(255,255,255,0.10) !important;
+        }
+
+        .sp-dark .sp-table-row:hover {
+          background: rgba(255,255,255,0.04) !important;
+        }
+
+        .sp-dark .divide-slate-50 > :not([hidden]) ~ :not([hidden]) {
+          border-color: rgba(255,255,255,0.08) !important;
+        }
+
+        .sp-dark .border-slate-100,
+        .sp-dark .border-slate-200 {
+          border-color: rgba(255,255,255,0.10) !important;
+        }
+
+        .sp-dark .sp-schedule-card.live {
+          background:
+            radial-gradient(circle at 100% 0%, rgba(34,197,94,0.16), transparent 34%),
+            #0f172a !important;
+          border-color: rgba(134, 239, 172, 0.55) !important;
+        }
+
+        .sp-dark .sp-schedule-card.past {
+          opacity: 0.62;
+        }
+
+        .sp-dark .sp-att-stat--emerald {
+          background: rgba(16, 185, 129, 0.12) !important;
+          border-color: rgba(16, 185, 129, 0.35) !important;
+          color: #6ee7b7 !important;
+        }
+
+        .sp-dark .sp-att-stat--rose {
+          background: rgba(244, 63, 94, 0.12) !important;
+          border-color: rgba(244, 63, 94, 0.35) !important;
+          color: #fda4af !important;
+        }
+
+        .sp-dark .sp-att-stat--amber {
+          background: rgba(245, 158, 11, 0.12) !important;
+          border-color: rgba(245, 158, 11, 0.35) !important;
+          color: #fcd34d !important;
+        }
+
+        .sp-dark .sp-theme-btn {
+          background: #1e293b !important;
+          color: #facc15 !important;
+          border-color: rgba(255,255,255,0.12) !important;
+        }
+
+        .sp-dark .sp-status-card--emerald {
+          background: rgba(16, 185, 129, 0.12) !important;
+          border-color: rgba(16, 185, 129, 0.35) !important;
+          color: #6ee7b7 !important;
+        }
+
+        .sp-dark .sp-status-card--rose {
+          background: rgba(244, 63, 94, 0.12) !important;
+          border-color: rgba(244, 63, 94, 0.35) !important;
+          color: #fda4af !important;
+        }
+
+        .sp-dark .sp-status-card--amber {
+          background: rgba(245, 158, 11, 0.12) !important;
+          border-color: rgba(245, 158, 11, 0.35) !important;
+          color: #fcd34d !important;
+        }
+
+        .sp-dark .sp-status-card--slate {
+          background: rgba(148, 163, 184, 0.12) !important;
+          border-color: rgba(148, 163, 184, 0.28) !important;
+          color: #cbd5e1 !important;
+        }
+
+        .sp-dark .sp-clock-card .text-slate-900 {
+          color: #ffffff !important;
+        }
       `}</style>
     </div>
+  );
+}
+
+function ClockCard({
+  currentTime,
+  currentDate,
+  clockAngles,
+}: {
+  currentTime: string;
+  currentDate: string;
+  clockAngles: ClockAngles;
+}) {
+  return (
+    <div className="sp-clock-card">
+      <div className="sp-analog-clock">
+        <span className="sp-clock-mark sp-clock-mark-12">XII</span>
+        <span className="sp-clock-mark sp-clock-mark-3">III</span>
+        <span className="sp-clock-mark sp-clock-mark-6">VI</span>
+        <span className="sp-clock-mark sp-clock-mark-9">IX</span>
+
+        <span
+          className="sp-clock-hand sp-clock-hour"
+          style={{ transform: `translateX(-50%) rotate(${clockAngles.hour}deg)` }}
+        />
+        <span
+          className="sp-clock-hand sp-clock-minute"
+          style={{ transform: `translateX(-50%) rotate(${clockAngles.minute}deg)` }}
+        />
+        <span
+          className="sp-clock-hand sp-clock-second"
+          style={{ transform: `translateX(-50%) rotate(${clockAngles.second}deg)` }}
+        />
+        <span className="sp-clock-center" />
+      </div>
+
+      <div className="hidden sm:block">
+        <div className="text-sm font-black text-slate-900">{currentTime}</div>
+        <div className="text-[11px] font-bold text-slate-400">{currentDate}</div>
+      </div>
+    </div>
+  );
+}
+
+function AttendanceFilters({
+  view,
+  setView,
+  dateFilter,
+  setDateFilter,
+  monthFilter,
+  setMonthFilter,
+  yearFilter,
+  setYearFilter,
+}: {
+  view: FilterView;
+  setView: (value: FilterView) => void;
+  dateFilter: string;
+  setDateFilter: (value: string) => void;
+  monthFilter: number;
+  setMonthFilter: (value: number) => void;
+  yearFilter: number;
+  setYearFilter: (value: number) => void;
+}) {
+  return (
+    <div className="sp-filter-shell mt-4">
+      <div className="sp-filter-grid">
+        <DateFilterFields
+          view={view}
+          setView={setView}
+          dateFilter={dateFilter}
+          setDateFilter={setDateFilter}
+          monthFilter={monthFilter}
+          setMonthFilter={setMonthFilter}
+          yearFilter={yearFilter}
+          setYearFilter={setYearFilter}
+        />
+      </div>
+    </div>
+  );
+}
+
+function DateFilterFields({
+  view,
+  setView,
+  dateFilter,
+  setDateFilter,
+  monthFilter,
+  setMonthFilter,
+  yearFilter,
+  setYearFilter,
+}: {
+  view: FilterView;
+  setView: (value: FilterView) => void;
+  dateFilter: string;
+  setDateFilter: (value: string) => void;
+  monthFilter: number;
+  setMonthFilter: (value: number) => void;
+  yearFilter: number;
+  setYearFilter: (value: number) => void;
+}) {
+  return (
+    <>
+      <div className="sp-field">
+        <label className="sp-label">View</label>
+        <select
+          value={view}
+          onChange={(event) => setView(event.target.value as FilterView)}
+          className="sp-select"
+        >
+          <option value="all">All</option>
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+          <option value="yearly">Yearly</option>
+        </select>
+      </div>
+
+      {(view === "daily" || view === "weekly") && (
+        <div className="sp-field">
+          <label className="sp-label">{view === "daily" ? "Date" : "Week From"}</label>
+          <input
+            type="date"
+            value={dateFilter}
+            onChange={(event) => setDateFilter(event.target.value)}
+            className="sp-input-el"
+          />
+        </div>
+      )}
+
+      {view === "monthly" && (
+        <>
+          <div className="sp-field">
+            <label className="sp-label">Month</label>
+            <select
+              value={monthFilter}
+              onChange={(event) => setMonthFilter(Number(event.target.value))}
+              className="sp-select"
+            >
+              {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => (
+                <option key={month} value={month}>
+                  {new Date(2026, month - 1, 1).toLocaleDateString("en-US", {
+                    month: "long",
+                  })}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="sp-field">
+            <label className="sp-label">Year</label>
+            <input
+              type="number"
+              value={yearFilter}
+              onChange={(event) => setYearFilter(Number(event.target.value))}
+              className="sp-input-el"
+              min={2000}
+            />
+          </div>
+        </>
+      )}
+
+      {view === "yearly" && (
+        <div className="sp-field">
+          <label className="sp-label">Year</label>
+          <input
+            type="number"
+            value={yearFilter}
+            onChange={(event) => setYearFilter(Number(event.target.value))}
+            className="sp-input-el"
+            min={2000}
+          />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1258,15 +2516,8 @@ function MiniAttendanceStat({
   tone: "emerald" | "rose" | "amber";
   large?: boolean;
 }) {
-  const styles =
-    tone === "emerald"
-      ? "bg-emerald-50 border-emerald-100 text-emerald-700"
-      : tone === "rose"
-      ? "bg-rose-50 border-rose-100 text-rose-700"
-      : "bg-amber-50 border-amber-100 text-amber-700";
-
   return (
-    <div className={`rounded-2xl border p-4 ${styles}`}>
+    <div className={`sp-att-stat sp-att-stat--${tone}`}>
       <div className="text-xs font-bold opacity-75">{label}</div>
       <div className={`${large ? "text-3xl" : "text-2xl"} font-black mt-1`}>
         {value}
@@ -1279,20 +2530,16 @@ function LessonCard({ lesson, compact = false }: { lesson: any; compact?: boolea
   const pc = progressColor(lesson.progress_status);
 
   return (
-    <article className="rounded-3xl border border-slate-200/70 bg-white p-5 shadow-sm hover:shadow-[0_14px_34px_rgba(15,23,42,0.08)] transition">
+    <article className="sp-lesson-card">
       <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-black ${pc.badge}`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${pc.dot}`} />
+            <span className={pc.badge}>
+              <span className={pc.dot} />
               {statusLabel(lesson.progress_status)}
             </span>
 
-            <span className="inline-flex rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-xs font-black text-indigo-700">
-              {lesson.subject || "No subject"}
-            </span>
-
-            <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-black text-slate-600">
+            <span className="sp-soft-pill">
               {formatDate(lesson.date)}
             </span>
           </div>
@@ -1336,6 +2583,150 @@ function LessonCard({ lesson, compact = false }: { lesson: any; compact?: boolea
         </div>
       )}
     </article>
+  );
+}
+
+function ScheduleCard({
+  schedule,
+  teacherName,
+  isLive = false,
+  isUpcoming = false,
+  isPast = false,
+  large = false,
+}: {
+  schedule: any;
+  teacherName: string;
+  isLive?: boolean;
+  isUpcoming?: boolean;
+  isPast?: boolean;
+  large?: boolean;
+}) {
+  const timing = getScheduleTiming(schedule);
+  const localDay = timing.start.toLocaleDateString("en-US", { weekday: "long" });
+  const day = normalizeDay(schedule.weekday);
+
+  return (
+    <article className={`sp-schedule-card ${isLive ? "live" : ""} ${isPast ? "past" : ""}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className={`${large ? "text-base" : "text-sm"} font-black text-slate-900 truncate`}>
+              {scheduleStudentName(schedule)}
+            </h3>
+
+            {isLive && (
+              <span className="sp-live-badge">
+                <span className="sp-dot sp-dot--emerald" />
+                Live
+              </span>
+            )}
+
+            {isUpcoming && !isLive && (
+              <span className="sp-countdown-badge">
+                {countdownFromMinutes(timing.diffMinutes)}
+              </span>
+            )}
+
+            {isPast && <span className="sp-past-badge">Completed</span>}
+          </div>
+
+          <p className="text-xs text-slate-500 mt-2">
+            Teacher:{" "}
+            <span className="font-black text-slate-700">
+              {schedule.teacher?.name || schedule.teacher_name || teacherName}
+            </span>
+          </p>
+        </div>
+
+        <span className="sp-time-pill shrink-0">{formatLocalClassTime(timing.start)}</span>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <span className="sp-soft-pill">{formatLocalClassDate(timing.start)}</span>
+        {isLive && <span className="sp-live-badge">Live</span>}
+        {isUpcoming && !isLive && <span className="sp-upnext-badge">Up Next</span>}
+        {isPast && <span className="sp-past-badge">Completed</span>}
+      </div>
+    </article>
+  );
+}
+
+function SectionTitle({
+  title,
+  time,
+  live = false,
+}: {
+  title: string;
+  time: string;
+  live?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <h3 className="sp-section-title">
+        {live && <span className="h-2 w-2 rounded-full bg-rose-500" />}
+        {title}
+        {!live && <ChevronRight size={15} />}
+      </h3>
+      <span className="sp-time-pill">{time}</span>
+    </div>
+  );
+}
+
+function EmptyState({
+  icon,
+  title,
+  description,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="sp-empty-state">
+      <div className="text-slate-300 mx-auto mb-3 flex items-center justify-center">{icon}</div>
+      <div className="font-black text-slate-600">{title}</div>
+      <div className="text-xs text-slate-400 mt-1">{description}</div>
+    </div>
+  );
+}
+
+function Pagination({
+  page,
+  totalPages,
+  totalItems,
+  onPageChange,
+}: {
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  onPageChange: (page: number) => void;
+}) {
+  return (
+    <div className="sp-pagination">
+      <div className="text-xs font-bold text-slate-500">
+        Showing page {page} of {totalPages} · {totalItems} total
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={page <= 1}
+          onClick={() => onPageChange(page - 1)}
+          className="sp-page-btn"
+        >
+          Previous
+        </button>
+
+        <button
+          type="button"
+          disabled={page >= totalPages}
+          onClick={() => onPageChange(page + 1)}
+          className="sp-page-btn"
+        >
+          Next
+        </button>
+      </div>
+    </div>
   );
 }
 

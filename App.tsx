@@ -1959,6 +1959,8 @@ if (!session) {
 if (session?.role === "teacher") {
   return (
     <TeacherPortal
+      themeMode={themeMode}
+      onToggleTheme={toggleTheme}
       onLogout={() => {
         clearSession();
         setSession(null);
