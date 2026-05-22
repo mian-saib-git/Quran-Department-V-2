@@ -520,7 +520,7 @@ export function StudentPortal({ onLogout }: Props) {
 
   const schedules = dashboard?.schedules || [];
   const attendance = dashboard?.attendance || [];
-  const lessons = dashboard?.lessons || [];
+const lessons = (dashboard as any)?.lessons || [];
 
   const todayDate = today();
   const todayWeekday = getTodayWeekday();

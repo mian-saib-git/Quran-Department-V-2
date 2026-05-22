@@ -1660,7 +1660,7 @@ const pagedParents = useMemo(
           <div>
             <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100 px-3 py-1.5 text-xs font-extrabold">
               <FileText size={14} />
-              Reports + Parent Summary
+              Reports & Parent Summary
             </div>
 
             <h2 className="mt-4 text-2xl md:text-3xl font-black text-slate-950 tracking-tight">
@@ -1668,7 +1668,7 @@ const pagedParents = useMemo(
             </h2>
 
             <p className="mt-2 text-sm text-slate-500 max-w-2xl">
-              Review attendance, student progress, teacher performance, and parent-ready summaries in one clean report view.
+              Review attendance, student progress, teacher performance, and parent-ready summaries in one report view.
             </p>
           </div>
 

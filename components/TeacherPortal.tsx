@@ -1,38 +1,56 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  AlertCircle,
   BookOpen,
-  Users,
   CalendarDays,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Edit3,
   GraduationCap,
   History,
   LayoutDashboard,
+  ListChecks,
   Loader2,
   LogOut,
+  Moon,
+  Plus,
   Save,
   Search,
-  ChevronRight,
-  AlertCircle,
   Sun,
-  Moon,
+  Trash2,
+  X,
 } from "lucide-react";
 
 import {
-  createLesson,
+  createDailyLessonReport,
+  createLessonAccessRequest,
   createMonthlyLessonPlan,
+  generateMonthlyLessonSummary,
   getDjangoDashboard,
+  getDailyLessonReports,
+  getLessonAccessRequests,
+  getLessonPermissions,
+  getLessons,
   getMonthlyLessonPlans,
   getMonthlyLessonSummary,
-  generateMonthlyLessonSummary,
   logoutFromDjango,
   updateMonthlyLessonPlan,
   type DashboardResponse,
   type DashboardStudent,
+  type DailyLessonReportPayload,
+  type LessonAccessPermissionPayload,
+  type LessonAccessRequestPayload,
+  type LessonPayload,
   type MonthlyLessonPlanPayload,
   type MonthlyLessonSummaryResponse,
   type MonthlyPlanStatus,
   type ProgressStatus,
 } from "../services/djangoApiService";
+
+import { useAcademyWS } from "./../hooks/useAcademyWS";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type Props = {
   themeMode: "light" | "dark";
@@ -41,16 +59,6 @@ type Props = {
 };
 
 type Tab = "overview" | "classes" | "lesson" | "monthly" | "attendance" | "history";
-type QuranMode = "surah" | "juz";
-const ALL_SUBJECTS = [
-  "Qaida Nooraniyya",
-  "Nazira Quran",
-  "Quran Memorization",
-  "Tajweed",
-  "Duas & Sunnah",
-  "Arabic Basics",
-  "Other",
-] as const;
 
 type ScheduleRow = {
   id: number;
@@ -61,25 +69,32 @@ type ScheduleRow = {
   teacher: any;
 };
 
-const WEEKDAY_LABELS: Record<string, string> = {
-  monday: "Monday",
-  tuesday: "Tuesday",
-  wednesday: "Wednesday",
-  thursday: "Thursday",
-  friday: "Friday",
-  saturday: "Saturday",
-  sunday: "Sunday",
+type LessonPermission = Omit<LessonAccessPermissionPayload, "access_type"> & {
+  access_type: "add" | "edit" | "write";
+  lesson_date?: string;
+  date?: string;
 };
 
-const WEEKDAY_SHORT: Record<string, string> = {
-  Monday: "Mon",
-  Tuesday: "Tue",
-  Wednesday: "Wed",
-  Thursday: "Thu",
-  Friday: "Fri",
-  Saturday: "Sat",
-  Sunday: "Sun",
+type LessonHistoryGroup = {
+  key: string;
+  studentId: string;
+  studentName: string;
+  date: string;
+  updatedAt: string;
+  lessons: LessonPayload[];
 };
+
+// ─── Subject configuration ────────────────────────────────────────────────────
+
+const ALL_SUBJECTS = [
+  "Qaida Nooraniyya",
+  "Nazira Quran",
+  "Quran Memorization",
+  "Tajweed",
+  "Duas & Sunnah",
+  "Arabic Basics",
+  "Other",
+];
 
 const QAIDA_LESSONS = [
   "Lesson 1 The Alphabets",
@@ -101,154 +116,243 @@ const QAIDA_LESSONS = [
   "Lesson 17 Ending of Rules",
 ];
 
-const TAJWEED_TOPICS = [
-  "Definition of Tajweed","Makharij","Jawf letters","Halq letters","Lisaan letters",
-  "Shafatayn letters","Khayshoom","Rules of Qalqalah","Rules of Noon Sakinah and Tanween",
-  "Rules of Meem Sakinah","Ghunna","Madd Tabee'i","Madd Munfasil","Madd Muttasil",
-  "Madd Badal","Madd Leen","Madd 'Aridh Lis Sukoon","Madd Laazim","Rules of Raa",
-  "Rules of Laam","Rules of Waqf","Common Tajweed mistakes",
-];
-
-const DUA_TOPICS = [
-  "Dua for waking up","Dua before sleeping","Dua before entering the toilet",
-  "Dua after leaving the toilet","Dua before eating","Dua after eating",
-  "Dua when drinking water","Dua when sneezing","Dua for entering the home",
-  "Dua for leaving the home","Dua for entering the masjid","Dua for leaving the masjid",
-  "Dua when it rains","Dua after rainfall","Dua before studying","Dua after studying",
-  "Dua for increasing knowledge","Morning Azkar","Evening Azkar","Dua for parents",
-  "Dua for forgiveness",
-];
-
-const SURAH_RAW = `1|Al-Fatihah|7
-2|Al-Baqarah|286
-3|Ali Imran|200
-4|An-Nisa|176
-5|Al-Ma'idah|120
-6|Al-An'am|165
-7|Al-A'raf|206
-8|Al-Anfal|75
-9|At-Tawbah|129
-10|Yunus|109
-11|Hud|123
-12|Yusuf|111
-13|Ar-Ra'd|43
-14|Ibrahim|52
-15|Al-Hijr|99
-16|An-Nahl|128
-17|Al-Isra|111
-18|Al-Kahf|110
-19|Maryam|98
-20|Taha|135
-21|Al-Anbiya|112
-22|Al-Hajj|78
-23|Al-Mu'minun|118
-24|An-Nur|64
-25|Al-Furqan|77
-26|Ash-Shu'ara|227
-27|An-Naml|93
-28|Al-Qasas|88
-29|Al-Ankabut|69
-30|Ar-Rum|60
-31|Luqman|34
-32|As-Sajdah|30
-33|Al-Ahzab|73
-34|Saba|54
-35|Fatir|45
-36|Ya-Sin|83
-37|As-Saffat|182
-38|Sad|88
-39|Az-Zumar|75
-40|Ghafir|85
-41|Fussilat|54
-42|Ash-Shuraa|53
-43|Az-Zukhruf|89
-44|Ad-Dukhan|59
-45|Al-Jathiyah|37
-46|Al-Ahqaf|35
-47|Muhammad|38
-48|Al-Fath|29
-49|Al-Hujurat|18
-50|Qaf|45
-51|Adh-Dhariyat|60
-52|At-Tur|49
-53|An-Najm|62
-54|Al-Qamar|55
-55|Ar-Rahman|78
-56|Al-Waqi'ah|96
-57|Al-Hadid|29
-58|Al-Mujadilah|22
-59|Al-Hashr|24
-60|Al-Mumtahanah|13
-61|As-Saff|14
-62|Al-Jumu'ah|11
-63|Al-Munafiqun|11
-64|At-Taghabun|18
-65|At-Talaq|12
-66|At-Tahrim|12
-67|Al-Mulk|30
-68|Al-Qalam|52
-69|Al-Haqqah|52
-70|Al-Ma'arij|44
-71|Nuh|28
-72|Al-Jinn|28
-73|Al-Muzzammil|20
-74|Al-Muddaththir|56
-75|Al-Qiyamah|40
-76|Al-Insan|31
-77|Al-Mursalat|50
-78|An-Naba|40
-79|An-Nazi'at|46
-80|Abasa|42
-81|At-Takwir|29
-82|Al-Infitar|19
-83|Al-Mutaffifin|36
-84|Al-Inshiqaq|25
-85|Al-Buruj|22
-86|At-Tariq|17
-87|Al-A'la|19
-88|Al-Ghashiyah|26
-89|Al-Fajr|30
-90|Al-Balad|20
-91|Ash-Shams|15
-92|Al-Layl|21
-93|Ad-Duha|11
-94|Ash-Sharh|8
-95|At-Tin|8
-96|Al-Alaq|19
-97|Al-Qadr|5
-98|Al-Bayyinah|8
-99|Az-Zalzalah|8
-100|Al-Adiyat|11
-101|Al-Qari'ah|11
-102|At-Takathur|8
-103|Al-Asr|3
-104|Al-Humazah|9
-105|Al-Fil|5
-106|Quraysh|4
-107|Al-Ma'un|7
-108|Al-Kawthar|3
-109|Al-Kafirun|6
-110|An-Nasr|3
-111|Al-Masad|5
-112|Al-Ikhlas|4
-113|Al-Falaq|5
-114|An-Nas|6`;
-
-const SURAHS = SURAH_RAW.trim().split("\n").map((line) => {
-  const [number, name, ayahs] = line.split("|");
-  return { number: Number(number), name, ayahs: Number(ayahs) };
-});
-
-const JUZ_SURAH_RANGES: Record<number, [number, number]> = {
-  1:[1,2],2:[2,2],3:[2,3],4:[3,4],5:[4,4],6:[4,5],7:[5,6],8:[6,7],9:[7,8],10:[8,9],
-  11:[9,11],12:[11,12],13:[12,14],14:[15,16],15:[17,18],16:[18,20],17:[21,22],18:[23,25],
-  19:[25,27],20:[27,29],21:[29,33],22:[33,36],23:[36,39],24:[39,41],25:[41,45],
-  26:[46,51],27:[51,57],28:[58,66],29:[67,77],30:[78,114],
+// Qaida line ranges per lesson
+const QAIDA_LINE_RANGES: Record<string, number> = {
+  "Lesson 1 The Alphabets": 7,
+  "Lesson 2 Joint Letters": 8,
+  "Lesson 3 The Muqattiat Letters": 5,
+  "Lesson 4 The Movements": 14,
+  "Lesson 5 The Tanween": 10,
+  "Lesson 6 The Tanween and Movement": 10,
+  "Lesson 7 The Standing Fatha, Standing Kasra and Standing Dhumma": 8,
+  "Lesson 8 The Madd and Leen": 10,
+  "Lesson 9 Exercise of Movement": 10,
+  "Lesson 10 The Sukoon and Jazam": 10,
+  "Lesson 11 The exercise of Sukoon": 10,
+  "Lesson 12 The Tashdeed": 10,
+  "Lesson 13 Exercise of Tashdeed": 10,
+  "Lesson 14 Tashdeed with Sukoon": 10,
+  "Lesson 15 Tashdeed with Tashdeed": 10,
+  "Lesson 16 Tashdeed with Huroof e Maddah": 10,
+  "Lesson 17 Ending of Rules": 10,
 };
+
+const TAJWEED_TOPICS = [
+  "Definition of Tajweed",
+  "Importance of Tajweed",
+  "Sources of Tajweed",
+  "Objectives of Learning Tajweed",
+  "Makharij (5 main articulation areas, 17 detailed points)",
+  "Jawf letters",
+  "Halq letters",
+  "Lisaan letters",
+  "Shafatayn letters",
+  "Khayshoom",
+  "Rules of Qalqalah",
+  "Rules of Noon Sakinah and Tanween",
+  "Rules of Meem Sakinah",
+  "Ghunna",
+  "Madd Tabee'i",
+  "Madd Munfasil",
+  "Madd Muttasil",
+  "Rules of Raa",
+  "Rules of Waqf",
+  "Common Tajweed mistakes",
+];
+
+const DUAS_TOPICS = [
+  "Dua for waking up",
+  "Dua before sleeping",
+  "Dua before entering the toilet",
+  "Dua after leaving the toilet",
+  "Dua before eating",
+  "Dua after eating",
+  "Dua for entering the home",
+  "Dua for leaving the home",
+  "Dua for entering the masjid",
+  "Dua for leaving the masjid",
+  "Dua when it rains",
+  "Dua for increasing knowledge",
+  "Dua before studying",
+  "Dua after studying",
+  "Dua after Salah",
+  "Morning Azkar",
+  "Evening Azkar",
+];
+
+// Complete Surahs with Juz mapping
+const SURAHS = [
+  { number: 1, name: "Al-Fatihah", ayahs: 7, juz: [1] },
+  { number: 2, name: "Al-Baqarah", ayahs: 286, juz: [1, 2, 3] },
+  { number: 3, name: "Ali Imran", ayahs: 200, juz: [3, 4] },
+  { number: 4, name: "An-Nisa", ayahs: 176, juz: [4, 5, 6] },
+  { number: 5, name: "Al-Ma'idah", ayahs: 120, juz: [6, 7] },
+  { number: 6, name: "Al-An'am", ayahs: 165, juz: [7, 8] },
+  { number: 7, name: "Al-A'raf", ayahs: 206, juz: [8, 9] },
+  { number: 8, name: "Al-Anfal", ayahs: 75, juz: [9, 10] },
+  { number: 9, name: "At-Tawbah", ayahs: 129, juz: [10, 11] },
+  { number: 10, name: "Yunus", ayahs: 109, juz: [11] },
+  { number: 11, name: "Hud", ayahs: 123, juz: [11, 12] },
+  { number: 12, name: "Yusuf", ayahs: 111, juz: [12, 13] },
+  { number: 13, name: "Ar-Ra'd", ayahs: 43, juz: [13] },
+  { number: 14, name: "Ibrahim", ayahs: 52, juz: [13] },
+  { number: 15, name: "Al-Hijr", ayahs: 99, juz: [14] },
+  { number: 16, name: "An-Nahl", ayahs: 128, juz: [14] },
+  { number: 17, name: "Al-Isra", ayahs: 111, juz: [15] },
+  { number: 18, name: "Al-Kahf", ayahs: 110, juz: [15, 16] },
+  { number: 19, name: "Maryam", ayahs: 98, juz: [16] },
+  { number: 20, name: "Taha", ayahs: 135, juz: [16] },
+  { number: 21, name: "Al-Anbiya", ayahs: 112, juz: [17] },
+  { number: 22, name: "Al-Hajj", ayahs: 78, juz: [17] },
+  { number: 23, name: "Al-Mu'minun", ayahs: 118, juz: [18] },
+  { number: 24, name: "An-Nur", ayahs: 64, juz: [18] },
+  { number: 25, name: "Al-Furqan", ayahs: 77, juz: [18, 19] },
+  { number: 26, name: "Ash-Shu'ara", ayahs: 227, juz: [19] },
+  { number: 27, name: "An-Naml", ayahs: 93, juz: [19, 20] },
+  { number: 28, name: "Al-Qasas", ayahs: 88, juz: [20] },
+  { number: 29, name: "Al-Ankabut", ayahs: 69, juz: [20, 21] },
+  { number: 30, name: "Ar-Rum", ayahs: 60, juz: [21] },
+  { number: 31, name: "Luqman", ayahs: 34, juz: [21] },
+  { number: 32, name: "As-Sajdah", ayahs: 30, juz: [21] },
+  { number: 33, name: "Al-Ahzab", ayahs: 73, juz: [21, 22] },
+  { number: 34, name: "Saba", ayahs: 54, juz: [22] },
+  { number: 35, name: "Fatir", ayahs: 45, juz: [22] },
+  { number: 36, name: "Ya-Sin", ayahs: 83, juz: [22, 23] },
+  { number: 37, name: "As-Saffat", ayahs: 182, juz: [23] },
+  { number: 38, name: "Sad", ayahs: 88, juz: [23] },
+  { number: 39, name: "Az-Zumar", ayahs: 75, juz: [23, 24] },
+  { number: 40, name: "Ghafir", ayahs: 85, juz: [24] },
+  { number: 41, name: "Fussilat", ayahs: 54, juz: [24, 25] },
+  { number: 42, name: "Ash-Shura", ayahs: 53, juz: [25] },
+  { number: 43, name: "Az-Zukhruf", ayahs: 89, juz: [25] },
+  { number: 44, name: "Ad-Dukhan", ayahs: 59, juz: [25] },
+  { number: 45, name: "Al-Jathiyah", ayahs: 37, juz: [25] },
+  { number: 46, name: "Al-Ahqaf", ayahs: 35, juz: [26] },
+  { number: 47, name: "Muhammad", ayahs: 38, juz: [26] },
+  { number: 48, name: "Al-Fath", ayahs: 29, juz: [26] },
+  { number: 49, name: "Al-Hujurat", ayahs: 18, juz: [26] },
+  { number: 50, name: "Qaf", ayahs: 45, juz: [26] },
+  { number: 51, name: "Adh-Dhariyat", ayahs: 60, juz: [26, 27] },
+  { number: 52, name: "At-Tur", ayahs: 49, juz: [27] },
+  { number: 53, name: "An-Najm", ayahs: 62, juz: [27] },
+  { number: 54, name: "Al-Qamar", ayahs: 55, juz: [27] },
+  { number: 55, name: "Ar-Rahman", ayahs: 78, juz: [27] },
+  { number: 56, name: "Al-Waqi'ah", ayahs: 96, juz: [27] },
+  { number: 57, name: "Al-Hadid", ayahs: 29, juz: [27] },
+  { number: 58, name: "Al-Mujadila", ayahs: 22, juz: [28] },
+  { number: 59, name: "Al-Hashr", ayahs: 24, juz: [28] },
+  { number: 60, name: "Al-Mumtahanah", ayahs: 13, juz: [28] },
+  { number: 61, name: "As-Saf", ayahs: 14, juz: [28] },
+  { number: 62, name: "Al-Jumu'ah", ayahs: 11, juz: [28] },
+  { number: 63, name: "Al-Munafiqun", ayahs: 11, juz: [28] },
+  { number: 64, name: "At-Taghabun", ayahs: 18, juz: [28] },
+  { number: 65, name: "At-Talaq", ayahs: 12, juz: [28] },
+  { number: 66, name: "At-Tahrim", ayahs: 12, juz: [28] },
+  { number: 67, name: "Al-Mulk", ayahs: 30, juz: [29] },
+  { number: 68, name: "Al-Qalam", ayahs: 52, juz: [29] },
+  { number: 69, name: "Al-Haqqah", ayahs: 52, juz: [29] },
+  { number: 70, name: "Al-Ma'arij", ayahs: 44, juz: [29] },
+  { number: 71, name: "Nuh", ayahs: 28, juz: [29] },
+  { number: 72, name: "Al-Jinn", ayahs: 28, juz: [29] },
+  { number: 73, name: "Al-Muzzammil", ayahs: 20, juz: [29] },
+  { number: 74, name: "Al-Muddaththir", ayahs: 56, juz: [29] },
+  { number: 75, name: "Al-Qiyamah", ayahs: 40, juz: [29] },
+  { number: 76, name: "Al-Insan", ayahs: 31, juz: [29] },
+  { number: 77, name: "Al-Mursalat", ayahs: 50, juz: [29] },
+  { number: 78, name: "An-Naba", ayahs: 40, juz: [30] },
+  { number: 79, name: "An-Nazi'at", ayahs: 46, juz: [30] },
+  { number: 80, name: "Abasa", ayahs: 42, juz: [30] },
+  { number: 81, name: "At-Takwir", ayahs: 29, juz: [30] },
+  { number: 82, name: "Al-Infitar", ayahs: 19, juz: [30] },
+  { number: 83, name: "Al-Mutaffifin", ayahs: 36, juz: [30] },
+  { number: 84, name: "Al-Inshiqaq", ayahs: 25, juz: [30] },
+  { number: 85, name: "Al-Buruj", ayahs: 22, juz: [30] },
+  { number: 86, name: "At-Tariq", ayahs: 17, juz: [30] },
+  { number: 87, name: "Al-A'la", ayahs: 19, juz: [30] },
+  { number: 88, name: "Al-Ghashiyah", ayahs: 26, juz: [30] },
+  { number: 89, name: "Al-Fajr", ayahs: 30, juz: [30] },
+  { number: 90, name: "Al-Balad", ayahs: 20, juz: [30] },
+  { number: 91, name: "Ash-Shams", ayahs: 15, juz: [30] },
+  { number: 92, name: "Al-Layl", ayahs: 21, juz: [30] },
+  { number: 93, name: "Ad-Duha", ayahs: 11, juz: [30] },
+  { number: 94, name: "Ash-Sharh", ayahs: 8, juz: [30] },
+  { number: 95, name: "At-Tin", ayahs: 8, juz: [30] },
+  { number: 96, name: "Al-Alaq", ayahs: 19, juz: [30] },
+  { number: 97, name: "Al-Qadr", ayahs: 5, juz: [30] },
+  { number: 98, name: "Al-Bayyinah", ayahs: 8, juz: [30] },
+  { number: 99, name: "Az-Zalzalah", ayahs: 8, juz: [30] },
+  { number: 100, name: "Al-Adiyat", ayahs: 11, juz: [30] },
+  { number: 101, name: "Al-Qari'ah", ayahs: 11, juz: [30] },
+  { number: 102, name: "At-Takathur", ayahs: 8, juz: [30] },
+  { number: 103, name: "Al-Asr", ayahs: 3, juz: [30] },
+  { number: 104, name: "Al-Humazah", ayahs: 9, juz: [30] },
+  { number: 105, name: "Al-Fil", ayahs: 5, juz: [30] },
+  { number: 106, name: "Quraysh", ayahs: 4, juz: [30] },
+  { number: 107, name: "Al-Ma'un", ayahs: 7, juz: [30] },
+  { number: 108, name: "Al-Kawthar", ayahs: 3, juz: [30] },
+  { number: 109, name: "Al-Kafirun", ayahs: 6, juz: [30] },
+  { number: 110, name: "An-Nasr", ayahs: 3, juz: [30] },
+  { number: 111, name: "Al-Masad", ayahs: 5, juz: [30] },
+  { number: 112, name: "Al-Ikhlas", ayahs: 4, juz: [30] },
+  { number: 113, name: "Al-Falaq", ayahs: 5, juz: [30] },
+  { number: 114, name: "An-Nas", ayahs: 6, juz: [30] },
+];
 
 const JUZ_OPTIONS = Array.from({ length: 30 }, (_, i) => i + 1);
 
+// ─── Subject entry type for multi-subject form ────────────────────────────────
+
+type SubjectEntry = {
+  id: string;
+  subject: string;
+  // Qaida
+  qaidaLesson: string;
+  qaidaFromLine: number;
+  qaidaToLine: number;
+  // Quran
+  quranMode: "surah" | "juz";
+  juz: number;
+  surahNumber: number;
+  fromAyah: number;
+  toAyah: number;
+  // Tajweed / Duas
+  selectedTopics: string[];
+  topicSearch: string;
+  // Arabic / Other
+  customTopic: string;
+  // Common
+  progressStatus: ProgressStatus;
+  remarks: string;
+  expanded: boolean;
+};
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const PAGE_SIZE = 12;
+const CLASS_DURATION_MINUTES = 30;
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+
+const WEEKDAY_LABELS: Record<string, string> = {
+  monday: "Monday", tuesday: "Tuesday", wednesday: "Wednesday",
+  thursday: "Thursday", friday: "Friday", saturday: "Saturday", sunday: "Sunday",
+};
+
+const DAY_INDEX: Record<string, number> = {
+  Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3,
+  Thursday: 4, Friday: 5, Saturday: 6,
+};
+
+// ─── Pure helpers ─────────────────────────────────────────────────────────────
+
 function today() { return new Date().toISOString().slice(0, 10); }
+
+function toDateInputValue(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function normalizeDay(day: string) {
+  return WEEKDAY_LABELS[String(day || "").toLowerCase()] || day || "-";
+}
 
 function formatTime(value: string) {
   const clean = String(value || "").slice(0, 5);
@@ -256,26 +360,78 @@ function formatTime(value: string) {
   const hour = Number(h);
   if (!Number.isFinite(hour) || !m) return value || "-";
   const ampm = hour >= 12 ? "PM" : "AM";
-  const hour12 = hour % 12 || 12;
-  return `${String(hour12).padStart(2, "0")}:${m} ${ampm}`;
+  return `${String(hour % 12 || 12).padStart(2, "0")}:${m} ${ampm}`;
+}
+
+function formatDate(value: string) {
+  if (!value) return "-";
+  try {
+    return new Date(`${value}T00:00:00`).toLocaleDateString("en-US", {
+      weekday: "short", month: "short", day: "numeric", year: "numeric",
+    });
+  } catch { return value; }
+}
+
+function monthName(month: number) {
+  return new Date(2026, month - 1, 1).toLocaleDateString("en-US", { month: "long" });
 }
 
 function timeToMinutes(value: string) {
-  const clean = String(value || "").slice(0, 5);
-  const [h, m] = clean.split(":").map(Number);
-
+  const [h, m] = String(value || "").slice(0, 5).split(":").map(Number);
   if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
-
   return h * 60 + m;
+}
+
+function getMinutesNow() {
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
 }
 
 function getTodayWeekday() {
   return new Date().toLocaleDateString("en-US", { weekday: "long" });
 }
 
-function getMinutesNow() {
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
+function getCurrentDate() {
+  return new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+
+function getInitials(name: string) {
+  return String(name || "").split(" ").filter(Boolean).map(p => p[0]).slice(0, 2).join("").toUpperCase() || "T";
+}
+
+function getClockAngles(now: Date) {
+  const seconds = now.getSeconds();
+  const minutes = now.getMinutes();
+  const hours = now.getHours() % 12;
+  return {
+    hour: hours * 30 + minutes * 0.5,
+    minute: minutes * 6 + seconds * 0.1,
+    second: seconds * 6,
+  };
+}
+
+function parseDateOnly(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getWeekRange(dateValue: string) {
+  const date = parseDateOnly(dateValue);
+  if (!date) return { start: "", end: "" };
+  const day = date.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  const start = new Date(date);
+  start.setDate(date.getDate() + diffToMonday);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return { start: toDateInputValue(start), end: toDateInputValue(end) };
+}
+
+function paginateItems<T>(items: T[], page: number, pageSize: number) {
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.min(Math.max(page, 1), totalPages);
+  const start = (safePage - 1) * pageSize;
+  return { pageItems: items.slice(start, start + pageSize), totalPages, safePage };
 }
 
 function getScheduleStudentName(row: ScheduleRow) {
@@ -288,287 +444,505 @@ function minutesUntilClass(timeSlot: string) {
 
 function countdownLabel(timeSlot: string) {
   const minutes = minutesUntilClass(timeSlot);
-
   if (minutes <= 0) return "Starting now";
-  if (minutes === 1) return "1 min left";
   if (minutes < 60) return `${minutes} min left`;
-
   const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-
-  if (remainingMinutes === 0) return `${hours} hr left`;
-
-  return `${hours} hr ${remainingMinutes} min left`;
+  const rem = minutes % 60;
+  return rem === 0 ? `${hours} hr left` : `${hours} hr ${rem} min left`;
 }
 
-const DAY_INDEX: Record<string, number> = {
-  Sunday: 0,
-  Monday: 1,
-  Tuesday: 2,
-  Wednesday: 3,
-  Thursday: 4,
-  Friday: 5,
-  Saturday: 6,
-};
+function parseDateOnly2(value: string) {
+  const d = new Date(`${value}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
 function getThisWeekClassStart(row: ScheduleRow) {
   const classDay = DAY_INDEX[normalizeDay(row.weekday)];
-  const [hour, minute] = String(row.time_slot || "00:00")
-    .slice(0, 5)
-    .split(":")
-    .map(Number);
-
-  if (!Number.isFinite(classDay) || !Number.isFinite(hour) || !Number.isFinite(minute)) {
-    return null;
-  }
-
+  const [hour, minute] = String(row.time_slot || "00:00").slice(0, 5).split(":").map(Number);
+  if (!Number.isFinite(classDay) || !Number.isFinite(hour) || !Number.isFinite(minute)) return null;
   const now = new Date();
   const classStart = new Date(now);
-
-  const todayDay = now.getDay();
-  const dayDifference = classDay - todayDay;
-
-  classStart.setDate(now.getDate() + dayDifference);
+  const daysBack = (now.getDay() - classDay + 7) % 7;
+  classStart.setDate(now.getDate() - daysBack);
   classStart.setHours(hour, minute, 0, 0);
-
   return classStart;
+}
+
+function getClassLessonDate(row: ScheduleRow) {
+  const classStart = getThisWeekClassStart(row);
+  return classStart ? toDateInputValue(classStart) : today();
 }
 
 function canWriteLessonForClass(row: ScheduleRow) {
   const classStart = getThisWeekClassStart(row);
-
   if (!classStart) return false;
-
-  const now = new Date();
-  const diffMs = now.getTime() - classStart.getTime();
-  const twentyFourHoursMs = 24 * 60 * 60 * 1000;
-
-  return diffMs >= 0 && diffMs <= twentyFourHoursMs;
+  const diffMs = Date.now() - classStart.getTime();
+  // Only open if class started within the last 24 hours AND it's the actual class date
+  // This prevents the window reopening every week for the same weekday
+  if (diffMs < 0 || diffMs > TWENTY_FOUR_HOURS_MS) return false;
+  // Extra check: the class date must be TODAY specifically
+  // If daysBack > 0, the class was on a previous day this week — only allow if within 24hr window
+  const classDateStr = toDateInputValue(classStart);
+  const todayStr = toDateInputValue(new Date());
+  const yesterdayDate = new Date();
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterdayStr = toDateInputValue(yesterdayDate);
+  // Allow if class was today or yesterday (within 24hr window)
+  return classDateStr === todayStr || classDateStr === yesterdayStr;
 }
 
 function lessonWindowLabel(row: ScheduleRow) {
   const classStart = getThisWeekClassStart(row);
-
   if (!classStart) return "Lesson unavailable";
-
-  const now = new Date();
-  const diffMs = now.getTime() - classStart.getTime();
-  const twentyFourHoursMs = 24 * 60 * 60 * 1000;
-
-  if (diffMs < 0) {
-    return `Opens at ${formatTime(row.time_slot)}`;
-  }
-
-  if (diffMs > twentyFourHoursMs) {
-    return "Lesson window expired";
-  }
-
-  const remainingMinutes = Math.max(1, Math.floor((twentyFourHoursMs - diffMs) / 60000));
+  const diffMs = Date.now() - classStart.getTime();
+  if (diffMs < 0) return `Opens at ${formatTime(row.time_slot)}`;
+  if (diffMs > TWENTY_FOUR_HOURS_MS) return "Lesson window expired";
+  const remainingMinutes = Math.max(1, Math.floor((TWENTY_FOUR_HOURS_MS - diffMs) / 60000));
   const hours = Math.floor(remainingMinutes / 60);
   const minutes = remainingMinutes % 60;
-
   if (hours <= 0) return `${minutes} min left`;
   if (minutes === 0) return `${hours} hr left`;
-
   return `${hours} hr ${minutes} min left`;
 }
 
-function parseDateOnly(value: string) {
-  const date = new Date(`${value}T00:00:00`);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function getWeekRange(dateValue: string) {
-  const date = parseDateOnly(dateValue);
-  if (!date) return { start: "", end: "" };
-
-  const day = date.getDay(); // Sunday = 0
-  const diffToMonday = day === 0 ? -6 : 1 - day;
-
-  const start = new Date(date);
-  start.setDate(date.getDate() + diffToMonday);
-
-  const end = new Date(start);
-  end.setDate(start.getDate() + 6);
-
-  return {
-    start: start.toISOString().slice(0, 10),
-    end: end.toISOString().slice(0, 10),
-  };
-}
-
-
-function getCurrentDate() {
-  const now = new Date();
-  return now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
-}
-
-function getClockAngles(now: Date) {
-  const seconds = now.getSeconds();
-  const minutes = now.getMinutes();
-  const hours = now.getHours() % 12;
-
-  return {
-    hour: hours * 30 + minutes * 0.5,
-    minute: minutes * 6 + seconds * 0.1,
-    second: seconds * 6,
-  };
-}
-
-function getInitials(name: string) {
-  return name.split(" ").filter(Boolean).map((p) => p[0]).slice(0, 2).join("").toUpperCase() || "T";
-}
-
-function normalizeDay(day: string) {
-  return WEEKDAY_LABELS[String(day || "").toLowerCase()] || day;
+/** Returns true if the date is today or in the past */
+function isDateAllowed(dateStr: string): boolean {
+  const d = parseDateOnly2(dateStr);
+  if (!d) return false;
+  const todayDate = parseDateOnly2(today());
+  if (!todayDate) return false;
+  return d <= todayDate;
 }
 
 function statusLabel(status?: string) {
-  const value = String(status || "").trim().toLowerCase();
-
-  if (value === "present") return "Present";
-  if (value === "absent") return "Absent";
-  if (value === "leave") return "Leave";
-  if (value === "excellent") return "Excellent";
-  if (value === "good") return "Good";
-  if (value === "satisfactory") return "Satisfactory";
-  if (value === "needs_improvement") return "Needs Improvement";
-
+  const v = String(status || "").trim().toLowerCase();
+  if (v === "present") return "Present";
+  if (v === "absent") return "Absent";
+  if (v === "leave") return "Leave";
+  if (v === "excellent") return "Excellent";
+  if (v === "good") return "Good";
+  if (v === "satisfactory") return "Satisfactory";
+  if (v === "needs_improvement") return "Needs Improvement";
   return "Unmarked";
 }
 
+function normalizeAttendanceStatus(value: any) {
+  const s = String(value || "").trim().toLowerCase();
+  if (s === "present") return "present";
+  if (s === "absent") return "absent";
+  if (s === "leave") return "leave";
+  return s;
+}
+
+function attendanceKey(item: any) {
+  const type = String(item.entity_type || "").toLowerCase();
+  const entityId = type === "teacher" ? String(item.teacher_id || "") : String(item.student_id || "");
+  return `${type}:${entityId}:${item.date || ""}`;
+}
+
+function attendanceTimeValue(item: any) {
+  const parsed = Date.parse(item.updated_at || item.created_at || item.date || "");
+  if (Number.isFinite(parsed)) return parsed;
+  const id = Number(item.id);
+  return Number.isFinite(id) ? id : 0;
+}
+
 function markedByLabel(item: any) {
-  const rawName =
-    String(item?.marked_by_name || "").trim() ||
-    String(item?.marked_by || "").trim() ||
-    "Coordinator";
-
+  const rawName = String(item?.marked_by_name || "").trim() || String(item?.marked_by || "").trim() || "Coordinator";
   const role = String(item?.marked_by_role || "coordinator").trim().toLowerCase();
-
-  const cleanName =
-    rawName.toLowerCase() === "coordinator"
-      ? "Coordinator"
-      : rawName;
-
-  if (role === "coordinator") {
-    return cleanName === "Coordinator"
-      ? "Attendance marked by Coordinator"
-      : `Attendance marked by Coordinator ${cleanName}`;
-  }
-
-  if (role === "teacher") {
-    return `Attendance marked by Teacher ${cleanName}`;
-  }
-
-  if (role === "student") {
-    return `Attendance marked by Student ${cleanName}`;
-  }
-
+  const cleanName = rawName.toLowerCase() === "coordinator" ? "Coordinator" : rawName;
+  if (role === "coordinator") return cleanName === "Coordinator" ? "Attendance marked by Coordinator" : `Attendance marked by Coordinator ${cleanName}`;
+  if (role === "teacher") return `Attendance marked by Teacher ${cleanName}`;
   return `Attendance marked by ${cleanName}`;
 }
-function isQuranSubject(s: string) { return s === "Nazira Quran" || s === "Quran Memorization"; }
-function isQaidaSubject(s: string) { return s === "Qaida Nooraniyya"; }
-function isTajweedSubject(s: string) { return s === "Tajweed"; }
-function isDuaSubject(s: string) { return s === "Duas & Sunnah"; }
 
+function permissionDate(p: LessonPermission) { return p.lesson_date || p.date || ""; }
 
-function paginateItems<T>(items: T[], page: number, pageSize: number) {
-  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
-  const safePage = Math.min(Math.max(page, 1), totalPages);
-  const start = (safePage - 1) * pageSize;
+function permissionMatches(permission: LessonPermission, studentId: string | number, lessonDate: string, accessType: "add" | "edit", subject = "") {
+  const at = permission.access_type === "write" ? "add" : permission.access_type;
+  const ps = String((permission as any).subject || "").trim();
+  return (
+    permission.is_active &&
+    String(permission.student_id) === String(studentId) &&
+    String(permissionDate(permission)) === String(lessonDate) &&
+    at === accessType &&
+    (accessType === "add" || !ps || ps === String(subject || "").trim())
+  );
+}
 
+function groupLessonsByStudentDate(lessons: LessonPayload[]): LessonHistoryGroup[] {
+  const grouped = new Map<string, LessonHistoryGroup>();
+  for (const lesson of lessons) {
+    const studentId = String(lesson.student_id || "");
+    const date = String(lesson.date || "");
+    const key = `${studentId}__${date}`;
+    const updatedAt = String(lesson.updated_at || lesson.created_at || "");
+    if (!grouped.has(key)) {
+      grouped.set(key, { key, studentId, studentName: lesson.student_name || "Student", date, updatedAt, lessons: [] });
+    }
+    const row = grouped.get(key)!;
+    row.lessons.push(lesson);
+    if (updatedAt.localeCompare(row.updatedAt) > 0) row.updatedAt = updatedAt;
+  }
+  return Array.from(grouped.values())
+    .map(group => ({ ...group, lessons: group.lessons.sort((a, b) => String(a.subject || "").localeCompare(String(b.subject || ""))) }))
+    .sort((a, b) => {
+      const dc = b.date.localeCompare(a.date);
+      return dc !== 0 ? dc : b.updatedAt.localeCompare(a.updatedAt);
+    });
+}
+
+function getStudentSubjectsFromList(_students: DashboardStudent[], _studentId: string | number): string[] {
+  return ALL_SUBJECTS;
+}
+
+// ─── SubjectEntry helpers ─────────────────────────────────────────────────────
+
+function newSubjectEntry(subject: string): SubjectEntry {
   return {
-    pageItems: items.slice(start, start + pageSize),
-    totalPages,
-    safePage,
+    id: `${Date.now()}-${Math.random()}`,
+    subject,
+    qaidaLesson: QAIDA_LESSONS[0],
+    qaidaFromLine: 1,
+    qaidaToLine: 5,
+    quranMode: "surah",
+    juz: 1,
+    surahNumber: 1,
+    fromAyah: 1,
+    toAyah: 1,
+    selectedTopics: [],
+    topicSearch: "",
+    customTopic: "",
+    progressStatus: "",
+    remarks: "",
+    expanded: true,
   };
 }
 
-
-
-
-
-function getLatestClassStart(row: ScheduleRow) {
-  const classDay = DAY_INDEX[normalizeDay(row.weekday)];
-  const [hour, minute] = String(row.time_slot || "00:00")
-    .slice(0, 5)
-    .split(":")
-    .map(Number);
-
-  if (!Number.isFinite(classDay) || !Number.isFinite(hour) || !Number.isFinite(minute)) {
-    return null;
+function getTopicSummary(entry: SubjectEntry): string {
+  const { subject } = entry;
+  if (subject === "Qaida Nooraniyya") {
+    return `${entry.qaidaLesson} (Lines ${entry.qaidaFromLine}-${entry.qaidaToLine})`;
   }
-
-  const now = new Date();
-  const latest = new Date(now);
-
-  const daysBack = (now.getDay() - classDay + 7) % 7;
-
-  latest.setDate(now.getDate() - daysBack);
-  latest.setHours(hour, minute, 0, 0);
-
-  return latest;
+  if (subject === "Nazira Quran" || subject === "Quran Memorization") {
+    const surah = SURAHS.find(s => s.number === entry.surahNumber);
+    const surahLabel = surah ? `${surah.number}. ${surah.name}` : `Surah ${entry.surahNumber}`;
+    if (entry.quranMode === "juz") {
+      return `Juz ${entry.juz} - ${surahLabel} (Verses ${entry.fromAyah}-${entry.toAyah})`;
+    }
+    return `${surahLabel} (Verses ${entry.fromAyah}-${entry.toAyah})`;
+  }
+  if (subject === "Tajweed" || subject === "Duas & Sunnah") {
+    return entry.selectedTopics.length ? entry.selectedTopics.join(", ") : "";
+  }
+  return entry.customTopic.trim();
 }
 
+function getSurahsForJuz(juz: number) {
+  return SURAHS.filter(s => s.juz.includes(juz));
+}
 
+// ─── SubjectEntryCard ─────────────────────────────────────────────────────────
 
+function SubjectEntryCard({
+  entry,
+  index,
+  totalEntries,
+  onChange,
+  onRemove,
+}: {
+  entry: SubjectEntry;
+  index: number;
+  totalEntries: number;
+  onChange: (updated: SubjectEntry) => void;
+  onRemove: () => void;
+}) {
+  const up = (patch: Partial<SubjectEntry>) => onChange({ ...entry, ...patch });
+
+  const surahsForJuz = useMemo(() => getSurahsForJuz(entry.juz), [entry.juz]);
+  const currentSurah = SURAHS.find(s => s.number === entry.surahNumber) || SURAHS[0];
+  const ayahOptions = Array.from({ length: currentSurah.ayahs }, (_, i) => i + 1);
+  const qaidaMaxLines = QAIDA_LINE_RANGES[entry.qaidaLesson] || 10;
+  const topicList = entry.subject === "Tajweed" ? TAJWEED_TOPICS : entry.subject === "Duas & Sunnah" ? DUAS_TOPICS : [];
+  const filteredTopics = entry.topicSearch ? topicList.filter(t => t.toLowerCase().includes(entry.topicSearch.toLowerCase())) : topicList;
+  const summary = getTopicSummary(entry);
+
+  const handleJuzChange = (juz: number) => {
+    const surahs = getSurahsForJuz(juz);
+    up({ juz, surahNumber: surahs[0]?.number || 1, fromAyah: 1, toAyah: 1 });
+  };
+
+  const handleSurahChange = (surahNumber: number) => {
+    up({ surahNumber, fromAyah: 1, toAyah: 1 });
+  };
+
+  return (
+    <div className="tp-compact-card">
+      {/* Summary header row */}
+      <div className="tp-compact-header" onClick={() => up({ expanded: !entry.expanded })}>
+        <div className="tp-compact-header-left">
+          {summary
+            ? <span className="tp-compact-summary">{summary.length > 80 ? summary.slice(0, 77) + "…" : summary}</span>
+            : <span className="tp-compact-placeholder">Select topic below…</span>}
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {totalEntries > 1 && (
+            <button type="button" onClick={e => { e.stopPropagation(); onRemove(); }} className="tp-remove-btn">
+              <Trash2 size={13} />
+            </button>
+          )}
+          <ChevronDown size={16} className={`text-slate-400 transition-transform ${entry.expanded ? "rotate-180" : ""}`} />
+        </div>
+      </div>
+
+      {entry.expanded && (
+        <div className="tp-compact-body">
+
+          {/* ── Qaida Nooraniyya ── */}
+          {entry.subject === "Qaida Nooraniyya" && (
+            <div className="tp-compact-row">
+              <div className="tp-compact-field">
+                <label className="tp-compact-label">Lesson</label>
+                <select value={entry.qaidaLesson} onChange={e => up({ qaidaLesson: e.target.value, qaidaFromLine: 1, qaidaToLine: Math.min(5, QAIDA_LINE_RANGES[e.target.value] || 10) })} className="tp-compact-select">
+                  {QAIDA_LESSONS.map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
+              </div>
+              <div className="tp-compact-field tp-compact-field--sm">
+                <label className="tp-compact-label">From</label>
+                <select value={entry.qaidaFromLine} onChange={e => { const v = Number(e.target.value); up({ qaidaFromLine: v, qaidaToLine: Math.max(entry.qaidaToLine, v) }); }} className="tp-compact-select">
+                  {Array.from({ length: qaidaMaxLines }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+              <div className="tp-compact-field tp-compact-field--sm">
+                <label className="tp-compact-label">To</label>
+                <select value={entry.qaidaToLine} onChange={e => up({ qaidaToLine: Number(e.target.value) })} className="tp-compact-select">
+                  {Array.from({ length: qaidaMaxLines }, (_, i) => i + 1).filter(n => n >= entry.qaidaFromLine).map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* ── Nazira Quran / Quran Memorization ── */}
+          {(entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") && (
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                {(["surah", "juz"] as const).map(mode => (
+                  <button key={mode} type="button" onClick={() => up({ quranMode: mode })}
+                    className={`tp-mode-btn ${entry.quranMode === mode ? "active" : ""}`}>
+                    {mode === "surah" ? "By Surah" : "By Juz"}
+                  </button>
+                ))}
+              </div>
+              <div className="tp-compact-row">
+                {entry.quranMode === "juz" && (
+                  <div className="tp-compact-field">
+                    <label className="tp-compact-label">Juz</label>
+                    <select value={entry.juz} onChange={e => handleJuzChange(Number(e.target.value))} className="tp-compact-select">
+                      {JUZ_OPTIONS.map(j => <option key={j} value={j}>Juz {j}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div className="tp-compact-field">
+                  <label className="tp-compact-label">{entry.quranMode === "juz" ? "Surah in Juz" : "Surah"}</label>
+                  <select value={entry.surahNumber} onChange={e => handleSurahChange(Number(e.target.value))} className="tp-compact-select">
+                    {(entry.quranMode === "juz" ? surahsForJuz : SURAHS).map(s => (
+                      <option key={s.number} value={s.number}>{s.number}. {s.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="tp-compact-field tp-compact-field--sm">
+                  <label className="tp-compact-label">From</label>
+                  <select value={entry.fromAyah} onChange={e => { const v = Number(e.target.value); up({ fromAyah: v, toAyah: Math.max(entry.toAyah, v) }); }} className="tp-compact-select">
+                    {ayahOptions.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </div>
+                <div className="tp-compact-field tp-compact-field--sm">
+                  <label className="tp-compact-label">To</label>
+                  <select value={entry.toAyah} onChange={e => up({ toAyah: Number(e.target.value) })} className="tp-compact-select">
+                    {ayahOptions.filter(n => n >= entry.fromAyah).map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Tajweed / Duas & Sunnah ── */}
+          {(entry.subject === "Tajweed" || entry.subject === "Duas & Sunnah") && (
+            <div className="space-y-2">
+              <div className="relative">
+                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={entry.topicSearch}
+                  onChange={e => up({ topicSearch: e.target.value })}
+                  placeholder="Search topics…"
+                  className="tp-compact-search"
+                />
+              </div>
+              <div className="tp-checklist-compact">
+                {filteredTopics.map(topic => (
+                  <label key={topic} className="tp-checklist-compact-item">
+                    <input
+                      type="checkbox"
+                      checked={entry.selectedTopics.includes(topic)}
+                      onChange={() => {
+                        const next = entry.selectedTopics.includes(topic)
+                          ? entry.selectedTopics.filter(t => t !== topic)
+                          : [...entry.selectedTopics, topic];
+                        up({ selectedTopics: next });
+                      }}
+                      className="tp-checkbox"
+                    />
+                    <span>{topic}</span>
+                  </label>
+                ))}
+              </div>
+              {entry.selectedTopics.length > 0 && (
+                <div className="text-xs text-indigo-600 font-bold">{entry.selectedTopics.length} selected</div>
+              )}
+            </div>
+          )}
+
+          {/* ── Arabic Basics / Other ── */}
+          {(entry.subject === "Arabic Basics" || entry.subject === "Other") && (
+            <input
+              value={entry.customTopic}
+              onChange={e => up({ customTopic: e.target.value })}
+              placeholder="Type the topic covered…"
+              className="tp-compact-select w-full"
+            />
+          )}
+
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export function TeacherPortal({ themeMode, onToggleTheme, onLogout }: Props) {
-  const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
+const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
+  const [lessons, setLessons] = useState<LessonPayload[]>([]);
+  const [dailyReports, setDailyReports] = useState<DailyLessonReportPayload[]>([]);
+  const [permissions, setPermissions] = useState<LessonPermission[]>([]);
+  const [lessonRequests, setLessonRequests] = useState<LessonAccessRequestPayload[]>([]);
+  const [requestingPermission, setRequestingPermission] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState("");
-const [clockNow, setClockNow] = useState(new Date());
-const currentTime = clockNow.toLocaleTimeString("en-US", {
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: true,
-});
+  const [clockNow, setClockNow] = useState(new Date());
+
+  // ── Lesson form state ──
   const [studentId, setStudentId] = useState("");
   const [lessonDate, setLessonDate] = useState(today());
-  const [subject, setSubject] = useState("");
-  const [qaidaLesson, setQaidaLesson] = useState(QAIDA_LESSONS[0]);
-  const [quranMode, setQuranMode] = useState<QuranMode>("surah");
-  const [juz, setJuz] = useState(1);
-  const [surahNumber, setSurahNumber] = useState(1);
-  const [fromAyah, setFromAyah] = useState(1);
-  const [toAyah, setToAyah] = useState(1);
-  const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
-  const [customTopic, setCustomTopic] = useState("");
-  const [progressStatus, setProgressStatus] = useState<ProgressStatus>("");
+  const [notes, setNotes] = useState("");
+  const [subjectEntries, setSubjectEntries] = useState<SubjectEntry[]>([]);
   const [saving, setSaving] = useState(false);
+  const [dateError, setDateError] = useState("");
+
+  // ── UI state ──
   const [search, setSearch] = useState("");
-  const [attendanceStudentFilter, setAttendanceStudentFilter] = useState("");
   const [classSearch, setClassSearch] = useState("");
-const [classPage, setClassPage] = useState(1);
-const [historyStudentFilter, setHistoryStudentFilter] = useState("");
-const [historyPage, setHistoryPage] = useState(1);
-const [attendancePage, setAttendancePage] = useState(1);
-
-const PAGE_SIZE = 12;
+  const [classPage, setClassPage] = useState(1);
+  const [historyStudentFilter, setHistoryStudentFilter] = useState("");
+  const [historyPage, setHistoryPage] = useState(1);
+  const [attendancePage, setAttendancePage] = useState(1);
+  const [attendanceStudentFilter, setAttendanceStudentFilter] = useState("");
   const [attendanceView, setAttendanceView] = useState<"all" | "daily" | "weekly" | "monthly" | "yearly">("all");
-const [attendanceDateFilter, setAttendanceDateFilter] = useState(today());
-const [attendanceMonthFilter, setAttendanceMonthFilter] = useState(new Date().getMonth() + 1);
-const [attendanceYearFilter, setAttendanceYearFilter] = useState(new Date().getFullYear());
-  const [monthlyPlans, setMonthlyPlans] = useState<MonthlyLessonPlanPayload[]>([]);
-const [monthlySummary, setMonthlySummary] = useState<MonthlyLessonSummaryResponse | null>(null);
-const [monthlyLoading, setMonthlyLoading] = useState(false);
-const [monthlySaving, setMonthlySaving] = useState(false);
-const [monthlySummarySaving, setMonthlySummarySaving] = useState(false);
-const [monthlyMessage, setMonthlyMessage] = useState("");
+  const [attendanceDateFilter, setAttendanceDateFilter] = useState(today());
+  const [attendanceMonthFilter, setAttendanceMonthFilter] = useState(new Date().getMonth() + 1);
+  const [attendanceYearFilter, setAttendanceYearFilter] = useState(new Date().getFullYear());
 
-const [monthlyStudentId, setMonthlyStudentId] = useState("");
-const [monthlySubject, setMonthlySubject] = useState("");
-const [monthlyMonth, setMonthlyMonth] = useState(() => new Date().getMonth() + 1);
-const [monthlyYear, setMonthlyYear] = useState(() => new Date().getFullYear());
-const [monthlyPlanText, setMonthlyPlanText] = useState("");
-const [monthlyStatus, setMonthlyStatus] = useState<MonthlyPlanStatus>("planned");
-  const loadDashboard = async (silent = false) => {
+// ── WebSocket real-time updates ──
+useAcademyWS((data) => {
+  const type = data.type;
+
+  if (type === "permission_granted" || type === "permission_disabled") {
+    getLessonPermissions({ is_active: true }).then(res => {
+      setPermissions((res.results || []) as LessonPermission[]);
+    });
+    getLessonAccessRequests({ status: "pending" }).then(res => {
+      setLessonRequests(res.results || []);
+    });
+  }
+
+  if (type === "request_reviewed") {
+    getLessonAccessRequests({ status: "pending" }).then(res => {
+      setLessonRequests(res.results || []);
+    });
+    getLessonPermissions({ is_active: true }).then(res => {
+      setPermissions((res.results || []) as LessonPermission[]);
+    });
+    if (String(data.teacher_id) === String(dashboard?.teacher?.id)) {
+      const action = data.action as string;
+      const requestType = data.request_type as string;
+      const lessonDate = data.lesson_date as string;
+      setMessage(
+        action === "approve"
+          ? `Permission approved for ${requestType} on ${formatDate(lessonDate)}.`
+          : `Permission request rejected for ${formatDate(lessonDate)}.`
+      );
+      setTimeout(() => setMessage(""), 5000);
+    }
+  }
+
+  if (type === "attendance_marked") {
+    void loadDashboard(true);
+  }
+
+  if (type === "lesson_saved") {
+    getDailyLessonReports().then(res => setDailyReports(res.results || []));
+    getLessons().then(res => setLessons(res.results || []));
+  }
+
+  if (type === "lesson_request_created") {
+    getLessonAccessRequests({ status: "pending" }).then(res => {
+      setLessonRequests(res.results || []);
+    });
+  }
+});
+
+
+// ── Edit lesson state ──
+  const [editingGroup, setEditingGroup] = useState<LessonHistoryGroup | null>(null);
+  const [editSubjectEntries, setEditSubjectEntries] = useState<SubjectEntry[]>([]);
+  const [editNotes, setEditNotes] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [editMessage, setEditMessage] = useState("");
+
+  // ── Monthly plan state ──
+  
+  const [monthlyPlans, setMonthlyPlans] = useState<MonthlyLessonPlanPayload[]>([]);
+  const [monthlySummary, setMonthlySummary] = useState<MonthlyLessonSummaryResponse | null>(null);
+  const [monthlyLoading, setMonthlyLoading] = useState(false);
+  const [monthlySaving, setMonthlySaving] = useState(false);
+  const [monthlySummarySaving, setMonthlySummarySaving] = useState(false);
+  const [monthlyMessage, setMonthlyMessage] = useState("");
+  const [monthlyStudentId, setMonthlyStudentId] = useState("");
+  const [monthlySubject, setMonthlySubject] = useState("");
+  const [monthlyMonth, setMonthlyMonth] = useState(() => new Date().getMonth() + 1);
+  const [monthlyYear, setMonthlyYear] = useState(() => new Date().getFullYear());
+  const [monthlyPlanText, setMonthlyPlanText] = useState("");
+  const [monthlyStatus, setMonthlyStatus] = useState<MonthlyPlanStatus>("planned");
+
+  // ─── Data loading ──────────────────────────────────────────────────────────
+
+const loadDashboard = async (silent = false) => {
     try {
       if (!silent) setRefreshing(true);
-      const data = await getDjangoDashboard();
-      setDashboard(data);
+      const [dashRes, lessonsRes, dailyRes, permRes, reqRes] = await Promise.all([
+        getDjangoDashboard(),
+        getLessons(),
+        getDailyLessonReports(),
+        getLessonPermissions({ is_active: true }),
+        getLessonAccessRequests({ status: "pending" }),
+      ]);
+      setDashboard(dashRes);
+      setLessons(lessonsRes.results || []);
+      setDailyReports(dailyRes.results || []);
+      setPermissions((permRes.results || []) as LessonPermission[]);
+      setLessonRequests(reqRes.results || []);
       setMessage("");
     } catch (error: any) {
       setMessage(error?.message || "Could not load teacher dashboard.");
@@ -580,679 +954,668 @@ const [monthlyStatus, setMonthlyStatus] = useState<MonthlyPlanStatus>("planned")
 
   useEffect(() => {
     void loadDashboard();
-    const timer = window.setInterval(() => void loadDashboard(true), 12000);
-   const clockTimer = window.setInterval(() => setClockNow(new Date()), 1000);
-    return () => { window.clearInterval(timer); window.clearInterval(clockTimer); };
+    const dashboardTimer = window.setInterval(() => void loadDashboard(true), 12000);
+    const clockTimer = window.setInterval(() => setClockNow(new Date()), 1000);
+    return () => { window.clearInterval(dashboardTimer); window.clearInterval(clockTimer); };
   }, []);
 
+  // ─── Derived values ────────────────────────────────────────────────────────
+
   const teacherName = dashboard?.teacher?.name || dashboard?.user?.username || "Teacher";
-
-const clockAngles = getClockAngles(clockNow);
-
   const students = dashboard?.students || [];
   const schedules = (dashboard?.schedules || []) as ScheduleRow[];
-  const lessons = dashboard?.lessons || [];
+  const todayDate = today();
+  const todayWeekday = getTodayWeekday();
+  const currentTime = clockNow.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
+  const clockAngles = getClockAngles(clockNow);
 
-function normalizeAttendanceStatus(value: any) {
-  const status = String(value || "").trim().toLowerCase();
+  const selectedStudent = useMemo(() => students.find(s => String(s.id) === String(studentId)), [students, studentId]);
 
-  if (status === "present") return "present";
-  if (status === "absent") return "absent";
-  if (status === "leave") return "leave";
+  const availableSubjectsForStudent = useMemo(() => {
+    if (!studentId) return ALL_SUBJECTS;
+    return getStudentSubjectsFromList(students, studentId);
+  }, [students, studentId]);
 
-  return status;
-}
+  const usedSubjects = useMemo(() => subjectEntries.map(e => e.subject), [subjectEntries]);
 
-function attendanceKey(item: any) {
-  const type = String(item.entity_type || "").toLowerCase();
-  const entityId =
-    type === "teacher"
-      ? String(item.teacher_id || "")
-      : String(item.student_id || "");
+  // Check if we can add more subjects
+  const canAddMoreSubjects = usedSubjects.length < availableSubjectsForStudent.length;
 
-  return `${type}:${entityId}:${item.date || ""}`;
-}
+  // Check if lesson date is valid (today or past)
+const isDateValid = isDateAllowed(lessonDate);
 
-function attendanceTimeValue(item: any) {
-  const parsed = Date.parse(item.updated_at || item.created_at || item.date || "");
-  if (Number.isFinite(parsed)) return parsed;
+  const isDateBeforeEnrollment = useMemo(() => {
+    if (!selectedStudent?.enrollment_date || !lessonDate) return false;
+    return lessonDate < selectedStudent.enrollment_date;
+  }, [selectedStudent, lessonDate]);
 
-  const id = Number(item.id);
-  return Number.isFinite(id) ? id : 0;
-}
+  // Add permission check for the selected date
+  const addPermission = useMemo(() => {
+    return permissions.find(p => permissionMatches(p, studentId, lessonDate, "add")) || null;
+  }, [permissions, studentId, lessonDate]);
 
-const attendance = useMemo(() => {
-  const latestByStudentAndDate = new Map<string, any>();
+const matchingScheduleForSelectedDate = useMemo(() => {
+    const date = parseDateOnly2(lessonDate);
+    if (!date || !studentId) return null;
+    const selectedDay = date.toLocaleDateString("en-US", { weekday: "long" });
+    return schedules.find(row => String(row.student?.id || "") === String(studentId) && normalizeDay(row.weekday) === selectedDay) || null;
+  }, [schedules, studentId, lessonDate]);
 
-  for (const raw of dashboard?.attendance || []) {
-    const entityType = String(raw.entity_type || "").trim().toLowerCase();
+  // canAddNormalWindow: only true if the selected lesson date is the EXACT
+  // date of this week's class occurrence and within the 24hr window.
+  // Prevents old weekday dates from appearing as open windows.
+  const canAddNormalWindow = useMemo(() => {
+    if (!matchingScheduleForSelectedDate) return false;
+    // The selected date must exactly match this week's class date
+    const thisWeekClassDate = getClassLessonDate(matchingScheduleForSelectedDate);
+    if (lessonDate !== thisWeekClassDate) return false;
+    return canWriteLessonForClass(matchingScheduleForSelectedDate);
+  }, [matchingScheduleForSelectedDate, lessonDate]);
 
-    // Teacher portal should show student attendance only.
-    // This prevents teacher attendance rows from mixing into teacher view.
-    if (entityType !== "student") continue;
+  // Check if today's class is still in the future (not started yet)
+  const classIsUpcomingToday = useMemo(() => {
+    if (!matchingScheduleForSelectedDate) return false;
+    const classStart = getThisWeekClassStart(matchingScheduleForSelectedDate);
+    if (!classStart) return false;
+    return classStart.getTime() > Date.now();
+  }, [matchingScheduleForSelectedDate]);
 
-    const normalized = {
-      ...raw,
-      entity_type: "student",
-      status: normalizeAttendanceStatus(raw.status),
-    };
+  const canAddLesson = isDateValid && !classIsUpcomingToday && (canAddNormalWindow || Boolean(addPermission));
 
-    const key = attendanceKey(normalized);
-    const existing = latestByStudentAndDate.get(key);
+const getEditPermissionForLesson = (lessonStudentId: string, lessonDate: string, subject: string) => {
+    return permissions.find(p =>
+      permissionMatches(p, lessonStudentId, lessonDate, "edit", subject)
+    ) || null;
+  };
 
-    if (!existing || attendanceTimeValue(normalized) >= attendanceTimeValue(existing)) {
-      latestByStudentAndDate.set(key, normalized);
-    }
-  }
+  const getPendingEditRequest = (lessonStudentId: string, lessonDate: string, subject: string) => {
+    return lessonRequests.find(r =>
+      r.status === "pending" &&
+      r.request_type === "edit" &&
+      String(r.student_id) === String(lessonStudentId) &&
+      String(r.lesson_date || (r as any).date) === String(lessonDate) &&
+      String(r.subject || "") === String(subject || "")
+    ) || null;
+  };
 
-  return Array.from(latestByStudentAndDate.values()).sort((a: any, b: any) => {
-    const dateCompare = String(b.date || "").localeCompare(String(a.date || ""));
-    if (dateCompare !== 0) return dateCompare;
-
-    return attendanceTimeValue(b) - attendanceTimeValue(a);
-  });
-}, [dashboard?.attendance]);
-
-const todayDate = today();
-
-const todayAttendanceRecords = useMemo(() => {
-  return attendance.filter((item: any) => item.date === todayDate);
-}, [attendance, todayDate]);
-
-const attendanceRows = useMemo(() => {
-  let filtered = attendanceStudentFilter
-    ? attendance.filter((item: any) => String(item.student_id) === String(attendanceStudentFilter))
-    : attendance;
-
-  if (attendanceView === "daily") {
-    filtered = filtered.filter((item: any) => item.date === attendanceDateFilter);
-  }
-
-  if (attendanceView === "weekly") {
-    const { start, end } = getWeekRange(attendanceDateFilter);
-    filtered = filtered.filter((item: any) => item.date >= start && item.date <= end);
-  }
-
-  if (attendanceView === "monthly") {
-    const month = String(attendanceMonthFilter).padStart(2, "0");
-    const year = String(attendanceYearFilter);
-    filtered = filtered.filter((item: any) => {
-      return String(item.date || "").startsWith(`${year}-${month}`);
-    });
-  }
-
-  if (attendanceView === "yearly") {
-    const year = String(attendanceYearFilter);
-    filtered = filtered.filter((item: any) => {
-      return String(item.date || "").startsWith(`${year}-`);
-    });
-  }
-
-  const todayRows = filtered.filter((item: any) => item.date === todayDate);
-  const otherRows = filtered.filter((item: any) => item.date !== todayDate);
-
-  return attendanceView === "all" ? [...todayRows, ...otherRows] : filtered;
-}, [
-  attendance,
-  todayDate,
-  attendanceStudentFilter,
-  attendanceView,
-  attendanceDateFilter,
-  attendanceMonthFilter,
-  attendanceYearFilter,
-]);
-
-const selectedStudent = useMemo(() => students.find((s) => String(s.id) === String(studentId)), [students, studentId]);
-const lessonSubjects = ALL_SUBJECTS;
-
-  const visibleSchedules = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return schedules.filter((item) => {
-      if (!q) return true;
-      return [item.student?.name, item.student?.username, item.weekday, item.time_slot].filter(Boolean).join(" ").toLowerCase().includes(q);
-    });
-  }, [schedules, search]);
-
-  const scheduleGroups = useMemo(() => {
-    const grouped = new Map<string, ScheduleRow[]>();
-    for (const item of visibleSchedules) {
-      const key = `${normalizeDay(item.weekday)}__${String(item.time_slot).slice(0, 5)}`;
-      const rows = grouped.get(key) || [];
-      rows.push(item);
-      grouped.set(key, rows);
-    }
-    return Array.from(grouped.entries()).map(([key, rows]) => {
-      const [weekday, time] = key.split("__");
-      return { key, weekday, time, rows };
-    }).sort((a, b) => {
-      const dayOrder = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
-      const dc = dayOrder.indexOf(a.weekday) - dayOrder.indexOf(b.weekday);
-      if (dc !== 0) return dc;
-      return a.time.localeCompare(b.time);
-    });
-  }, [visibleSchedules]);
-
-const todayWeekday = getTodayWeekday();
-
-const todaySchedules = useMemo(() => {
-  return schedules
-    .filter((row) => normalizeDay(row.weekday) === todayWeekday)
-    .sort((a, b) => timeToMinutes(a.time_slot) - timeToMinutes(b.time_slot));
-}, [schedules, todayWeekday]);
-
-const liveNowSchedules = useMemo(() => {
-  const now = getMinutesNow();
-
-  return todaySchedules.filter((row) => {
-    const start = timeToMinutes(row.time_slot);
-    const end = start + 30;
-
-    return now >= start && now <= end;
-  });
-}, [todaySchedules, currentTime]);
-
-const upNextSchedules = useMemo(() => {
-  const now = getMinutesNow();
-
-  return todaySchedules
-    .filter((row) => {
-      const start = timeToMinutes(row.time_slot);
-      const diff = start - now;
-
-      // Show only classes starting within the next 60 minutes.
-      return diff > 0 && diff <= 60;
-    })
-    .slice(0, 6);
-}, [todaySchedules, currentTime]);
-
-const nextClass = upNextSchedules[0] || null;
-
-const filteredClassRows = useMemo(() => {
-  const q = classSearch.trim().toLowerCase();
-
-  return schedules
-    .filter((row) => {
-      if (!q) return true;
-
-      return [
-        getScheduleStudentName(row),
-        row.student?.username,
-        normalizeDay(row.weekday),
-        row.time_slot,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(q);
-    })
-    .sort((a, b) => {
-      const dayOrder = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-      const dayCompare =
-        dayOrder.indexOf(normalizeDay(a.weekday)) - dayOrder.indexOf(normalizeDay(b.weekday));
-
-      if (dayCompare !== 0) return dayCompare;
-
-      return timeToMinutes(a.time_slot) - timeToMinutes(b.time_slot);
-    });
-}, [schedules, classSearch]);
-
-const {
-  pageItems: paginatedClassRows,
-  totalPages: classTotalPages,
-  safePage: safeClassPage,
-} = useMemo(() => {
-  return paginateItems(filteredClassRows, classPage, PAGE_SIZE);
-}, [filteredClassRows, classPage]);
-
-const historyLessons = useMemo(() => {
-  if (!historyStudentFilter) return lessons;
-
-  return lessons.filter((lesson: any) => {
-    return String(
-  lesson.student_id ||
-  lesson.student ||
-  lesson.studentId ||
-  lesson.student?.id ||
-  ""
-) === String(historyStudentFilter);
-  });
-}, [lessons, historyStudentFilter]);
-
-const {
-  pageItems: paginatedHistoryLessons,
-  totalPages: historyTotalPages,
-  safePage: safeHistoryPage,
-} = useMemo(() => {
-  return paginateItems(historyLessons, historyPage, PAGE_SIZE);
-}, [historyLessons, historyPage]);
-
-const {
-  pageItems: paginatedAttendanceRows,
-  totalPages: attendanceTotalPages,
-  safePage: safeAttendancePage,
-} = useMemo(() => {
-  return paginateItems(attendanceRows, attendancePage, PAGE_SIZE);
-}, [attendanceRows, attendancePage]);
-
-
-function getLatestClassStart(row: ScheduleRow) {
-  const classDay = DAY_INDEX[normalizeDay(row.weekday)];
-  const [hour, minute] = String(row.time_slot || "00:00")
-    .slice(0, 5)
-    .split(":")
-    .map(Number);
-
-  if (!Number.isFinite(classDay) || !Number.isFinite(hour) || !Number.isFinite(minute)) {
-    return null;
-  }
-
-  const now = new Date();
-  const latest = new Date(now);
-  const daysBack = (now.getDay() - classDay + 7) % 7;
-
-  latest.setDate(now.getDate() - daysBack);
-  latest.setHours(hour, minute, 0, 0);
-
-  return latest;
-}
-
-
-
-
-useEffect(() => {
-  setClassPage(1);
-}, [classSearch]);
-
-useEffect(() => {
-  setHistoryPage(1);
-}, [historyStudentFilter]);
-
-useEffect(() => {
-  setAttendancePage(1);
-}, [
-  attendanceStudentFilter,
-  attendanceView,
-  attendanceDateFilter,
-  attendanceMonthFilter,
-  attendanceYearFilter,
-]);
-
-const filteredPresentCount = attendanceRows.filter((item: any) => item.status === "present").length;
-const filteredAbsentCount = attendanceRows.filter((item: any) => item.status === "absent").length;
-const filteredLeaveCount = attendanceRows.filter((item: any) => item.status === "leave").length;
-
-const todayPresentCount = todayAttendanceRecords.filter((item: any) => item.status === "present").length;
-const todayAbsentCount = todayAttendanceRecords.filter((item: any) => item.status === "absent").length;
-const existingMonthlyPlan = useMemo(() => {
-  return monthlyPlans.find((plan) => {
-    return (
-      String(plan.student_id) === String(monthlyStudentId) &&
-      String(plan.subject) === String(monthlySubject) &&
-      Number(plan.month) === Number(monthlyMonth) &&
-      Number(plan.year) === Number(monthlyYear)
+const lessonAlreadyExistsForDate = useMemo(() => {
+    if (!studentId || !lessonDate) return false;
+    return dailyReports.some(r =>
+      String(r.student_id) === String(studentId) &&
+      String(r.date) === String(lessonDate)
     );
-  });
-}, [monthlyPlans, monthlyStudentId, monthlySubject, monthlyMonth, monthlyYear]);
+  }, [dailyReports, studentId, lessonDate]);
 
-const selectedMonthlyStudent = useMemo(() => {
-  return students.find((student) => String(student.id) === String(monthlyStudentId));
-}, [students, monthlyStudentId]);
+  const pendingAddRequest = useMemo(() => {
+    return lessonRequests.find(r =>
+      r.status === "pending" && r.request_type === "add" &&
+      String(r.student_id) === String(studentId) &&
+      String(r.lesson_date || (r as any).date) === String(lessonDate)
+    ) || null;
+  }, [lessonRequests, studentId, lessonDate]);
 
-const savedMonthlySummary = useMemo(() => {
-  if (!monthlySummary || !monthlyStudentId) return null;
+// Initialize subject entries when student changes
+  useEffect(() => {
+    if (!studentId) { setSubjectEntries([]); return; }
+    setSubjectEntries([newSubjectEntry(ALL_SUBJECTS[0])]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studentId]);
 
-  const fromList = monthlySummary.summaries?.find((item: any) => {
-    return String(item.student_id) === String(monthlyStudentId);
-  });
+  // Reset entries when student changes
+  const handleStudentChange = (newStudentId: string) => {
+    setStudentId(newStudentId);
+    setSubjectEntries([]);
+    setMessage("");
+    setDateError("");
+    if (newStudentId) {
+      const subjects = getStudentSubjectsFromList(students, newStudentId);
+      setSubjectEntries([newSubjectEntry(subjects[0] || ALL_SUBJECTS[0])]);
+    }
+  };
 
-  if (fromList) return fromList;
-
-  const fromStudentSummary = monthlySummary.student_summaries?.find((item: any) => {
-    return String(item.student_id) === String(monthlyStudentId);
-  });
-
-  return fromStudentSummary?.saved_summary || null;
-}, [monthlySummary, monthlyStudentId]);
-
-const selectedStudentAutoSummary = useMemo(() => {
-  if (!monthlySummary || !monthlyStudentId) return null;
-
-  return monthlySummary.student_summaries?.find((item: any) => {
-    return String(item.student_id) === String(monthlyStudentId);
-  }) || null;
-}, [monthlySummary, monthlyStudentId]);
-
-const loadMonthlyData = async () => {
-  try {
-    setMonthlyLoading(true);
-    setMonthlyMessage("");
-
-    const params = {
-      month: monthlyMonth,
-      year: monthlyYear,
-      student_id: monthlyStudentId ? Number(monthlyStudentId) : undefined,
-    };
-
-    const [plansRes, summaryRes] = await Promise.all([
-      getMonthlyLessonPlans(params),
-      getMonthlyLessonSummary(params),
-    ]);
-
-    setMonthlyPlans(plansRes.results || []);
-    setMonthlySummary(summaryRes);
-  } catch (error: any) {
-    setMonthlyMessage(error?.message || "Could not load monthly lesson data.");
-  } finally {
-    setMonthlyLoading(false);
-  }
-};
-
-useEffect(() => {
-  if (activeTab !== "monthly") return;
-  void loadMonthlyData();
-}, [activeTab, monthlyMonth, monthlyYear, monthlyStudentId]);
-
-useEffect(() => {
-  if (existingMonthlyPlan) {
-    setMonthlyPlanText(existingMonthlyPlan.plan_text || "");
-  
-    setMonthlyStatus(existingMonthlyPlan.status || "planned");
-  } else {
-    setMonthlyPlanText("");
-  
-    setMonthlyStatus("planned");
-  }
-}, [existingMonthlyPlan]);
-
-const handleMonthlyStudentChange = (nextStudentId: string) => {
-  setMonthlyStudentId(nextStudentId);
-  setMonthlyMessage("");
-
-  if (nextStudentId) {
-    setMonthlySubject(ALL_SUBJECTS[0]);
-  } else {
-    setMonthlySubject("");
-  }
-};
-
-const handleSaveMonthlyPlan = async (event: React.FormEvent) => {
-  event.preventDefault();
-  setMonthlyMessage("");
-
-  if (!monthlyStudentId) {
-    setMonthlyMessage("Please select a student.");
-    return;
-  }
-
-  if (!monthlySubject) {
-    setMonthlyMessage("Please select a subject.");
-    return;
-  }
-
-  if (!monthlyPlanText.trim()) {
-    setMonthlyMessage("Please write the monthly lesson plan.");
-    return;
-  }
-
-  try {
-    setMonthlySaving(true);
-
-    if (existingMonthlyPlan) {
-      await updateMonthlyLessonPlan(existingMonthlyPlan.id, {
-        plan_text: monthlyPlanText,
-        notes: "",
-        status: monthlyStatus,
-      });
-
-      setMonthlyMessage("Monthly lesson plan updated successfully.");
+  // Validate date
+  const handleDateChange = (newDate: string) => {
+    setLessonDate(newDate);
+    if (!isDateAllowed(newDate)) {
+      setDateError("Future dates are not allowed. Please select today or a past date.");
     } else {
-      await createMonthlyLessonPlan({
-        student_id: Number(monthlyStudentId),
-        month: monthlyMonth,
-        year: monthlyYear,
-        subject: monthlySubject,
-        plan_text: monthlyPlanText,
-        notes: "",
-        status: monthlyStatus,
-      });
+      setDateError("");
+    }
+  };
 
-      setMonthlyMessage("Monthly lesson plan saved successfully.");
+  const handleAddSubject = () => {
+    const unusedSubjects = availableSubjectsForStudent.filter(s => !usedSubjects.includes(s));
+    if (unusedSubjects.length === 0) return;
+    setSubjectEntries(prev => [...prev, newSubjectEntry(unusedSubjects[0])]);
+  };
+
+  const handleUpdateEntry = (index: number, updated: SubjectEntry) => {
+    setSubjectEntries(prev => prev.map((e, i) => i === index ? updated : e));
+  };
+
+  const handleRemoveEntry = (index: number) => {
+    setSubjectEntries(prev => prev.filter((_, i) => i !== index));
+  };
+
+const handleSaveLesson = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setMessage("");
+
+    if (!studentId) { setMessage("Please select a student."); return; }
+
+    if (!isDateValid) {
+      setMessage("Future dates are not allowed. Please select today or a past date.");
+      return;
     }
 
-    await loadMonthlyData();
-  } catch (error: any) {
-    setMonthlyMessage(error?.message || "Could not save monthly lesson plan.");
-  } finally {
-    setMonthlySaving(false);
-  }
-};
+    if (subjectEntries.length === 0) { setMessage("Please add at least one subject."); return; }
 
-const handleGenerateMonthlySummary = async () => {
-  setMonthlyMessage("");
+    if (!canAddLesson) {
+      setMessage("Lesson add window expired or not started. Please ask the coordinator to enable add permission.");
+      return;
+    }
 
-  if (!monthlyStudentId) {
-    setMonthlyMessage("Please select a student first.");
-    return;
-  }
-
-  try {
-    setMonthlySummarySaving(true);
-
-    await generateMonthlyLessonSummary({
-      student_id: Number(monthlyStudentId),
-      teacher_id: dashboard?.teacher?.id || null,
-      month: monthlyMonth,
-      year: monthlyYear,
-    });
-
-    setMonthlyMessage("Monthly lesson summary generated successfully.");
-    await loadMonthlyData();
-  } catch (error: any) {
-    setMonthlyMessage(error?.message || "Could not generate monthly lesson summary.");
-  } finally {
-    setMonthlySummarySaving(false);
-  }
-};
-
-  const juzSurahs = useMemo(() => {
-    const [start, end] = JUZ_SURAH_RANGES[juz] || [1, 114];
-    return SURAHS.filter((s) => s.number >= start && s.number <= end);
-  }, [juz]);
-
-  useEffect(() => {
-    if (quranMode === "juz") {
-      const first = juzSurahs[0];
-      if (first && !juzSurahs.some((s) => s.number === surahNumber)) {
-        setSurahNumber(first.number); setFromAyah(1); setToAyah(1);
+    // Validate all entries
+    for (let i = 0; i < subjectEntries.length; i++) {
+      const entry = subjectEntries[i];
+      const topic = getTopicSummary(entry);
+      if (!topic) {
+        setMessage(`Please select the topic for "${entry.subject}" (entry ${i + 1}).`);
+        return;
       }
     }
-  }, [quranMode, juzSurahs, surahNumber]);
 
-  const selectedSurah = useMemo(() => SURAHS.find((s) => s.number === surahNumber) || SURAHS[0], [surahNumber]);
-  const ayahOptions = useMemo(() => Array.from({ length: selectedSurah.ayahs }, (_, i) => i + 1), [selectedSurah]);
-  const topicOptions = isTajweedSubject(subject) ? TAJWEED_TOPICS : isDuaSubject(subject) ? DUA_TOPICS : [];
+    // Capture current values before any state changes
+    const savedStudentId = studentId;
 
-  const topicSummary = useMemo(() => {
-    if (!subject) return "";
-    if (isQaidaSubject(subject)) return qaidaLesson;
-    if (isQuranSubject(subject)) {
-      if (quranMode === "juz") return `Juz ${juz} - ${selectedSurah.number}. ${selectedSurah.name} Ayah ${fromAyah} to ${toAyah}`;
-      return `${selectedSurah.number}. ${selectedSurah.name} Ayah ${fromAyah} to ${toAyah}`;
-    }
-    if (isTajweedSubject(subject) || isDuaSubject(subject)) return selectedTopics.join(", ");
-    return customTopic.trim();
-  }, [subject, qaidaLesson, quranMode, juz, selectedSurah, fromAyah, toAyah, selectedTopics, customTopic]);
-
-  const lessonData = useMemo(() => {
-    if (isQaidaSubject(subject)) return { type: "qaida", lesson: qaidaLesson };
-    if (isQuranSubject(subject)) return { type: "quran", mode: quranMode, juz: quranMode === "juz" ? juz : null, surah_number: selectedSurah.number, surah_name: selectedSurah.name, from_ayah: fromAyah, to_ayah: toAyah };
-    if (isTajweedSubject(subject) || isDuaSubject(subject)) return { type: "multi_topic", selected: selectedTopics };
-    return { type: "custom", topic: customTopic };
-  }, [subject, qaidaLesson, quranMode, juz, selectedSurah, fromAyah, toAyah, selectedTopics, customTopic]);
-
-  const resetLessonDetails = () => {
-    setLessonDate(today()); setQaidaLesson(QAIDA_LESSONS[0]); setQuranMode("surah"); setJuz(1);
-    setSurahNumber(1); setFromAyah(1); setToAyah(1); setSelectedTopics([]); setCustomTopic("");
-    setProgressStatus("");
-  };
-
-const handleStudentChange = (nextStudentId: string) => {
-  setStudentId(nextStudentId);
-  setMessage("");
-  resetLessonDetails();
-
-  if (nextStudentId) {
-    setSubject(ALL_SUBJECTS[0]);
-  } else {
-    setSubject("");
-  }
-};
-
-  const handleSubjectChange = (nextSubject: string) => {
-    setSubject(nextSubject); setMessage(""); setQaidaLesson(QAIDA_LESSONS[0]);
-    setQuranMode("surah"); setJuz(1); setSurahNumber(1); setFromAyah(1); setToAyah(1);
-   setSelectedTopics([]);
-setCustomTopic("");
-setProgressStatus("");
-  };
-
-  const toggleTopic = (topic: string) => {
-    setSelectedTopics((prev) => prev.includes(topic) ? prev.filter((t) => t !== topic) : [...prev, topic]);
-  };
-
-  const handleSaveLesson = async (event: React.FormEvent) => {
-    event.preventDefault(); setMessage("");
-    if (!studentId) { setMessage("Please select a student."); return; }
-   if (!subject) {
-  setMessage("Please select a subject.");
-  return;
-}
-    if (!topicSummary) { setMessage("Please select or write the lesson topic."); return; }
     try {
       setSaving(true);
-     await createLesson({
-  student_id: Number(studentId),
-  date: lessonDate,
-  subject,
-  topic_summary: topicSummary,
-  progress_status: progressStatus,
-  remarks: "",
-  notes: "",
-  lesson_data: lessonData,
-});
-      setMessage("Lesson saved successfully.");
+
+      const subject_entries = subjectEntries.map((entry, index) => ({
+        subject: entry.subject,
+        topic_summary: getTopicSummary(entry),
+        progress_status: entry.progressStatus || undefined,
+        remarks: entry.remarks || undefined,
+        lesson_data: {
+          type: entry.subject === "Qaida Nooraniyya" ? "qaida" :
+                (entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") ? "quran" :
+                (entry.subject === "Tajweed" || entry.subject === "Duas & Sunnah") ? "multi_topic" : "custom",
+          ...(entry.subject === "Qaida Nooraniyya" && { lesson: entry.qaidaLesson, from_line: entry.qaidaFromLine, to_line: entry.qaidaToLine }),
+          ...((entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") && {
+            mode: entry.quranMode, juz: entry.quranMode === "juz" ? entry.juz : null,
+            surah_number: entry.surahNumber, from_ayah: entry.fromAyah, to_ayah: entry.toAyah,
+          }),
+          ...((entry.subject === "Tajweed" || entry.subject === "Duas & Sunnah") && { selected: entry.selectedTopics }),
+          ...((entry.subject === "Arabic Basics" || entry.subject === "Other") && { topic: entry.customTopic }),
+        },
+        sort_order: index,
+      }));
+
+      await createDailyLessonReport({
+        student_id: Number(studentId),
+        date: lessonDate,
+        notes,
+        subject_entries,
+      });
+
+      // Reset form completely
+      setStudentId("");
+      setLessonDate(today());
+      setNotes("");
+      setSubjectEntries([]);
+      setDateError("");
+      setMessage("");
+
+// Refresh lessons and daily reports from server
+      const [lessonsRes, dailyRes] = await Promise.all([
+        getLessons(),
+        getDailyLessonReports(),
+      ]);
+      setLessons(lessonsRes.results || []);
+      setDailyReports(dailyRes.results || []);
       await loadDashboard(true);
+
+      // Go to history filtered by the student we just saved
+      setHistoryStudentFilter(savedStudentId);
+      setHistoryPage(1);
       setActiveTab("history");
+
     } catch (error: any) {
-      setMessage(error?.message || "Could not save lesson.");
+      setMessage(error?.message || "Could not save lesson report.");
     } finally {
       setSaving(false);
     }
   };
 
-const openLessonForSchedule = (row: ScheduleRow) => {
-  const nextStudentId = String(row.student?.id || "");
-
-  if (!nextStudentId) return;
-
-  if (!canWriteLessonForClass(row)) {
-    setMessage("Lesson can only be written after the class starts and within 24 hours.");
-    return;
-  }
-
-  handleStudentChange(nextStudentId);
-  setLessonDate(today());
-  setActiveTab("lesson");
-};
-
-const openLessonHistoryForSchedule = (row: ScheduleRow) => {
-  const nextStudentId = String(row.student?.id || "");
-
-  if (!nextStudentId) return;
-
-  setHistoryStudentFilter(nextStudentId);
-  setActiveTab("history");
-};
-
-const openAttendanceHistoryForSchedule = (row: ScheduleRow) => {
-  const nextStudentId = String(row.student?.id || "");
-
-  if (!nextStudentId) return;
-
-  setAttendanceStudentFilter(nextStudentId);
-  setActiveTab("attendance");
-};
-
-const openAttendanceForSchedule = (row: ScheduleRow) => {
-  const nextStudentId = String(row.student?.id || "");
-
-  if (!nextStudentId) return;
-
-  setAttendanceStudentFilter(nextStudentId);
-  setActiveTab("attendance");
-};
+  const handleRequestLessonPermission = async () => {
+    setMessage("");
+    if (!studentId || !lessonDate) { setMessage("Please select the student and lesson date first."); return; }
+    if (!isDateValid) { setMessage("Cannot request permission for future dates."); return; }
+    try {
+      setRequestingPermission(true);
+      await createLessonAccessRequest({
+        student_id: Number(studentId),
+        lesson_date: lessonDate,
+        subject: "",
+        request_type: "add",
+        reason: "Teacher requested permission to add a missed lesson.",
+      });
+      const reqRes = await getLessonAccessRequests({ status: "pending" });
+      setLessonRequests(reqRes.results || []);
+      setMessage("Add permission request sent to coordinator.");
+    } catch (error: any) {
+      setMessage(error?.message || "Could not send permission request.");
+    } finally {
+      setRequestingPermission(false);
+    }
+  };
 
 
+  const handleRequestEditPermission = async (lessonStudentId: string, lessonDate: string, subject: string) => {
+    setEditMessage("");
+    try {
+      await createLessonAccessRequest({
+        student_id: Number(lessonStudentId),
+        lesson_date: lessonDate,
+        subject: subject,
+        request_type: "edit",
+        reason: "Teacher requested permission to edit a saved lesson.",
+      });
+      const reqRes = await getLessonAccessRequests({ status: "pending" });
+      setLessonRequests(reqRes.results || []);
+      setEditMessage("Edit permission request sent to coordinator.");
+    } catch (error: any) {
+      setEditMessage(error?.message || "Could not send edit permission request.");
+    }
+  };
+
+  const handleOpenEdit = (group: LessonHistoryGroup) => {
+    setEditingGroup(group);
+    setEditMessage("");
+    // Convert existing lessons back to SubjectEntry format
+    const entries: SubjectEntry[] = group.lessons.map(lesson => {
+      const ld = lesson.lesson_data || {};
+      const type = ld.type || "custom";
+      let entry = newSubjectEntry(lesson.subject || ALL_SUBJECTS[0]);
+      entry.subject = lesson.subject || ALL_SUBJECTS[0];
+      if (type === "qaida") {
+        entry.qaidaLesson = ld.lesson || QAIDA_LESSONS[0];
+        entry.qaidaFromLine = ld.from_line || 1;
+        entry.qaidaToLine = ld.to_line || 5;
+      } else if (type === "quran") {
+        entry.quranMode = ld.mode || "surah";
+        entry.juz = ld.juz || 1;
+        entry.surahNumber = ld.surah_number || 1;
+        entry.fromAyah = ld.from_ayah || 1;
+        entry.toAyah = ld.to_ayah || 1;
+      } else if (type === "multi_topic") {
+        entry.selectedTopics = ld.selected || [];
+      } else {
+        entry.customTopic = ld.topic || lesson.topic_summary || "";
+      }
+      entry.progressStatus = lesson.progress_status || "";
+      entry.remarks = lesson.remarks || "";
+      entry.expanded = false;
+      return entry;
+    });
+    setEditSubjectEntries(entries);
+    setEditNotes(group.lessons[0]?.notes || "");
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingGroup) return;
+    setEditMessage("");
+
+    // Check all entries have topics
+    for (let i = 0; i < editSubjectEntries.length; i++) {
+      const entry = editSubjectEntries[i];
+      const topic = getTopicSummary(entry);
+      if (!topic) {
+        setEditMessage(`Please select the topic for "${entry.subject}".`);
+        return;
+      }
+    }
+
+    try {
+      setEditSaving(true);
+      const subject_entries = editSubjectEntries.map((entry, index) => ({
+        subject: entry.subject,
+        topic_summary: getTopicSummary(entry),
+        progress_status: entry.progressStatus || undefined,
+        remarks: entry.remarks || undefined,
+        lesson_data: {
+          type: entry.subject === "Qaida Nooraniyya" ? "qaida" :
+                (entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") ? "quran" :
+                (entry.subject === "Tajweed" || entry.subject === "Duas & Sunnah") ? "multi_topic" : "custom",
+          ...(entry.subject === "Qaida Nooraniyya" && { lesson: entry.qaidaLesson, from_line: entry.qaidaFromLine, to_line: entry.qaidaToLine }),
+          ...((entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") && {
+            mode: entry.quranMode, juz: entry.quranMode === "juz" ? entry.juz : null,
+            surah_number: entry.surahNumber, from_ayah: entry.fromAyah, to_ayah: entry.toAyah,
+          }),
+          ...((entry.subject === "Tajweed" || entry.subject === "Duas & Sunnah") && { selected: entry.selectedTopics }),
+          ...((entry.subject === "Arabic Basics" || entry.subject === "Other") && { topic: entry.customTopic }),
+        },
+        sort_order: index,
+      }));
+
+      await createDailyLessonReport({
+        student_id: Number(editingGroup.studentId),
+        date: editingGroup.date,
+        notes: editNotes,
+        subject_entries,
+      });
+
+      const [lessonsRes, dailyRes] = await Promise.all([
+        getLessons(),
+        getDailyLessonReports(),
+      ]);
+      setLessons(lessonsRes.results || []);
+      setDailyReports(dailyRes.results || []);
+      await loadDashboard(true);
+
+      setEditingGroup(null);
+      setEditSubjectEntries([]);
+      setEditMessage("");
+      setMessage("Lesson updated successfully.");
+    } catch (error: any) {
+      setEditMessage(error?.message || "Could not update lesson.");
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  // ─── Derived attendance ────────────────────────────────────────────────────
+
+  const attendance = useMemo(() => {
+    const latest = new Map<string, any>();
+    for (const raw of dashboard?.attendance || []) {
+      const type = String(raw.entity_type || "").trim().toLowerCase();
+      if (type !== "student") continue;
+      const normalized = { ...raw, entity_type: "student", status: normalizeAttendanceStatus(raw.status) };
+      const key = attendanceKey(normalized);
+      const existing = latest.get(key);
+      if (!existing || attendanceTimeValue(normalized) >= attendanceTimeValue(existing)) latest.set(key, normalized);
+    }
+    return Array.from(latest.values()).sort((a, b) => {
+      const dc = String(b.date || "").localeCompare(String(a.date || ""));
+      return dc !== 0 ? dc : attendanceTimeValue(b) - attendanceTimeValue(a);
+    });
+  }, [dashboard?.attendance]);
+
+  const todaySchedules = useMemo(() => {
+    return schedules.filter(row => normalizeDay(row.weekday) === todayWeekday)
+      .sort((a, b) => timeToMinutes(a.time_slot) - timeToMinutes(b.time_slot));
+  }, [schedules, todayWeekday]);
+
+  const liveNowSchedules = useMemo(() => {
+    const now = getMinutesNow();
+    return todaySchedules.filter(row => {
+      const start = timeToMinutes(row.time_slot);
+      return now >= start && now <= start + CLASS_DURATION_MINUTES;
+    });
+  }, [todaySchedules, currentTime]);
+
+  const upNextSchedules = useMemo(() => {
+    const now = getMinutesNow();
+    return todaySchedules.filter(row => {
+      const diff = timeToMinutes(row.time_slot) - now;
+      return diff > 0 && diff <= 60;
+    }).slice(0, 6);
+  }, [todaySchedules, currentTime]);
+
+  const nextClass = upNextSchedules[0] || null;
+
+  const filteredClassRows = useMemo(() => {
+    const query = classSearch.trim().toLowerCase();
+    return schedules.filter(row => {
+      if (!query) return true;
+      return [getScheduleStudentName(row), row.student?.username, normalizeDay(row.weekday), row.time_slot]
+        .filter(Boolean).join(" ").toLowerCase().includes(query);
+    }).sort((a, b) => {
+      const dayOrder = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+      const dc = dayOrder.indexOf(normalizeDay(a.weekday)) - dayOrder.indexOf(normalizeDay(b.weekday));
+      return dc !== 0 ? dc : timeToMinutes(a.time_slot) - timeToMinutes(b.time_slot);
+    });
+  }, [schedules, classSearch]);
+
+  const { pageItems: paginatedClassRows, totalPages: classTotalPages, safePage: safeClassPage } = useMemo(
+    () => paginateItems(filteredClassRows, classPage, PAGE_SIZE), [filteredClassRows, classPage]
+  );
+
+  const attendanceRows = useMemo(() => {
+    let filtered = attendanceStudentFilter
+      ? attendance.filter(item => String(item.student_id) === String(attendanceStudentFilter))
+      : attendance;
+    if (attendanceView === "daily") filtered = filtered.filter(item => item.date === attendanceDateFilter);
+    if (attendanceView === "weekly") { const { start, end } = getWeekRange(attendanceDateFilter); filtered = filtered.filter(item => item.date >= start && item.date <= end); }
+    if (attendanceView === "monthly") { const month = String(attendanceMonthFilter).padStart(2, "0"); filtered = filtered.filter(item => String(item.date || "").startsWith(`${attendanceYearFilter}-${month}`)); }
+    if (attendanceView === "yearly") filtered = filtered.filter(item => String(item.date || "").startsWith(`${attendanceYearFilter}-`));
+    const todayRows = filtered.filter(item => item.date === todayDate);
+    const otherRows = filtered.filter(item => item.date !== todayDate);
+    return attendanceView === "all" ? [...todayRows, ...otherRows] : filtered;
+  }, [attendance, todayDate, attendanceStudentFilter, attendanceView, attendanceDateFilter, attendanceMonthFilter, attendanceYearFilter]);
+
+  const { pageItems: paginatedAttendanceRows, totalPages: attendanceTotalPages, safePage: safeAttendancePage } = useMemo(
+    () => paginateItems(attendanceRows, attendancePage, PAGE_SIZE), [attendanceRows, attendancePage]
+  );
+
+const historyGroups = useMemo(() => {
+    // Build history from daily reports (subject_entries) not raw lessons
+    const groups: LessonHistoryGroup[] = [];
+    for (const report of dailyReports) {
+      const studentId = String(report.student_id || "");
+      const date = String(report.date || "");
+      const updatedAt = String(report.updated_at || report.created_at || "");
+      // Convert subject_entries into LessonPayload-like objects for display
+      const fakeLessons: LessonPayload[] = (report.subject_entries || []).map((entry: any) => ({
+        id: entry.id,
+        student_id: report.student_id,
+        student_name: report.student_name,
+        teacher_id: report.teacher_id,
+        teacher_name: report.teacher_name,
+        date: report.date,
+        subject: entry.subject,
+        topic_summary: entry.topic_summary,
+        progress_status: entry.progress_status,
+        remarks: entry.remarks,
+        lesson_data: entry.lesson_data,
+        title: entry.topic_summary,
+        notes: report.notes,
+        created_by: report.created_by,
+        created_by_id: report.created_by_id,
+        created_by_username: report.created_by_username,
+        created_by_name: report.created_by_name,
+        created_by_role: report.created_by_role,
+        created_at: report.created_at,
+        updated_at: report.updated_at,
+      }));
+      groups.push({
+        key: `${studentId}__${date}`,
+        studentId,
+        studentName: report.student_name || "Student",
+        date,
+        updatedAt,
+        lessons: fakeLessons.sort((a, b) => String(a.subject || "").localeCompare(String(b.subject || ""))),
+      });
+    }
+    const sorted = groups.sort((a, b) => {
+      const dc = b.date.localeCompare(a.date);
+      return dc !== 0 ? dc : b.updatedAt.localeCompare(a.updatedAt);
+    });
+    if (!historyStudentFilter) return sorted;
+    return sorted.filter(group => String(group.studentId) === String(historyStudentFilter));
+  }, [dailyReports, historyStudentFilter]);
+
+  const { pageItems: paginatedHistoryGroups, totalPages: historyTotalPages, safePage: safeHistoryPage } = useMemo(
+    () => paginateItems(historyGroups, historyPage, PAGE_SIZE), [historyGroups, historyPage]
+  );
+
+  useEffect(() => { setClassPage(1); }, [classSearch]);
+  useEffect(() => { setHistoryPage(1); }, [historyStudentFilter]);
+  useEffect(() => { setAttendancePage(1); }, [attendanceStudentFilter, attendanceView, attendanceDateFilter, attendanceMonthFilter, attendanceYearFilter]);
+
+  // ─── Monthly data ──────────────────────────────────────────────────────────
+
+  const existingMonthlyPlan = useMemo(() => {
+    return monthlyPlans.find(plan =>
+      String(plan.student_id) === String(monthlyStudentId) &&
+      String(plan.subject) === String(monthlySubject) &&
+      Number(plan.month) === Number(monthlyMonth) &&
+      Number(plan.year) === Number(monthlyYear)
+    );
+  }, [monthlyPlans, monthlyStudentId, monthlySubject, monthlyMonth, monthlyYear]);
+
+  const selectedMonthlyStudent = useMemo(() => students.find(s => String(s.id) === String(monthlyStudentId)), [students, monthlyStudentId]);
+
+  const savedMonthlySummary = useMemo(() => {
+    if (!monthlySummary || !monthlyStudentId) return null;
+    const fromList = monthlySummary.summaries?.find((item: any) => String(item.student_id) === String(monthlyStudentId));
+    if (fromList) return fromList;
+    return monthlySummary.student_summaries?.find((item: any) => String(item.student_id) === String(monthlyStudentId))?.saved_summary || null;
+  }, [monthlySummary, monthlyStudentId]);
+
+  const selectedStudentAutoSummary = useMemo(() => {
+    if (!monthlySummary || !monthlyStudentId) return null;
+    return monthlySummary.student_summaries?.find((item: any) => String(item.student_id) === String(monthlyStudentId)) || null;
+  }, [monthlySummary, monthlyStudentId]);
+
+  const loadMonthlyData = async () => {
+    try {
+      setMonthlyLoading(true);
+      setMonthlyMessage("");
+      const params = { month: monthlyMonth, year: monthlyYear, student_id: monthlyStudentId ? Number(monthlyStudentId) : undefined };
+      const [plansRes, summaryRes] = await Promise.all([getMonthlyLessonPlans(params), getMonthlyLessonSummary(params)]);
+      setMonthlyPlans(plansRes.results || []);
+      setMonthlySummary(summaryRes);
+    } catch (error: any) {
+      setMonthlyMessage(error?.message || "Could not load monthly lesson data.");
+    } finally { setMonthlyLoading(false); }
+  };
+
+  useEffect(() => { if (activeTab !== "monthly") return; void loadMonthlyData(); }, [activeTab, monthlyMonth, monthlyYear, monthlyStudentId]);
+
+  useEffect(() => {
+    if (existingMonthlyPlan) { setMonthlyPlanText(existingMonthlyPlan.plan_text || ""); setMonthlyStatus(existingMonthlyPlan.status || "planned"); }
+    else { setMonthlyPlanText(""); setMonthlyStatus("planned"); }
+  }, [existingMonthlyPlan]);
+
+  const openAddForSchedule = (row: ScheduleRow) => {
+    const nextStudentId = String(row.student?.id || "");
+    const nextLessonDate = getClassLessonDate(row);
+    handleStudentChange(nextStudentId);
+    setLessonDate(nextLessonDate);
+    setDateError("");
+    setMessage("");
+    setActiveTab("lesson");
+  };
+
+  const openAttendanceForSchedule = (row: ScheduleRow) => {
+    const nextStudentId = String(row.student?.id || "");
+    if (!nextStudentId) return;
+    setAttendanceStudentFilter(nextStudentId);
+    setActiveTab("attendance");
+  };
+
+  const openLessonHistoryForSchedule = (row: ScheduleRow) => {
+    const nextStudentId = String(row.student?.id || "");
+    if (!nextStudentId) return;
+    setHistoryStudentFilter(nextStudentId);
+    setActiveTab("history");
+  };
+
+const handleMonthlyStudentChange = (nextStudentId: string) => {
+    setMonthlyStudentId(nextStudentId);
+    setMonthlyMessage("");
+    setMonthlySubject("");
+  };
+
+  const handleSaveMonthlyPlan = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setMonthlyMessage("");
+    if (!monthlyStudentId) { setMonthlyMessage("Please select a student."); return; }
+    if (!monthlyPlanText.trim()) { setMonthlyMessage("Please write the monthly lesson plan."); return; }
+    try {
+      setMonthlySaving(true);
+      if (existingMonthlyPlan) {
+        await updateMonthlyLessonPlan(existingMonthlyPlan.id, { plan_text: monthlyPlanText, notes: "", status: monthlyStatus });
+        setMonthlyMessage("Monthly lesson plan updated successfully.");
+      } else {
+        const { createMonthlyLessonPlan: createPlan } = await import("../services/djangoApiService");
+        await createPlan({ student_id: Number(monthlyStudentId), month: monthlyMonth, year: monthlyYear, subject: monthlySubject, plan_text: monthlyPlanText, notes: "", status: monthlyStatus });
+        setMonthlyMessage("Monthly lesson plan saved successfully.");
+      }
+      await loadMonthlyData();
+    } catch (error: any) { setMonthlyMessage(error?.message || "Could not save monthly lesson plan."); }
+    finally { setMonthlySaving(false); }
+  };
+
+  const handleGenerateMonthlySummary = async () => {
+    setMonthlyMessage("");
+    if (!monthlyStudentId) { setMonthlyMessage("Please select a student first."); return; }
+    try {
+      setMonthlySummarySaving(true);
+      await generateMonthlyLessonSummary({ student_id: Number(monthlyStudentId), teacher_id: dashboard?.teacher?.id || null, month: monthlyMonth, year: monthlyYear });
+      setMonthlyMessage("Monthly lesson summary generated successfully.");
+      await loadMonthlyData();
+    } catch (error: any) { setMonthlyMessage(error?.message || "Could not generate monthly lesson summary."); }
+    finally { setMonthlySummarySaving(false); }
+  };
 
   const handleLogout = () => { logoutFromDjango(); onLogout(); };
 
   const progressColor = (status?: string) => {
-    if (status === "excellent") return { bg: "bg-emerald-500", light: "bg-emerald-50 text-emerald-700 border-emerald-200", dot: "bg-emerald-500" };
-    if (status === "good") return { bg: "bg-blue-500", light: "bg-blue-50 text-blue-700 border-blue-200", dot: "bg-blue-500" };
-    if (status === "satisfactory") return { bg: "bg-amber-500", light: "bg-amber-50 text-amber-700 border-amber-200", dot: "bg-amber-500" };
-    if (status === "needs_improvement") return { bg: "bg-rose-500", light: "bg-rose-50 text-rose-700 border-rose-200", dot: "bg-rose-500" };
-    if (status === "present") return { bg: "bg-emerald-500", light: "bg-emerald-50 text-emerald-700 border-emerald-200", dot: "bg-emerald-500" };
-    if (status === "absent") return { bg: "bg-rose-500", light: "bg-rose-50 text-rose-700 border-rose-200", dot: "bg-rose-500" };
-    if (status === "leave") return { bg: "bg-amber-500", light: "bg-amber-50 text-amber-700 border-amber-200", dot: "bg-amber-500" };
-    return { bg: "bg-slate-400", light: "bg-slate-50 text-slate-500 border-slate-200", dot: "bg-slate-400" };
+    if (status === "excellent") return { light: "bg-emerald-50 text-emerald-700 border-emerald-200", dot: "bg-emerald-500" };
+    if (status === "good") return { light: "bg-blue-50 text-blue-700 border-blue-200", dot: "bg-blue-500" };
+    if (status === "satisfactory") return { light: "bg-amber-50 text-amber-700 border-amber-200", dot: "bg-amber-500" };
+    if (status === "needs_improvement") return { light: "bg-rose-50 text-rose-700 border-rose-200", dot: "bg-rose-500" };
+    if (status === "present") return { light: "bg-emerald-50 text-emerald-700 border-emerald-200", dot: "bg-emerald-500" };
+    if (status === "absent") return { light: "bg-rose-50 text-rose-700 border-rose-200", dot: "bg-rose-500" };
+    if (status === "leave") return { light: "bg-amber-50 text-amber-700 border-amber-200", dot: "bg-amber-500" };
+    return { light: "bg-slate-50 text-slate-500 border-slate-200", dot: "bg-slate-400" };
   };
+
+  const filteredPresentCount = attendanceRows.filter(item => item.status === "present").length;
+  const filteredAbsentCount = attendanceRows.filter(item => item.status === "absent").length;
+  const filteredLeaveCount = attendanceRows.filter(item => item.status === "leave").length;
+
+  const NAV_ITEMS: { tab: Tab; icon: React.ReactNode; label: string }[] = [
+    { tab: "overview", icon: <LayoutDashboard size={18} />, label: "Overview" },
+    { tab: "classes", icon: <CalendarDays size={18} />, label: "Total Classes" },
+    { tab: "lesson", icon: <BookOpen size={18} />, label: "Write Lesson" },
+    { tab: "monthly", icon: <CalendarDays size={18} />, label: "Monthly Plan" },
+    { tab: "attendance", icon: <CheckCircle2 size={18} />, label: "Attendance" },
+    { tab: "history", icon: <History size={18} />, label: "Lesson History" },
+  ];
 
   if (loading) {
     return (
       <div className="tp-root min-h-screen grid place-items-center">
-        <div className="tp-glass tp-rounded-xl p-10 text-center shadow-2xl">
-          <div className="tp-brand-icon mx-auto">
-            <Loader2 className="animate-spin" size={26} />
-          </div>
+        <div className="tp-card w-full max-w-md text-center p-10">
+          <div className="tp-brand-icon mx-auto"><Loader2 className="animate-spin" size={26} /></div>
           <h2 className="mt-5 text-xl font-bold text-slate-800">Loading Teacher Portal</h2>
-          <p className="mt-1 text-sm text-slate-500">Fetching schedules, subjects, attendance & lessons.</p>
+          <p className="mt-1 text-sm text-slate-500">Fetching schedules, attendance and lessons.</p>
         </div>
       </div>
     );
   }
 
-const NAV_ITEMS: { tab: Tab; icon: React.ReactNode; label: string }[] = [
-  { tab: "overview", icon: <LayoutDashboard size={18} />, label: "Overview" },
-  { tab: "classes", icon: <CalendarDays size={18} />, label: "Total Classes" },
-  { tab: "lesson", icon: <BookOpen size={18} />, label: "Write Lesson" },
-  { tab: "monthly", icon: <CalendarDays size={18} />, label: "Monthly Plan" },
-  { tab: "attendance", icon: <CheckCircle2 size={18} />, label: "Attendance" },
-  { tab: "history", icon: <History size={18} />, label: "Lesson History" },
-];
-
-return (
-  <div className={`tp-root h-screen flex overflow-hidden ${themeMode === "dark" ? "tp-dark" : ""}`}>
+  return (
+    <div className={`tp-root h-screen flex overflow-hidden ${themeMode === "dark" ? "tp-dark" : ""}`}>
       {/* ── Sidebar ── */}
       <aside className="tp-sidebar hidden lg:flex flex-col">
-        {/* Logo */}
         <div className="tp-sidebar-logo">
-<div className="tp-logo-icon">
-  <img src="/ivs-logo.png" alt="Iqra Virtual School" className="tp-sidebar-logo-img" />
-</div>
-          <div>
-            <div className="text-sm font-bold text-white leading-tight">Iqra Virtual School</div>
-            <div className="text-[11px] text-slate-400 mt-0.5">Teacher Portal</div>
+          <div className="tp-logo-icon">
+            <img src="/ivs-logo.png" alt="Iqra Virtual School" className="tp-sidebar-logo-img" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-bold text-slate-900 leading-tight">Iqra Virtual School</div>
+            <div className="text-[11px] text-slate-500 mt-0.5">Teacher Portal</div>
           </div>
         </div>
 
-        {/* Nav */}
         <nav className="flex-1 px-3 py-4 space-y-1">
           {NAV_ITEMS.map(({ tab, icon, label }) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`tp-nav-btn w-full ${activeTab === tab ? "active" : ""}`}
-            >
+            <button key={tab} onClick={() => setActiveTab(tab)} className={`tp-nav-btn w-full ${activeTab === tab ? "active" : ""}`}>
               {icon}
               <span>{label}</span>
               {activeTab === tab && <ChevronRight size={14} className="ml-auto opacity-60" />}
@@ -1260,1052 +1623,574 @@ return (
           ))}
         </nav>
 
-        {/* Teacher card */}
-       <div className="px-3 py-4 border-t border-slate-200">
-<div className="tp-teacher-card">
-  <div className="tp-avatar-sm">{getInitials(teacherName)}</div>
-  <div className="min-w-0">
-    <div className="text-xs font-black text-slate-900 truncate">{teacherName}</div>
-    <div className="text-[10px] font-bold text-slate-500 mt-0.5">Teacher access</div>
-  </div>
-</div>
+        <div className="px-3 py-4 border-t border-slate-200 tp-sidebar-bottom">
+          <div className="tp-teacher-card">
+            <div className="tp-avatar-sm">{getInitials(teacherName)}</div>
+            <div className="min-w-0">
+              <div className="text-xs font-black text-slate-900 truncate">{teacherName}</div>
+              <div className="text-[10px] font-bold text-slate-500 mt-0.5">Teacher access</div>
+            </div>
+          </div>
           <button onClick={handleLogout} className="tp-logout-btn w-full mt-3">
-            <LogOut size={15} />
-            <span>Logout</span>
+            <LogOut size={15} /><span>Logout</span>
           </button>
         </div>
       </aside>
 
       {/* ── Main ── */}
       <main className="flex-1 min-w-0 flex flex-col h-screen overflow-hidden">
-        {/* Top header */}
         <header className="tp-topbar flex items-center justify-between px-6 py-3">
-          <div className="flex items-center gap-4">
-            {/* Mobile hamburger area */}
-            <div className="lg:hidden flex items-center gap-2">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="lg:hidden flex items-center gap-2 overflow-x-auto">
               {NAV_ITEMS.map(({ tab, label }) => (
                 <button key={tab} onClick={() => setActiveTab(tab)} className={`tp-mob-tab ${activeTab === tab ? "active" : ""}`}>{label}</button>
               ))}
             </div>
             <div className="hidden lg:block">
               <h1 className="text-lg font-bold text-slate-800">
-{activeTab === "overview" && "Dashboard"}
-{activeTab === "classes" && "Total Classes"}
-{activeTab === "lesson" && "Write Lesson"}
-{activeTab === "monthly" && "Monthly Lesson Plan"}
-{activeTab === "attendance" && "Attendance"}
-{activeTab === "history" && "Lesson History"}
+                {activeTab === "overview" && "Dashboard"}
+                {activeTab === "classes" && "Total Classes"}
+                {activeTab === "lesson" && "Write Daily Lesson"}
+                {activeTab === "monthly" && "Monthly Lesson Plan"}
+                {activeTab === "attendance" && "Attendance"}
+                {activeTab === "history" && "Lesson History"}
               </h1>
               <p className="text-xs text-slate-500 mt-0.5">{getCurrentDate()}</p>
             </div>
           </div>
 
-<div className="flex items-center gap-3">
-  <div className="tp-clock-card">
-    <div className="tp-analog-clock">
-      <span className="tp-clock-mark tp-clock-mark-12">XII</span>
-      <span className="tp-clock-mark tp-clock-mark-3">III</span>
-      <span className="tp-clock-mark tp-clock-mark-6">VI</span>
-      <span className="tp-clock-mark tp-clock-mark-9">IX</span>
-
-      <span
-        className="tp-clock-hand tp-clock-hour"
-        style={{ transform: `translateX(-50%) rotate(${clockAngles.hour}deg)` }}
-      />
-      <span
-        className="tp-clock-hand tp-clock-minute"
-        style={{ transform: `translateX(-50%) rotate(${clockAngles.minute}deg)` }}
-      />
-      <span
-        className="tp-clock-hand tp-clock-second"
-        style={{ transform: `translateX(-50%) rotate(${clockAngles.second}deg)` }}
-      />
-      <span className="tp-clock-center" />
-    </div>
-
-    <div className="hidden sm:block">
-      <div className="text-sm font-black text-slate-900">{currentTime}</div>
-      <div className="text-[11px] font-bold text-slate-400">{getCurrentDate()}</div>
-    </div>
-  </div>
-
-<button
-  type="button"
-  onClick={onToggleTheme}
-  className="tp-theme-btn"
-  title={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
->
-  {themeMode === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-</button>
-</div>
+          <div className="flex items-center gap-3">
+            <div className="tp-clock-card">
+              <div className="tp-analog-clock">
+                <span className="tp-clock-mark tp-clock-mark-12">XII</span>
+                <span className="tp-clock-mark tp-clock-mark-3">III</span>
+                <span className="tp-clock-mark tp-clock-mark-6">VI</span>
+                <span className="tp-clock-mark tp-clock-mark-9">IX</span>
+                <span className="tp-clock-hand tp-clock-hour" style={{ transform: `translateX(-50%) rotate(${clockAngles.hour}deg)` }} />
+                <span className="tp-clock-hand tp-clock-minute" style={{ transform: `translateX(-50%) rotate(${clockAngles.minute}deg)` }} />
+                <span className="tp-clock-hand tp-clock-second" style={{ transform: `translateX(-50%) rotate(${clockAngles.second}deg)` }} />
+                <span className="tp-clock-center" />
+              </div>
+              <div className="hidden sm:block">
+                <div className="text-sm font-black text-slate-900">{currentTime}</div>
+                <div className="text-[11px] font-bold text-slate-400">{getCurrentDate()}</div>
+              </div>
+            </div>
+            <button type="button" onClick={onToggleTheme} className="tp-theme-btn">
+              {themeMode === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+          </div>
         </header>
 
-        {/* Message banner */}
         {message && (
-          <div className={`mx-6 mt-3 rounded-xl border px-4 py-2.5 text-sm font-semibold flex items-center gap-2 ${message.includes("success") ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
-            {message.includes("success") ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
+          <div className={`mx-6 mt-3 rounded-xl border px-4 py-2.5 text-sm font-semibold flex items-center gap-2 ${
+            message.toLowerCase().includes("success") ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-amber-50 border-amber-200 text-amber-800"
+          }`}>
+            {message.toLowerCase().includes("success") ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
             {message}
           </div>
         )}
 
-        {/* Page content */}
         <div className="flex-1 min-h-0 overflow-y-auto p-6 tp-page-scroll">
 
-          {/* ── OVERVIEW ── */}
+          {/* ── Overview Tab ── */}
           {activeTab === "overview" && (
             <div className="space-y-6">
-              {/* Hero stats like coordinator / super admin */}
               <section className="tp-hero-panel">
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                  <div className="tp-hero-stat">
-                    <div>
-                      <p className="tp-hero-label">My Students</p>
-                      <h3 className="tp-hero-number text-emerald-600">{students.length}</h3>
-                    </div>
-                    <div className="tp-hero-icon bg-emerald-50 text-emerald-600">
-                      <GraduationCap size={20} />
-                    </div>
-                  </div>
-
-                  <div className="tp-hero-stat">
-                    <div>
-                      <p className="tp-hero-label">Today Classes</p>
-                      <h3 className="tp-hero-number text-blue-600">{todaySchedules.length}</h3>
-                    </div>
-                    <div className="tp-hero-icon bg-blue-50 text-blue-600">
-                      <CalendarDays size={20} />
-                    </div>
-                  </div>
-
-                  <div className="tp-hero-stat">
-                    <div>
-                      <p className="tp-hero-label">Live Now</p>
-                      <h3 className="tp-hero-number text-slate-900">{liveNowSchedules.length}</h3>
-                      <p className="text-xs text-slate-400 mt-1">
-                        {liveNowSchedules[0] ? formatTime(liveNowSchedules[0].time_slot) : "No live class"}
-                      </p>
-                    </div>
-                    <div className="tp-live-dot">
-                      <span />
-                    </div>
-                  </div>
-
+                  <HeroStat label="My Students" value={students.length} color="emerald" icon={<GraduationCap size={20} />} />
+                  <HeroStat label="Today Classes" value={todaySchedules.length} color="blue" icon={<CalendarDays size={20} />} />
+                  <HeroStat label="Live Now" value={liveNowSchedules.length} color="rose" icon={<span className="tp-live-dot"><span /></span>} />
                   <div className="tp-hero-stat">
                     <div>
                       <p className="tp-hero-label">Up Next</p>
-                      <h3 className="tp-hero-number text-slate-900">
-                        {nextClass ? formatTime(nextClass.time_slot) : "--"}
-                      </h3>
-                      <p className="text-xs text-slate-400 mt-1">
-  {nextClass
-    ? `${getScheduleStudentName(nextClass)} · ${countdownLabel(nextClass.time_slot)}`
-    : "No class in next hour"}
-</p>
+                      <h3 className="tp-hero-number text-slate-900">{nextClass ? formatTime(nextClass.time_slot) : "--"}</h3>
+                      <p className="text-xs text-slate-400 mt-1">{nextClass ? `${getScheduleStudentName(nextClass)} · ${countdownLabel(nextClass.time_slot)}` : "No class in next hour"}</p>
                     </div>
                     <ChevronRight size={20} className="text-slate-400" />
                   </div>
                 </div>
               </section>
 
-              {/* Insights header */}
               <section className="tp-insight-bar">
                 <div>
                   <h2 className="text-sm font-black text-slate-900">Daily Classes</h2>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Teacher schedule snapshot for {todayWeekday}
-                  </p>
+                  <p className="text-xs text-slate-500 mt-1">Teacher schedule snapshot for {todayWeekday}</p>
                 </div>
-
                 <button onClick={() => void loadDashboard()} disabled={refreshing} className="tp-open-btn">
                   {refreshing ? <Loader2 size={14} className="animate-spin" /> : "Refresh"}
                 </button>
               </section>
 
-              {/* Daily class layout */}
-              <section className="grid grid-cols-1 xl:grid-cols-[1fr_1fr] gap-5">
-                {/* Live now */}
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="tp-section-title">
-                      <span className="h-2 w-2 rounded-full bg-rose-500" />
-                      Live Now
-                    </h3>
-                    <span className="tp-time-pill">
-                      {liveNowSchedules[0] ? formatTime(liveNowSchedules[0].time_slot) : currentTime}
-                    </span>
-                  </div>
-
-                  {liveNowSchedules.length > 0 ? (
-                    liveNowSchedules.map((row) => (
-                      <div key={row.id} className="tp-daily-card tp-daily-card-live">
-                        <div className="flex items-start justify-between gap-4">
-                          <div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h4 className="text-base font-black text-slate-900">
-                                {getScheduleStudentName(row)}
-                              </h4>
-                              <span className="tp-live-badge">
-                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                                Live
-                              </span>
-                            </div>
-
-                            <p className="text-sm text-slate-600 mt-2">
-                              <span className="font-black text-emerald-700">Teacher:</span> {teacherName}
-                            </p>
-
-                            <div className="flex flex-wrap items-center gap-2 mt-3">
-                              <span className="tp-soft-pill">{normalizeDay(row.weekday)}</span>
-                              <span className="tp-soft-pill">{formatTime(row.time_slot)}</span>
-                            </div>
-                          </div>
-
-                          <span className="tp-time-pill">{formatTime(row.time_slot)}</span>
-                        </div>
-
-                        <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
-<button type="button" onClick={() => openLessonForSchedule(row)} className="tp-action-card">
-  <BookOpen size={16} />
-  Write Lesson
-</button>
-
-<button type="button" onClick={() => openAttendanceForSchedule(row)} className="tp-action-card">
-  <CheckCircle2 size={16} />
-  View Attendance
-</button>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="tp-empty-state bg-white">
-                      <CalendarDays size={28} className="text-slate-300 mx-auto mb-3" />
-                      <div className="font-bold text-slate-600">No live class right now</div>
-                      <div className="text-xs text-slate-400 mt-1">
-                        Upcoming classes will appear here.
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Up next */}
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="tp-section-title">
-                      Up Next
-                      <ChevronRight size={15} />
-                    </h3>
-                    <span className="tp-time-pill">
-                      {nextClass ? formatTime(nextClass.time_slot) : "--"}
-                    </span>
-                  </div>
-
-                  {upNextSchedules.length > 0 ? (
-                    upNextSchedules.map((row) => (
-                      <div key={row.id} className="tp-daily-card">
-                        <div className="flex items-center justify-between gap-4">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h4 className="text-base font-black text-slate-900 truncate">
-                                {getScheduleStudentName(row)}
-                              </h4>
-                              <span className="tp-upnext-badge">Up Next</span>
-<span className="tp-countdown-badge">
-  ⏳ {countdownLabel(row.time_slot)}
-</span>
-                            </div>
-
-                            <p className="text-sm text-slate-600 mt-2">
-                              <span className="font-black text-emerald-700">Teacher:</span> {teacherName}
-                            </p>
-
-                            <div className="flex flex-wrap items-center gap-2 mt-3">
-                              <span className="tp-soft-pill">{normalizeDay(row.weekday)}</span>
-                              <span className="tp-soft-pill">{formatTime(row.time_slot)}</span>
-                            </div>
-                          </div>
-
-                          <span className="tp-time-pill shrink-0">{formatTime(row.time_slot)}</span>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="tp-empty-state bg-white">
-                      <CalendarDays size={28} className="text-slate-300 mx-auto mb-3" />
-                      <div className="font-bold text-slate-600">No upcoming class today</div>
-                      <div className="text-xs text-slate-400 mt-1">
-                        Your next scheduled class will appear here.
-                      </div>
-                    </div>
-                  )}
-                </div>
+              <section className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+                <DailySchedulePanel title="Live Now" rows={liveNowSchedules} emptyTitle="No live class right now" teacherName={teacherName} onWrite={openAddForSchedule} onAttendance={openAttendanceForSchedule} />
+                <DailySchedulePanel title="Up Next" rows={upNextSchedules} emptyTitle="No class is up next now" teacherName={teacherName} onWrite={openAddForSchedule} onAttendance={openAttendanceForSchedule} />
               </section>
 
-{/* Today's scheduled classes */}
-<section className="tp-card tp-today-panel">
-  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
-    <div>
-      <h2 className="text-base font-black text-slate-900">Today’s Scheduled Classes</h2>
-      <p className="text-xs text-slate-500 mt-1">
-        All classes assigned to you for {todayWeekday}.
-      </p>
-    </div>
-
-    <div className="relative sm:w-72">
-      <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-      <input
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search today’s students..."
-        className="tp-search-input"
-      />
-    </div>
-  </div>
-
-  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-    {todaySchedules
-      .filter((row) => {
-        const q = search.trim().toLowerCase();
-        if (!q) return true;
-
-        return [
-          getScheduleStudentName(row),
-          row.student?.username,
-          row.weekday,
-          row.time_slot,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase()
-          .includes(q);
-      })
-      .map((row) => {
-
-      
-        const isLive = liveNowSchedules.some((item) => item.id === row.id);
-        const minsLeft = minutesUntilClass(row.time_slot);
-        const isUpcoming = minsLeft > 0 && minsLeft <= 60;
-        const isPast = minsLeft < -30;
-
-        return (
-          <div
-            key={row.id}
-            className={`tp-today-class-card ${isLive ? "live" : ""} ${isPast ? "past" : ""}`}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="text-sm font-black text-slate-900 truncate">
-                    {getScheduleStudentName(row)}
-                  </h3>
-
-                  {isLive && (
-                    <span className="tp-live-badge">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                      Live
-                    </span>
-                  )}
-
-                  {isUpcoming && !isLive && (
-                    <span className="tp-countdown-badge">
-                      ⏳ {countdownLabel(row.time_slot)}
-                    </span>
-                  )}
-
-                  {isPast && <span className="tp-past-badge">Completed</span>}
+              <section className="tp-card tp-today-panel">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+                  <div>
+                    <h2 className="text-base font-black text-slate-900">Today's Scheduled Classes</h2>
+                    <p className="text-xs text-slate-500 mt-1">All classes assigned to you for {todayWeekday}.</p>
+                  </div>
+                  <div className="relative sm:w-72">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search today's students..." className="tp-search-input" />
+                  </div>
                 </div>
 
-                <p className="text-xs text-slate-500 mt-2">
-                  Student username:{" "}
-                  <span className="font-bold text-slate-700">
-                    {row.student?.username || "N/A"}
-                  </span>
-                </p>
-              </div>
-
-              <span className="tp-time-pill shrink-0">{formatTime(row.time_slot)}</span>
-            </div>
-
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {todaySchedules.filter(row => {
+                    const q = search.trim().toLowerCase();
+                    if (!q) return true;
+                    return [getScheduleStudentName(row), row.student?.username, row.weekday, row.time_slot].filter(Boolean).join(" ").toLowerCase().includes(q);
+                  }).map(row => {
+                    const isLive = liveNowSchedules.some(item => item.id === row.id);
+                    const minsLeft = minutesUntilClass(row.time_slot);
+                    const isUpcoming = minsLeft > 0 && minsLeft <= 60;
+                    const isPast = minsLeft < -CLASS_DURATION_MINUTES;
+                    return (
+                      <div key={row.id} className={`tp-today-class-card ${isLive ? "live" : ""} ${isPast ? "past" : ""}`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="text-sm font-black text-slate-900 truncate">{getScheduleStudentName(row)}</h3>
+                              {isLive && <span className="tp-live-badge"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Live</span>}
+                              {isUpcoming && !isLive && <span className="tp-countdown-badge">⏳ {countdownLabel(row.time_slot)}</span>}
+                              {isPast && <span className="tp-past-badge">Completed</span>}
+                            </div>
+                            <p className="text-xs text-slate-500 mt-2">Student username: <span className="font-bold text-slate-700">{row.student?.username || "N/A"}</span></p>
+                          </div>
+                          <span className="tp-time-pill shrink-0">{formatTime(row.time_slot)}</span>
+                        </div>
 <div className="mt-4 flex items-center justify-between gap-3">
-  <span className="tp-soft-pill">{normalizeDay(row.weekday)}</span>
-
-{isLive && (
-  <div className="flex items-center gap-2">
-    <button
-      type="button"
-      onClick={() => openLessonForSchedule(row)}
-      className="tp-mini-action-btn"
-    >
-      Lesson
-    </button>
-
-    <button
-      type="button"
-      onClick={() => openAttendanceForSchedule(row)}
-      className="tp-mini-action-btn"
-    >
-      Attendance
-    </button>
-  </div>
-)}
-</div>
-          </div>
-        );
-      })}
-
-    {todaySchedules.filter((row) => {
-      const q = search.trim().toLowerCase();
-      if (!q) return true;
-
-      return [
-        getScheduleStudentName(row),
-        row.student?.username,
-        row.weekday,
-        row.time_slot,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(q);
-    }).length === 0 && (
-      <div className="col-span-full tp-empty-state">
-        <CalendarDays size={28} className="text-slate-300 mx-auto mb-3" />
-        <div className="font-bold text-slate-600">No classes found for today</div>
-        <div className="text-xs text-slate-400 mt-1">
-          Try clearing the search or check another day’s schedule from Scheduling.
-        </div>
-      </div>
-    )}
-  </div>
-</section>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="tp-soft-pill">{normalizeDay(row.weekday)}</span>
+                            <span className={canWriteLessonForClass(row) ? "tp-live-badge" : "tp-past-badge"}>
+                              {lessonWindowLabel(row)}
+                            </span>
+                            <span className="tp-soft-pill">{formatDate(getClassLessonDate(row))}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button type="button" onClick={() => openAddForSchedule(row)} className="tp-mini-action-btn">Lesson</button>
+                            <button type="button" onClick={() => openAttendanceForSchedule(row)} className="tp-mini-action-btn">Attendance</button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {todaySchedules.length === 0 && <EmptyState title="No classes found for today" subtitle="Assigned classes will appear here." />}
+                </div>
+              </section>
             </div>
           )}
 
-{/* ── ALL CLASSES ── */}
-{activeTab === "classes" && (
-  <div className="space-y-5">
-  </div>
-)}
+          {/* ── Classes Tab ── */}
+          {activeTab === "classes" && (
+            <section className="tp-card">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+                <div>
+                  <h2 className="text-base font-black text-slate-900">Total Scheduled Classes</h2>
+                  <p className="text-xs text-slate-500 mt-1">Complete weekly schedule assigned to you.</p>
+                </div>
+                <div className="relative sm:w-72">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input value={classSearch} onChange={e => setClassSearch(e.target.value)} placeholder="Search student, day or time..." className="tp-search-input" />
+                </div>
+              </div>
 
-{/* ── TOTAL CLASSES ── */}
-{activeTab === "classes" && (
-  <div className="space-y-5">
-    <section className="tp-card">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
-        <div>
-          <h2 className="text-base font-black text-slate-900">Total Scheduled Classes</h2>
-          <p className="text-xs text-slate-500 mt-1">
-            Complete weekly schedule assigned to you.
-          </p>
-        </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {paginatedClassRows.map(row => {
+                  const rowLessonDate = getClassLessonDate(row);
+                  return (
+                    <div key={row.id} className="tp-total-class-card">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h3 className="text-sm font-black text-slate-900 truncate">{getScheduleStudentName(row)}</h3>
+                          <p className="text-xs text-slate-500 mt-1">Student username: <span className="font-bold text-slate-700">{row.student?.username || "N/A"}</span></p>
+                        </div>
+                        <span className="tp-time-pill shrink-0">{formatTime(row.time_slot)}</span>
+                      </div>
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <span className="tp-soft-pill">{normalizeDay(row.weekday)}</span>
+                        <span className={canWriteLessonForClass(row) ? "tp-live-badge" : "tp-past-badge"}>{lessonWindowLabel(row)}</span>
+                        <span className="tp-soft-pill">{formatDate(rowLessonDate)}</span>
+                      </div>
+                      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <button type="button" onClick={() => openAddForSchedule(row)} className="tp-mini-action-btn">Write Lesson</button>
+                        <button type="button" onClick={() => openLessonHistoryForSchedule(row)} className="tp-mini-action-btn">Lesson History</button>
+                        <button type="button" onClick={() => openAttendanceForSchedule(row)} className="tp-mini-action-btn">Attendance</button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {filteredClassRows.length === 0 && <EmptyState title="No classes found" subtitle="Assigned classes will appear here." />}
+              </div>
 
-        <div className="relative sm:w-72">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            value={classSearch}
-            onChange={(event) => setClassSearch(event.target.value)}
-            placeholder="Search student, day or time..."
-            className="tp-search-input"
-          />
-        </div>
-      </div>
+              {filteredClassRows.length > PAGE_SIZE && (
+                <Pagination page={safeClassPage} totalPages={classTotalPages} onPrev={() => setClassPage(p => Math.max(1, p - 1))} onNext={() => setClassPage(p => Math.min(classTotalPages, p + 1))} />
+              )}
+            </section>
+          )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {paginatedClassRows.map((row: ScheduleRow) => {
-          const canWrite = canWriteLessonForClass(row);
-
-          return (
-            <div key={row.id} className="tp-total-class-card">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h3 className="text-sm font-black text-slate-900 truncate">
-                    {getScheduleStudentName(row)}
-                  </h3>
-
-                  <p className="text-xs text-slate-500 mt-1">
-                    Student username:{" "}
-                    <span className="font-bold text-slate-700">
-                      {row.student?.username || "N/A"}
-                    </span>
-                  </p>
+          {/* ── Lesson Tab ── */}
+          {activeTab === "lesson" && (
+            <form onSubmit={handleSaveLesson} className="space-y-5">
+              <div className="tp-card">
+                {/* Form header */}
+                <div className="tp-form-hero mb-5">
+                  <div className="tp-form-hero-left">
+                    <div className="tp-brand-icon-sm"><BookOpen size={18} /></div>
+                    <div>
+                      <h2 className="text-lg font-black text-slate-900">Write Daily Lesson Report</h2>
+                      <p className="text-sm text-slate-500 mt-1">Select student and date, then add subjects with topics below.</p>
+                    </div>
+                  </div>
+                  <div className="tp-form-hero-badge">{selectedStudent?.name || "Select Student"}</div>
                 </div>
 
-                <span className="tp-time-pill shrink-0">
-                  {formatTime(row.time_slot)}
-                </span>
-              </div>
-
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <span className="tp-soft-pill">{normalizeDay(row.weekday)}</span>
-
-                <span className={canWrite ? "tp-live-badge" : "tp-past-badge"}>
-                  {lessonWindowLabel(row)}
-                </span>
-              </div>
-
-              <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2">
-<button
-  type="button"
-  onClick={() => openLessonForSchedule(row)}
-  disabled={!canWrite}
-  className="tp-mini-action-btn disabled:opacity-50 disabled:cursor-not-allowed"
->
-  Write Lesson
-</button>
-
-                <button
-                  type="button"
-                  onClick={() => openLessonHistoryForSchedule(row)}
-                  className="tp-mini-action-btn"
-                >
-                  Lesson History
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => openAttendanceHistoryForSchedule(row)}
-                  className="tp-mini-action-btn"
-                >
-                  Attendance
-                </button>
-              </div>
-            </div>
-          );
-        })}
-
-        {filteredClassRows.length === 0 && (
-          <div className="col-span-full tp-empty-state">
-            <CalendarDays size={28} className="text-slate-300 mx-auto mb-3" />
-            <div className="font-bold text-slate-600">No classes found</div>
-            <div className="text-xs text-slate-400 mt-1">
-              Assigned classes will appear here.
-            </div>
-          </div>
-        )}
-      </div>
-
-      {filteredClassRows.length > PAGE_SIZE && (
-        <div className="tp-pagination">
-          <button
-            type="button"
-            onClick={() => setClassPage((page) => Math.max(1, page - 1))}
-            disabled={safeClassPage === 1}
-            className="tp-page-btn"
-          >
-            Previous
-          </button>
-
-          <span className="tp-page-info">
-            Page {safeClassPage} of {classTotalPages}
-          </span>
-
-          <button
-            type="button"
-            onClick={() => setClassPage((page) => Math.min(classTotalPages, page + 1))}
-            disabled={safeClassPage === classTotalPages}
-            className="tp-page-btn"
-          >
-            Next
-          </button>
-        </div>
-      )}
-    </section>
-  </div>
-)}
-
-          {/* ── LESSON ── */}
-          {activeTab === "lesson" && (
-            <form onSubmit={handleSaveLesson} className="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-5">
-              <div className="tp-card space-y-5">
-<div className="tp-form-hero">
-  <div className="tp-form-hero-left">
-    <div className="tp-brand-icon-sm"><BookOpen size={18} /></div>
-    <div>
-      <h2 className="text-lg font-black text-slate-900">Lesson Writer</h2>
-<p className="text-sm text-slate-500 mt-1">
-  Record the lesson details for the selected student.
-</p>
-    </div>
-  </div>
-
-  <div className="tp-form-hero-badge">
-    {selectedStudent?.name || "Select Student"}
-  </div>
-</div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Student + Date row */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                   <div className="tp-field">
                     <label className="tp-label">Student</label>
-                    <select value={studentId} onChange={(e) => handleStudentChange(e.target.value)} className="tp-select">
+                    <select value={studentId} onChange={e => handleStudentChange(e.target.value)} className="tp-select">
                       <option value="">Select student</option>
-                      {students.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                     </select>
                   </div>
                   <div className="tp-field">
-                    <label className="tp-label">Date</label>
-                    <input type="date" value={lessonDate} onChange={(e) => setLessonDate(e.target.value)} className="tp-input-el" />
+                    <label className="tp-label">Lesson Date</label>
+                    <input
+                      type="date"
+                      value={lessonDate}
+                      max={today()}
+                      onChange={e => handleDateChange(e.target.value)}
+                      className={`tp-input-el ${dateError ? "border-rose-400" : ""}`}
+                    />
+                    {dateError && (
+                      <div className="flex items-center gap-1 mt-1 text-xs text-rose-600 font-semibold">
+                        <AlertCircle size={12} /> {dateError}
+                      </div>
+                    )}
                   </div>
-<div className="tp-field">
-  <label className="tp-label">Subject</label>
-  <select
-    value={subject}
-    disabled={!studentId}
-    onChange={(e) => handleSubjectChange(e.target.value)}
-    className="tp-select"
-  >
-    {!studentId && <option value="">Select student first</option>}
-
-    {studentId &&
-      lessonSubjects.map((item) => (
-        <option key={item} value={item}>
-          {item}
-        </option>
-      ))}
-  </select>
-</div>
                 </div>
 
-
-
-                {subject && (
-                  <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-4 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Lesson Structure</div>
-                        <div className="text-base font-bold text-slate-800 mt-0.5">{subject}</div>
-                      </div>
-                      
-                    </div>
-
-                    {isQaidaSubject(subject) && (
-                      <div className="tp-field">
-                        <label className="tp-label">Qaida Lesson</label>
-                        <select value={qaidaLesson} onChange={(e) => setQaidaLesson(e.target.value)} className="tp-select bg-white">
-                          {QAIDA_LESSONS.map((l) => <option key={l} value={l}>{l}</option>)}
-                        </select>
-                      </div>
-                    )}
-
-                    {isQuranSubject(subject) && (
-                      <div className="space-y-4">
-                        <div className="grid grid-cols-2 gap-2">
-                          {(["surah", "juz"] as QuranMode[]).map((mode) => (
-                            <button key={mode} type="button" onClick={() => setQuranMode(mode)}
-                              className={`tp-mode-btn ${quranMode === mode ? "active" : ""}`}>
-                              By {mode === "surah" ? "Surah" : "Juz"}
-                            </button>
-                          ))}
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                          {quranMode === "juz" && (
-                            <div className="tp-field">
-                              <label className="tp-label">Juz</label>
-                              <select value={juz} onChange={(e) => setJuz(Number(e.target.value))} className="tp-select bg-white">
-                                {JUZ_OPTIONS.map((j) => <option key={j} value={j}>Juz {j}</option>)}
-                              </select>
-                            </div>
-                          )}
-                          <div className="tp-field">
-                            <label className="tp-label">{quranMode === "juz" ? "Surah in Juz" : "Surah"}</label>
-                            <select value={surahNumber} onChange={(e) => { setSurahNumber(Number(e.target.value)); setFromAyah(1); setToAyah(1); }} className="tp-select bg-white">
-                              {(quranMode === "juz" ? juzSurahs : SURAHS).map((s) => (
-                                <option key={s.number} value={s.number}>{s.number}. {s.name}</option>
-                              ))}
-                            </select>
-                          </div>
-                          <div className="tp-field">
-                            <label className="tp-label">From Ayah</label>
-                            <select value={fromAyah} onChange={(e) => { const n = Number(e.target.value); setFromAyah(n); if (toAyah < n) setToAyah(n); }} className="tp-select bg-white">
-                              {ayahOptions.map((a) => <option key={a} value={a}>{a}</option>)}
-                            </select>
-                          </div>
-                          <div className="tp-field">
-                            <label className="tp-label">To Ayah</label>
-                            <select value={toAyah} onChange={(e) => setToAyah(Number(e.target.value))} className="tp-select bg-white">
-                              {ayahOptions.filter((a) => a >= fromAyah).map((a) => <option key={a} value={a}>{a}</option>)}
-                            </select>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {(isTajweedSubject(subject) || isDuaSubject(subject)) && (
-                      <div>
-                        <div className="tp-label mb-2">Select Topics</div>
-                        <div className="flex flex-wrap gap-2">
-                          {topicOptions.map((topic) => (
-                            <button key={topic} type="button" onClick={() => toggleTopic(topic)}
-                              className={`tp-topic-chip ${selectedTopics.includes(topic) ? "active" : ""}`}>
-                              {topic}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {!isQaidaSubject(subject) && !isQuranSubject(subject) && !isTajweedSubject(subject) && !isDuaSubject(subject) && (
-                      <div className="tp-field">
-                        <label className="tp-label">Topic Covered</label>
-                        <input value={customTopic} onChange={(e) => setCustomTopic(e.target.value)} className="tp-input-el bg-white" placeholder="Write lesson topic..." />
-                      </div>
-                    )}
+{/* Future date banner */}
+                {!isDateValid && lessonDate && (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 mb-4 flex items-center gap-2 text-sm font-semibold text-rose-700">
+                    <AlertCircle size={16} />
+                    Future dates are not allowed. You can only write lessons for today or past dates.
                   </div>
                 )}
 
-              
-
-                {/* Progress + remarks */}
-                <div className="grid grid-cols-1 gap-3">
-                  <div className="tp-field">
-                    <label className="tp-label">Progress Status</label>
-                    <select value={progressStatus} onChange={(e) => setProgressStatus(e.target.value as ProgressStatus)} className="tp-select">
-                      <option value="">Select status</option>
-                      <option value="excellent">Excellent</option>
-                      <option value="good">Good</option>
-                      <option value="satisfactory">Satisfactory</option>
-                      <option value="needs_improvement">Needs Improvement</option>
-                    </select>
+                {/* Before enrollment banner */}
+                {isDateValid && isDateBeforeEnrollment && selectedStudent?.enrollment_date && (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 mb-4 flex items-center gap-2 text-sm font-semibold text-rose-700">
+                    <AlertCircle size={16} />
+                    This date is before {selectedStudent.name}'s enrollment date ({formatDate(selectedStudent.enrollment_date)}). Lessons can only be written from the enrollment date onwards.
                   </div>
-                </div>
+                )}
+
+{/* Existing lesson banner */}
+                {studentId && isDateValid && (() => {
+                  const existingReport = dailyReports.find(r =>
+                    String(r.student_id) === String(studentId) &&
+                    String(r.date) === String(lessonDate)
+                  );
+                  if (!existingReport) return null;
+                  return (
+                    <div className="rounded-2xl border border-indigo-200 bg-indigo-50 px-5 py-4 mb-4">
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="inline-flex items-center gap-1.5 rounded-full border border-indigo-200 bg-white px-3 py-1 text-xs font-extrabold text-indigo-700">
+                              <BookOpen size={12} /> Lesson Already Saved
+                            </span>
+                            <span className="text-xs font-bold text-indigo-600">{formatDate(lessonDate)}</span>
+                          </div>
+                          <p className="mt-2 text-sm font-semibold text-indigo-800">
+                            A daily lesson report already exists for <span className="font-black">{selectedStudent?.name}</span> on this date.
+                          </p>
+                          <p className="mt-1 text-xs text-indigo-600">
+                            {existingReport.subject_entries?.length || 0} subject{(existingReport.subject_entries?.length || 0) !== 1 ? "s" : ""} saved: {existingReport.subject_entries?.map(e => e.subject).join(", ") || "—"}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const group = historyGroups.find(g =>
+                              String(g.studentId) === String(studentId) &&
+                              String(g.date) === String(lessonDate)
+                            );
+                            if (group) {
+                              handleOpenEdit(group);
+                              setActiveTab("history");
+                            } else {
+                              setHistoryStudentFilter(studentId);
+                              setActiveTab("history");
+                            }
+                          }}
+                          className="tp-save-btn text-xs px-4 py-2 shrink-0"
+                        >
+                          <Edit3 size={13} /> Go to Edit Lesson
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+ {/* Class not started yet banner */}
+                {studentId && isDateValid && classIsUpcomingToday && !dailyReports.find(r => String(r.student_id) === String(studentId) && String(r.date) === String(lessonDate)) && (
+                  <div className="rounded-2xl border border-sky-100 bg-sky-50 px-5 py-4 mb-4 flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-xl bg-sky-100 flex items-center justify-center flex-shrink-0">
+                      <CalendarDays size={16} className="text-sky-600" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-black text-sky-900">Class hasn't started yet</div>
+                      <p className="mt-0.5 text-xs font-semibold text-sky-600">
+                        {matchingScheduleForSelectedDate
+                          ? `This class starts at ${formatTime(matchingScheduleForSelectedDate.time_slot)}. You can write the lesson after the class begins.`
+                          : "You can write the lesson after the class begins."}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Permission status */}
+                {studentId && isDateValid && !classIsUpcomingToday && !dailyReports.find(r => String(r.student_id) === String(studentId) && String(r.date) === String(lessonDate)) && (
+                  <div className="tp-permission-panel mb-4">
+                    <div>
+                      <div className="text-xs font-black text-slate-700">Permission Status</div>
+                      <div className="text-xs text-slate-500 mt-1">
+                        {canAddNormalWindow && "Normal 24-hour add window is open. You can write the lesson."}
+                        {!canAddNormalWindow && addPermission && "Coordinator enabled Add permission for this date."}
+                        {!canAddNormalWindow && !addPermission && pendingAddRequest && "Your Add permission request is waiting for coordinator approval."}
+                        {!canAddNormalWindow && !addPermission && !pendingAddRequest && "Select the student and date, then request Add permission from the coordinator."}
+                      </div>
+                    </div>
+                    <span className={canAddLesson ? "tp-live-badge" : "tp-past-badge"}>
+                      {canAddLesson ? "Can Write" : pendingAddRequest ? "Request Pending" : "Locked"}
+                    </span>
+                  </div>
+                )}
+
+                {/* Permission request button */}
+                {studentId && isDateValid && !classIsUpcomingToday && !canAddLesson && !dailyReports.find(r => String(r.student_id) === String(studentId) && String(r.date) === String(lessonDate)) && (
+                  <div className="rounded-2xl border border-amber-100 bg-amber-50 px-5 py-4 mb-4">
+                    <div className="text-sm font-black text-amber-900">Coordinator permission required</div>
+                    <p className="mt-1 text-xs font-semibold text-amber-700">The add window has expired for this date. Request permission from the coordinator.</p>
+                    <button
+                      type="button"
+                      onClick={handleRequestLessonPermission}
+                      disabled={requestingPermission || Boolean(pendingAddRequest)}
+                      className="tp-save-btn mt-4"
+                    >
+                      {requestingPermission ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                      {pendingAddRequest ? "Request Pending" : "Request Add Permission"}
+                    </button>
+                  </div>
+                )}
+
+                {/* Optional notes */}
+                {studentId && isDateValid && canAddLesson && !dailyReports.find(r => String(r.student_id) === String(studentId) && String(r.date) === String(lessonDate)) && (
+                  <div className="tp-field mb-2">
+                    <label className="tp-label">Overall Notes (optional)</label>
+                    <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional notes for this lesson report..." className="tp-input-el" />
+                  </div>
+                )}
               </div>
 
-              {/* Save sidebar */}
-              <div className="xl:sticky xl:top-0 h-fit tp-card">
-                <h3 className="text-sm font-bold text-slate-800 mb-1">Save Lesson Report</h3>
-                <p className="text-xs text-slate-500 mb-4">Review details before saving</p>
-                <div className="tp-summary-card mb-5">
-  <div className="tp-summary-label">Topic Summary</div>
-  <div className="tp-summary-value">
-    {topicSummary || "No lesson selected yet."}
-  </div>
-</div>
-                <div className="space-y-2 mb-5">
-                  {[
-                    { label: "Student", value: selectedStudent?.name || "-" },
-                    { label: "Subject", value: subject || "-" },
-                    { label: "Date", value: lessonDate },
-                    { label: "Progress", value: statusLabel(progressStatus) },
-                  ].map(({ label, value }) => (
-                    <div key={label} className="flex justify-between items-center py-2 border-b border-slate-100 last:border-0">
-                      <span className="text-xs text-slate-500 font-medium">{label}</span>
-                      <span className="text-xs font-bold text-slate-800">{value}</span>
+{/* Subject area (table-like layout matching screenshots) */}
+              {studentId && isDateValid && canAddLesson && !isDateBeforeEnrollment && !dailyReports.find(r => String(r.student_id) === String(studentId) && String(r.date) === String(lessonDate)) && (
+                <div className="tp-card p-0 overflow-hidden">
+                  {/* Table header */}
+                  <div className="tp-subjects-table-header">
+                    <div className="tp-subjects-col-subject">Subject</div>
+                    <div className="tp-subjects-col-topics">Topics Covered</div>
+                  </div>
+
+{/* Subject entries */}
+                <div className="divide-y divide-slate-100">
+                  {subjectEntries.map((entry, index) => (
+                    <div key={entry.id} className="tp-subjects-row">
+                      {/* Subject dropdown (left column) */}
+                      <div className="tp-subjects-col-subject">
+                        <select
+                          value={entry.subject}
+                          onChange={e => {
+                            const newSubject = e.target.value;
+                            const fresh = newSubjectEntry(newSubject);
+                            handleUpdateEntry(index, { ...fresh, id: entry.id, subject: newSubject, expanded: entry.expanded });
+                          }}
+                          className="tp-compact-select"
+                        >
+                          {ALL_SUBJECTS
+                            .filter(s => s === entry.subject || !usedSubjects.filter((_, i) => i !== index).includes(s))
+                            .map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+
+                      {/* Topics (right column) */}
+                      <div className="tp-subjects-col-topics">
+                        <SubjectEntryCard
+                          entry={entry}
+                          index={index}
+                          totalEntries={subjectEntries.length}
+                          onChange={updated => handleUpdateEntry(index, updated)}
+                          onRemove={() => handleRemoveEntry(index)}
+                        />
+                      </div>
                     </div>
                   ))}
                 </div>
-                <button type="submit" disabled={saving} className="tp-save-btn w-full">
-                  {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                  {saving ? "Saving..." : "Save Lesson"}
-                </button>
-              </div>
+
+                  {/* Add Subject button */}
+                  {canAddMoreSubjects && (
+                    <div className="px-5 py-4 border-t border-slate-100">
+                      <button type="button" onClick={handleAddSubject} className="tp-add-subject-btn">
+                        <Plus size={16} /> Add Subject Area
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+            
+              {/* Save button */}
+              {studentId && isDateValid && canAddLesson && !isDateBeforeEnrollment && subjectEntries.length > 0 && !dailyReports.find(r => String(r.student_id) === String(studentId) && String(r.date) === String(lessonDate)) && (
+                <div className="tp-card flex items-center justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-black text-slate-800">Save Daily Lesson Report</div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {selectedStudent?.name} · {formatDate(lessonDate)} · {subjectEntries.length} subject{subjectEntries.length !== 1 ? "s" : ""}
+                    </p>
+                  </div>
+                  <button type="submit" disabled={saving || !canAddLesson} className="tp-save-btn px-8">
+                    {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    {saving ? "Saving..." : "Save Report"}
+                  </button>
+                </div>
+              )}
             </form>
           )}
 
-          {/* ── MONTHLY LESSON PLAN ── */}
-{activeTab === "monthly" && (
-  <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-5">
-    <form onSubmit={handleSaveMonthlyPlan} className="tp-card space-y-5">
-<div className="tp-form-hero">
-  <div className="tp-form-hero-left">
-    <div className="tp-brand-icon-sm">
-      <CalendarDays size={18} />
-    </div>
-    <div>
-      <h2 className="text-lg font-black text-slate-900">Monthly Lesson Plan</h2>
-      <p className="text-sm text-slate-500 mt-1">
-       
-  Prepare the monthly lesson plan for the selected student and subject.
-</p>
-    </div>
-  </div>
-
-  <div className="tp-form-hero-badge">
-    {selectedMonthlyStudent?.name || "Select Student"}
-  </div>
-</div>
-
-      {monthlyMessage && (
-        <div
-          className={`rounded-xl border px-4 py-3 text-sm font-semibold ${
-            monthlyMessage.includes("success")
-              ? "bg-emerald-50 border-emerald-200 text-emerald-700"
-              : "bg-amber-50 border-amber-200 text-amber-800"
-          }`}
-        >
-          {monthlyMessage}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="tp-field md:col-span-2">
-          <label className="tp-label">Student</label>
-          <select
-            value={monthlyStudentId}
-            onChange={(event) => handleMonthlyStudentChange(event.target.value)}
-            className="tp-select"
-          >
-            <option value="">Select student</option>
-            {students.map((student) => (
-              <option key={student.id} value={student.id}>
-                {student.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="tp-field">
-          <label className="tp-label">Month</label>
-          <select
-            value={monthlyMonth}
-            onChange={(event) => setMonthlyMonth(Number(event.target.value))}
-            className="tp-select"
-          >
-            {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => (
-              <option key={month} value={month}>
-                {new Date(2026, month - 1, 1).toLocaleDateString("en-US", {
-                  month: "long",
-                })}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="tp-field">
-          <label className="tp-label">Year</label>
-          <input
-            type="number"
-            value={monthlyYear}
-            onChange={(event) => setMonthlyYear(Number(event.target.value))}
-            className="tp-input-el"
-            min={2000}
-          />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="tp-field">
-          <label className="tp-label">Subject</label>
-          <select
-            value={monthlySubject}
-            disabled={!monthlyStudentId}
-            onChange={(event) => setMonthlySubject(event.target.value)}
-            className="tp-select"
-          >
-            {!monthlyStudentId && <option value="">Select student first</option>}
-
-            {monthlyStudentId &&
-              ALL_SUBJECTS.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-          </select>
-        </div>
-
-        <div className="tp-field">
-          <label className="tp-label">Plan Status</label>
-          <select
-            value={monthlyStatus}
-            onChange={(event) => setMonthlyStatus(event.target.value as MonthlyPlanStatus)}
-            className="tp-select"
-          >
-            <option value="planned">Planned</option>
-            <option value="in_progress">In Progress</option>
-            <option value="completed">Completed</option>
-          </select>
-        </div>
-      </div>
-
-      <div className="tp-field">
-        <label className="tp-label">Monthly Lesson Plan</label>
-        <textarea
-          value={monthlyPlanText}
-          onChange={(event) => setMonthlyPlanText(event.target.value)}
-          className="tp-textarea"
-          rows={7}
-          placeholder="Write the full monthly plan for this student and subject..."
-        />
-      </div>
-
-
-      <button type="submit" disabled={monthlySaving} className="tp-save-btn w-full">
-        {monthlySaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-        {existingMonthlyPlan
-          ? monthlySaving
-            ? "Updating..."
-            : "Update Monthly Plan"
-          : monthlySaving
-          ? "Saving..."
-          : "Save Monthly Plan"}
-      </button>
-    </form>
-
-    <aside className="tp-card h-fit space-y-4">
-      <div>
-        <h3 className="text-sm font-bold text-slate-800">
-          Monthly Lesson Summary
-        </h3>
-        <p className="text-xs text-slate-500 mt-1">
-          Generate the end-of-month student summary from saved daily lessons.
-        </p>
-      </div>
-
-<button
-  type="button"
-  onClick={handleGenerateMonthlySummary}
-  disabled={!monthlyStudentId || monthlySummarySaving}
-  className="tp-auto-btn w-full justify-center"
->
-  {monthlySummarySaving && <Loader2 size={14} className="animate-spin" />}
-  {monthlySummarySaving ? "Generating..." : "Generate Summary"}
-</button>
-
-      {!monthlyStudentId && (
-        <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-700">
-          Select a student to generate or view the monthly summary.
-        </div>
-      )}
-
-      {monthlyLoading ? (
-        <div className="flex items-center gap-2 text-sm text-slate-500">
-          <Loader2 size={16} className="animate-spin" />
-          Loading monthly summary...
-        </div>
-      ) : monthlySummary ? (
-        <>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-xl bg-indigo-50 border border-indigo-100 p-4">
-              <div className="text-xs font-semibold text-indigo-600">Lessons</div>
-              <div className="text-2xl font-black text-indigo-900 mt-1">
-                {monthlySummary.total_lessons}
-              </div>
-            </div>
-
-            <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4">
-              <div className="text-xs font-semibold text-emerald-600">Plans</div>
-              <div className="text-2xl font-black text-emerald-900 mt-1">
-                {monthlySummary.total_plans}
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-xl bg-slate-50 border border-slate-100 p-4">
-            <div className="text-xs font-black uppercase tracking-widest text-slate-500 mb-2">
-              Subjects Covered
-            </div>
-
-            {Object.keys(monthlySummary.subjects || {}).length === 0 ? (
-              <p className="text-xs text-slate-400">No subjects covered yet.</p>
-            ) : (
-              <div className="space-y-2">
-                {Object.entries(monthlySummary.subjects).map(([subjectName, count]) => (
-                  <div key={subjectName} className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-slate-700">{subjectName}</span>
-                    <span className="font-black text-slate-900">{count}</span>
+          {/* ── Monthly Tab ── */}
+          {activeTab === "monthly" && (
+            <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-5">
+              <form onSubmit={handleSaveMonthlyPlan} className="tp-card space-y-5">
+                <div className="tp-form-hero">
+                  <div className="tp-form-hero-left">
+                    <div className="tp-brand-icon-sm"><CalendarDays size={18} /></div>
+                    <div>
+                      <h2 className="text-lg font-black text-slate-900">Monthly Lesson Plan</h2>
+                      <p className="text-sm text-slate-500 mt-1">Prepare the monthly lesson plan for the selected student and subject.</p>
+                    </div>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-         <div className="tp-summary-card">
-            <div className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2">
-              Monthly Summary
-            </div>
-
-            {!monthlyStudentId ? (
-              <p className="text-sm font-black text-slate-800 leading-relaxed">
-  Select a student to view their monthly summary.
-</p>
-            ) : savedMonthlySummary ? (
-              <div className="space-y-3">
-                <div>
-                <div className="text-base font-black text-slate-900">
-  {selectedMonthlyStudent?.name || savedMonthlySummary.student_name}
-</div>
-<p className="text-sm text-slate-600 mt-2 leading-relaxed whitespace-pre-line">
-  {savedMonthlySummary.summary_text}
-</p>
+                  <div className="tp-form-hero-badge">{selectedMonthlyStudent?.name || "Select Student"}</div>
                 </div>
 
-                {savedMonthlySummary.strengths && (
-                  <div className="rounded-lg bg-white/5 px-3 py-2">
-                    <div className="text-[10px] font-black uppercase tracking-widest text-emerald-300">
-                      Strengths
-                    </div>
-                    <p className="text-xs text-slate-200 mt-1 whitespace-pre-line">
-                      {savedMonthlySummary.strengths}
-                    </p>
+                {monthlyMessage && (
+                  <div className={`rounded-xl border px-4 py-3 text-sm font-semibold ${monthlyMessage.toLowerCase().includes("success") ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
+                    {monthlyMessage}
                   </div>
                 )}
 
-                {savedMonthlySummary.improvement_areas && (
-                  <div className="rounded-lg bg-white/5 px-3 py-2">
-                    <div className="text-[10px] font-black uppercase tracking-widest text-amber-300">
-                      Needs Focus
-                    </div>
-                    <p className="text-xs text-slate-200 mt-1 whitespace-pre-line">
-                      {savedMonthlySummary.improvement_areas}
-                    </p>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div className="tp-field md:col-span-2">
+                    <label className="tp-label">Student</label>
+                    <select value={monthlyStudentId} onChange={e => handleMonthlyStudentChange(e.target.value)} className="tp-select">
+                      <option value="">Select student</option>
+                      {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
                   </div>
-                )}
-
-                {savedMonthlySummary.parent_message && (
-                  <div className="rounded-lg bg-white/5 px-3 py-2">
-                    <div className="text-[10px] font-black uppercase tracking-widest text-indigo-300">
-                      Parent Message
-                    </div>
-                    <p className="text-xs text-slate-200 mt-1 whitespace-pre-line">
-                      {savedMonthlySummary.parent_message}
-                    </p>
+                  <div className="tp-field">
+                    <label className="tp-label">Month</label>
+                    <select value={monthlyMonth} onChange={e => setMonthlyMonth(Number(e.target.value))} className="tp-select">
+                      {Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{monthName(m)}</option>)}
+                    </select>
                   </div>
-                )}
-              </div>
-            ) : selectedStudentAutoSummary ? (
-              <div>
-                <div className="text-base font-black text-slate-900">
-  {selectedStudentAutoSummary.student_name}
-</div>
-<p className="text-sm text-slate-600 mt-2 leading-relaxed">
-  {selectedStudentAutoSummary.auto_summary}
-</p>
-<p className="text-xs font-semibold text-slate-500 mt-4">
-  Click Generate Summary to save the full monthly summary.
-</p>
-              </div>
-            ) : (
-             <p className="text-sm font-black text-slate-800 leading-relaxed">
-  No lessons found for this student in the selected month.
-</p>
-            )}
-          </div>
+                  <div className="tp-field">
+                    <label className="tp-label">Year</label>
+                    <input type="number" value={monthlyYear} onChange={e => setMonthlyYear(Number(e.target.value))} className="tp-input-el" min={2000} />
+                  </div>
+                </div>
 
-          {existingMonthlyPlan && (
-            <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
-              <div className="text-xs font-black uppercase tracking-widest text-blue-500 mb-1">
-                Existing Plan
-              </div>
-              <p className="text-xs font-semibold text-blue-700">
-                This student already has a plan for this month and subject. Saving will update it.
-              </p>
+<div className="tp-field">
+                  <label className="tp-label">Plan Status</label>
+                  <select value={monthlyStatus} onChange={e => setMonthlyStatus(e.target.value as MonthlyPlanStatus)} className="tp-select">
+                    <option value="planned">Planned</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="completed">Completed</option>
+                  </select>
+                </div>
+
+                <div className="tp-field">
+                  <label className="tp-label">Monthly Lesson Plan</label>
+                  <textarea value={monthlyPlanText} onChange={e => setMonthlyPlanText(e.target.value)} className="tp-textarea" rows={7} placeholder="Write the full monthly plan for this student and subject..." />
+                </div>
+
+                <button type="submit" disabled={monthlySaving} className="tp-save-btn w-full">
+                  {monthlySaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                  {existingMonthlyPlan ? (monthlySaving ? "Updating..." : "Update Monthly Plan") : monthlySaving ? "Saving..." : "Save Monthly Plan"}
+                </button>
+              </form>
+
+              <aside className="tp-card h-fit space-y-4">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800">Monthly Lesson Summary</h3>
+                  <p className="text-xs text-slate-500 mt-1">Generate the end-of-month student summary from saved daily lessons.</p>
+                </div>
+                <button type="button" onClick={handleGenerateMonthlySummary} disabled={!monthlyStudentId || monthlySummarySaving} className="tp-auto-btn w-full justify-center">
+                  {monthlySummarySaving && <Loader2 size={14} className="animate-spin" />}
+                  {monthlySummarySaving ? "Generating..." : "Generate Summary"}
+                </button>
+
+                {monthlyLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 size={16} className="animate-spin" /> Loading...</div>
+                ) : monthlySummary ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-xl bg-indigo-50 border border-indigo-100 p-4">
+                        <div className="text-xs font-semibold text-indigo-600">Lessons</div>
+                        <div className="text-2xl font-black text-indigo-900 mt-1">{monthlySummary.total_lessons}</div>
+                      </div>
+                      <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4">
+                        <div className="text-xs font-semibold text-emerald-600">Plans</div>
+                        <div className="text-2xl font-black text-emerald-900 mt-1">{monthlySummary.total_plans}</div>
+                      </div>
+                    </div>
+                    <div className="tp-summary-card">
+                      <div className="tp-summary-label">Monthly Summary</div>
+                      {!monthlyStudentId ? (
+                        <p className="text-sm font-black text-slate-800">Select a student to view their monthly summary.</p>
+                      ) : savedMonthlySummary ? (
+                        <div>
+                          <div className="text-base font-black text-slate-900">{selectedMonthlyStudent?.name || savedMonthlySummary.student_name}</div>
+                          <p className="text-sm text-slate-600 mt-2 leading-relaxed whitespace-pre-line">{savedMonthlySummary.summary_text}</p>
+                        </div>
+                      ) : selectedStudentAutoSummary ? (
+                        <div>
+                          <div className="text-base font-black text-slate-900">{selectedStudentAutoSummary.student_name}</div>
+                          <p className="text-sm text-slate-600 mt-2 leading-relaxed">{selectedStudentAutoSummary.auto_summary}</p>
+                          <p className="text-xs font-semibold text-slate-500 mt-4">Click Generate Summary to save the full monthly summary.</p>
+                        </div>
+                      ) : (
+                        <p className="text-sm font-black text-slate-800">No lessons found for this student in the selected month.</p>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-sm text-slate-400">Select a month to view summary.</p>
+                )}
+              </aside>
             </div>
           )}
-        </>
-      ) : (
-        <p className="text-sm text-slate-400">Select a month to view summary.</p>
-      )}
-    </aside>
-  </div>
-)}
 
-          {/* ── ATTENDANCE ── */}
+          {/* ── Attendance Tab ── */}
           {activeTab === "attendance" && (
             <div className="space-y-5">
-              {/* Mini stats */}
               <div className="grid grid-cols-3 gap-4">
-             {[
-  { label: "Present", value: filteredPresentCount, color: "emerald" },
-  { label: "Absent", value: filteredAbsentCount, color: "rose" },
-  { label: "Leave", value: filteredLeaveCount, color: "amber" },
-].map(({ label, value, color }) => (
+                {[{ label: "Present", value: filteredPresentCount, color: "emerald" }, { label: "Absent", value: filteredAbsentCount, color: "rose" }, { label: "Leave", value: filteredLeaveCount, color: "amber" }].map(({ label, value, color }) => (
                   <div key={label} className={`tp-att-stat tp-att-stat--${color}`}>
                     <div className="text-xs font-semibold opacity-70">{label}</div>
                     <div className="text-2xl font-black mt-1">{value}</div>
@@ -2316,151 +2201,83 @@ return (
               <div className="tp-card p-0 overflow-hidden">
                 <div className="px-5 py-4 border-b border-slate-100">
                   <h2 className="text-base font-bold text-slate-800">Attendance Records</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-  Coordinator marks attendance. View-only for teachers.
-</p>
-
-<div className="tp-filter-shell mt-4">
-  <div className="tp-filter-grid">
-    <div className="tp-field">
-      <label className="tp-label">View</label>
-      <select
-        value={attendanceView}
-        onChange={(event) => setAttendanceView(event.target.value as "all" | "daily" | "weekly" | "monthly" | "yearly")}
-        className="tp-select"
-      >
-        <option value="all">All</option>
-        <option value="daily">Daily</option>
-        <option value="weekly">Weekly</option>
-        <option value="monthly">Monthly</option>
-        <option value="yearly">Yearly</option>
-      </select>
-    </div>
-
-    <div className="tp-field">
-      <label className="tp-label">Student</label>
-      <select
-        value={attendanceStudentFilter}
-        onChange={(event) => setAttendanceStudentFilter(event.target.value)}
-        className="tp-select"
-      >
-        <option value="">All students</option>
-        {students.map((student) => (
-          <option key={student.id} value={student.id}>
-            {student.name}
-          </option>
-        ))}
-      </select>
-    </div>
-
-    {(attendanceView === "daily" || attendanceView === "weekly") && (
-      <div className="tp-field">
-        <label className="tp-label">{attendanceView === "daily" ? "Date" : "Week From"}</label>
-        <input
-          type="date"
-          value={attendanceDateFilter}
-          onChange={(event) => setAttendanceDateFilter(event.target.value)}
-          className="tp-input-el"
-        />
-      </div>
-    )}
-
-    {attendanceView === "monthly" && (
-      <>
-        <div className="tp-field">
-          <label className="tp-label">Month</label>
-          <select
-            value={attendanceMonthFilter}
-            onChange={(event) => setAttendanceMonthFilter(Number(event.target.value))}
-            className="tp-select"
-          >
-            {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => (
-              <option key={month} value={month}>
-                {new Date(2026, month - 1, 1).toLocaleDateString("en-US", { month: "long" })}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="tp-field">
-          <label className="tp-label">Year</label>
-          <input
-            type="number"
-            value={attendanceYearFilter}
-            onChange={(event) => setAttendanceYearFilter(Number(event.target.value))}
-            className="tp-input-el"
-            min={2000}
-          />
-        </div>
-      </>
-    )}
-
-    {attendanceView === "yearly" && (
-      <div className="tp-field">
-        <label className="tp-label">Year</label>
-        <input
-          type="number"
-          value={attendanceYearFilter}
-          onChange={(event) => setAttendanceYearFilter(Number(event.target.value))}
-          className="tp-input-el"
-          min={2000}
-        />
-      </div>
-    )}
-  </div>
-
-  <div className="mt-3 flex flex-wrap gap-2">
-    <button
-      type="button"
-      onClick={() => {
-        setAttendanceView("all");
-        setAttendanceStudentFilter("");
-        setAttendanceDateFilter(today());
-        setAttendanceMonthFilter(new Date().getMonth() + 1);
-        setAttendanceYearFilter(new Date().getFullYear());
-      }}
-      className="tp-auto-btn"
-    >
-      Reset Filters
-    </button>
-  </div>
-</div>
+                  <p className="text-xs text-slate-500 mt-0.5">Coordinator marks attendance. View-only for teachers.</p>
+                  <div className="tp-filter-shell mt-4">
+                    <div className="tp-filter-grid">
+                      <div className="tp-field">
+                        <label className="tp-label">View</label>
+                        <select value={attendanceView} onChange={e => setAttendanceView(e.target.value as any)} className="tp-select">
+                          <option value="all">All</option>
+                          <option value="daily">Daily</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                          <option value="yearly">Yearly</option>
+                        </select>
+                      </div>
+                      <div className="tp-field">
+                        <label className="tp-label">Student</label>
+                        <select value={attendanceStudentFilter} onChange={e => setAttendanceStudentFilter(e.target.value)} className="tp-select">
+                          <option value="">All students</option>
+                          {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                        </select>
+                      </div>
+                      {(attendanceView === "daily" || attendanceView === "weekly") && (
+                        <div className="tp-field">
+                          <label className="tp-label">{attendanceView === "daily" ? "Date" : "Week From"}</label>
+                          <input type="date" value={attendanceDateFilter} onChange={e => setAttendanceDateFilter(e.target.value)} className="tp-input-el" />
+                        </div>
+                      )}
+                      {attendanceView === "monthly" && (<>
+                        <div className="tp-field">
+                          <label className="tp-label">Month</label>
+                          <select value={attendanceMonthFilter} onChange={e => setAttendanceMonthFilter(Number(e.target.value))} className="tp-select">
+                            {Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{monthName(m)}</option>)}
+                          </select>
+                        </div>
+                        <div className="tp-field">
+                          <label className="tp-label">Year</label>
+                          <input type="number" value={attendanceYearFilter} onChange={e => setAttendanceYearFilter(Number(e.target.value))} className="tp-input-el" min={2000} />
+                        </div>
+                      </>)}
+                      {attendanceView === "yearly" && (
+                        <div className="tp-field">
+                          <label className="tp-label">Year</label>
+                          <input type="number" value={attendanceYearFilter} onChange={e => setAttendanceYearFilter(Number(e.target.value))} className="tp-input-el" min={2000} />
+                        </div>
+                      )}
+                    </div>
+                    <button type="button" onClick={() => { setAttendanceView("all"); setAttendanceStudentFilter(""); setAttendanceDateFilter(today()); setAttendanceMonthFilter(new Date().getMonth() + 1); setAttendanceYearFilter(new Date().getFullYear()); }} className="tp-auto-btn mt-3">
+                      Reset Filters
+                    </button>
+                  </div>
                 </div>
+
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-sm">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-100">
-                        {["Date", "Type", "Name", "Status", "Marked By"].map((h) => (
+                        {["Date", "Type", "Name", "Status", "Marked By"].map(h => (
                           <th key={h} className="px-5 py-3 text-xs font-black text-slate-500 uppercase tracking-wide">{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
-                      {paginatedAttendanceRows.map((item: any) => {
+                      {paginatedAttendanceRows.map(item => {
                         const pc = progressColor(item.status);
                         return (
                           <tr key={item.id} className="hover:bg-slate-50/70 transition-colors">
-                            <td className="px-5 py-3 font-semibold text-slate-800">{item.date}</td>
+                            <td className="px-5 py-3 font-semibold text-slate-800">{formatDate(item.date)}</td>
                             <td className="px-5 py-3 text-slate-600 capitalize">{item.entity_type}</td>
                             <td className="px-5 py-3 font-semibold text-slate-800">{item.student_name || item.teacher_name || "-"}</td>
-<td className="px-5 py-3">
-  <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold ${pc.light}`}>
-    <span className={`h-1.5 w-1.5 rounded-full ${pc.dot}`} />
-    {statusLabel(item.status)}
-  </span>
-</td>
-
-<td className="px-5 py-3 text-slate-600">
-  <div className="font-semibold text-slate-700">
-    {markedByLabel(item)}
-  </div>
-
-  {item.updated_at && (
-    <div className="text-[11px] text-slate-400 mt-0.5">
-      Updated {new Date(item.updated_at).toLocaleString()}
-    </div>
-  )}
-</td>
+                            <td className="px-5 py-3">
+                              <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold ${pc.light}`}>
+                                <span className={`h-1.5 w-1.5 rounded-full ${pc.dot}`} /> {statusLabel(item.status)}
+                              </span>
+                            </td>
+                            <td className="px-5 py-3 text-slate-600">
+                              <div className="font-semibold text-slate-700">{markedByLabel(item)}</div>
+                              {item.updated_at && <div className="text-[11px] text-slate-400 mt-0.5">Updated {new Date(item.updated_at).toLocaleString()}</div>}
+                            </td>
                           </tr>
                         );
                       })}
@@ -2471,1484 +2288,530 @@ return (
                   </table>
                 </div>
               </div>
+
               {attendanceRows.length > PAGE_SIZE && (
-  <div className="tp-pagination px-5 pb-5">
-    <button
-      type="button"
-      onClick={() => setAttendancePage((page) => Math.max(1, page - 1))}
-      disabled={safeAttendancePage === 1}
-      className="tp-page-btn"
-    >
-      Previous
-    </button>
-
-    <span className="tp-page-info">
-      Page {safeAttendancePage} of {attendanceTotalPages}
-    </span>
-
-    <button
-      type="button"
-      onClick={() => setAttendancePage((page) => Math.min(attendanceTotalPages, page + 1))}
-      disabled={safeAttendancePage === attendanceTotalPages}
-      className="tp-page-btn"
-    >
-      Next
-    </button>
-  </div>
-)}
+                <Pagination page={safeAttendancePage} totalPages={attendanceTotalPages} onPrev={() => setAttendancePage(p => Math.max(1, p - 1))} onNext={() => setAttendancePage(p => Math.min(attendanceTotalPages, p + 1))} />
+              )}
             </div>
           )}
 
-          {/* ── HISTORY ── */}
-          {activeTab === "history" && (
+{/* ── History Tab: List view ── */}
+          {activeTab === "history" && !editingGroup && (
             <div className="space-y-4">
-<div className="flex flex-col gap-4">
-  <div className="flex items-center justify-between">
-    <div>
-      <h2 className="text-base font-bold text-slate-800">Lesson History</h2>
-      <p className="text-xs text-slate-500 mt-0.5">Latest saved lesson reports</p>
-    </div>
-
-    <button onClick={() => setActiveTab("lesson")} className="tp-save-btn px-4 py-2 text-xs">
-      <BookOpen size={14} /> New Lesson
-    </button>
-  </div>
-
-  <div className="flex flex-col sm:flex-row gap-3">
-    <select
-      value={historyStudentFilter}
-      onChange={(event) => setHistoryStudentFilter(event.target.value)}
-      className="tp-select sm:max-w-xs"
-    >
-      <option value="">All students</option>
-      {students.map((student) => (
-        <option key={student.id} value={student.id}>
-          {student.name}
-        </option>
-      ))}
-    </select>
-
-    {historyStudentFilter && (
-      <button
-        type="button"
-        onClick={() => setHistoryStudentFilter("")}
-        className="tp-auto-btn"
-      >
-        Clear Student Filter
-      </button>
-    )}
-  </div>
-</div>
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-bold text-slate-800">Lesson History</h2>
+                    <p className="text-xs text-slate-500 mt-0.5">Daily cards show all subjects saved for each student and date.</p>
+                  </div>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <select value={historyStudentFilter} onChange={e => setHistoryStudentFilter(e.target.value)} className="tp-select sm:max-w-xs">
+                    <option value="">All students</option>
+                    {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                  {historyStudentFilter && (
+                    <button type="button" onClick={() => setHistoryStudentFilter("")} className="tp-auto-btn">Clear Filter</button>
+                  )}
+                </div>
+              </div>
 
               <div className="space-y-3">
-                {paginatedHistoryLessons.map((lesson: any) => {
-                  const pc = progressColor(lesson.progress_status);
+                {paginatedHistoryGroups.map(group => {
+                  const hasAnyEditPerm = group.lessons.some(lesson =>
+                    permissions.some(p =>
+                      p.is_active &&
+                      String(p.student_id) === String(group.studentId) &&
+                      String(p.lesson_date || p.date) === String(group.date) &&
+                      p.access_type === "edit" &&
+                      String((p as any).subject || "") === String(lesson.subject || "")
+                    )
+                  );
+                  const hasAnyPending = group.lessons.some(lesson =>
+                    lessonRequests.some(r =>
+                      r.status === "pending" &&
+                      r.request_type === "edit" &&
+                      String(r.student_id) === String(group.studentId) &&
+                      String(r.lesson_date || (r as any).date) === String(group.date) &&
+                      String(r.subject || "") === String(lesson.subject || "")
+                    )
+                  );
+
                   return (
-                    <div key={lesson.id} className="tp-card tp-lesson-card">
+                    <div key={group.key} className="tp-card">
                       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <h3 className="text-sm font-bold text-slate-800">{lesson.topic_summary || lesson.title || "Lesson"}</h3>
-                            <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-bold ${pc.light}`}>
-                              <span className={`h-1.5 w-1.5 rounded-full ${pc.dot}`} />
-                              {statusLabel(lesson.progress_status)}
-                            </span>
+                            <h3 className="text-sm font-black text-slate-900">Daily Lesson Report</h3>
+                            <span className="tp-soft-pill">{group.lessons.length} subject{group.lessons.length === 1 ? "" : "s"}</span>
+                            {hasAnyEditPerm && <span className="tp-live-badge">Edit Allowed</span>}
+                            {!hasAnyEditPerm && hasAnyPending && <span className="tp-past-badge">Edit Request Pending</span>}
                           </div>
-                          <p className="mt-1 text-xs text-slate-500">{lesson.subject} · {lesson.student_name} · {lesson.date}</p>
-                          {lesson.remarks && (
-                            <p className="mt-2 text-xs text-slate-600 bg-slate-50 rounded-lg px-3 py-2 border border-slate-100">{lesson.remarks}</p>
-                          )}
+                          <p className="mt-1 text-xs text-slate-500">{group.studentName} · {formatDate(group.date)}</p>
+                          <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3">
+                            {group.lessons.map(lesson => {
+                              const pc = progressColor(lesson.progress_status);
+                              return (
+                                <div key={lesson.id} className="tp-history-subject-card">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className="text-xs font-black text-slate-800">{lesson.subject || "Subject"}</div>
+                                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-bold ${pc.light}`}>
+                                      <span className={`h-1.5 w-1.5 rounded-full ${pc.dot}`} /> {statusLabel(lesson.progress_status)}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-slate-600 mt-1 leading-relaxed">{lesson.topic_summary || lesson.title || "Lesson"}</p>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <div className="shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEdit(group)}
+                            className="tp-save-btn text-xs px-4 py-2"
+                          >
+                            <Edit3 size={13} />
+                            {hasAnyEditPerm ? "Edit Lesson" : "Request Edit"}
+                          </button>
                         </div>
                       </div>
                     </div>
                   );
                 })}
-                {historyLessons.length === 0 && (
+                {historyGroups.length === 0 && (
                   <div className="tp-card tp-empty-state">
                     <BookOpen size={28} className="text-slate-300 mx-auto mb-3" />
                     <div className="font-bold text-slate-600">No lessons written yet</div>
-                    <div className="text-xs text-slate-400 mt-1">Create your first lesson report.</div>
+                    <div className="text-xs text-slate-400 mt-1">Create your first daily lesson report.</div>
                   </div>
                 )}
               </div>
-{historyLessons.length > PAGE_SIZE && (
-  <div className="tp-pagination">
-    <button
-      type="button"
-      onClick={() => setHistoryPage((page) => Math.max(1, page - 1))}
-      disabled={safeHistoryPage === 1}
-      className="tp-page-btn"
-    >
-      Previous
-    </button>
 
-    <span className="tp-page-info">
-      Page {safeHistoryPage} of {historyTotalPages}
-    </span>
+              {historyGroups.length > PAGE_SIZE && (
+                <Pagination page={safeHistoryPage} totalPages={historyTotalPages} onPrev={() => setHistoryPage(p => Math.max(1, p - 1))} onNext={() => setHistoryPage(p => Math.min(historyTotalPages, p + 1))} />
+              )}
+            </div>
+          )}
 
-    <button
-      type="button"
-      onClick={() => setHistoryPage((page) => Math.min(historyTotalPages, page + 1))}
-      disabled={safeHistoryPage === historyTotalPages}
-      className="tp-page-btn"
-    >
-      Next
-    </button>
-  </div>
-)}
+          {/* ── History Tab: Edit view ── */}
+          {activeTab === "history" && editingGroup && (
+            <div className="space-y-5">
+              <div className="tp-card">
+                <div className="flex items-center justify-between gap-3 mb-5">
+                  <div>
+                    <h2 className="text-base font-black text-slate-900">Edit Lesson Report</h2>
+                    <p className="text-xs text-slate-500 mt-0.5">{editingGroup.studentName} · {formatDate(editingGroup.date)}</p>
+                  </div>
+                  <button type="button" onClick={() => { setEditingGroup(null); setEditMessage(""); }} className="tp-auto-btn">
+                    ← Back
+                  </button>
+                </div>
 
+                {editMessage && (
+                  <div className={`rounded-xl border px-4 py-3 text-sm font-semibold mb-4 ${
+                    editMessage.toLowerCase().includes("success") || editMessage.toLowerCase().includes("sent")
+                      ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                      : "bg-amber-50 border-amber-200 text-amber-800"
+                  }`}>
+                    {editMessage}
+                  </div>
+                )}
+
+                <div className="tp-field">
+                  <label className="tp-label">Overall Notes (optional)</label>
+                  <input value={editNotes} onChange={e => setEditNotes(e.target.value)} placeholder="Optional notes..." className="tp-input-el" />
+                </div>
+              </div>
+
+              <div className="tp-card p-0 overflow-hidden">
+                <div className="tp-subjects-table-header">
+                  <div className="tp-subjects-col-subject">Subject</div>
+                  <div className="tp-subjects-col-topics">Topics Covered</div>
+                </div>
+                <div className="divide-y divide-slate-100">
+                  {editSubjectEntries.map((entry, index) => {
+                    const editPerm = getEditPermissionForLesson(
+                      editingGroup.studentId,
+                      editingGroup.date,
+                      entry.subject
+                    );
+                    const pendingReq = getPendingEditRequest(
+                      editingGroup.studentId,
+                      editingGroup.date,
+                      entry.subject
+                    );
+                    const canEdit = Boolean(editPerm);
+
+                    return (
+                      <div key={entry.id} className="tp-subjects-row">
+                        <div className="tp-subjects-col-subject">
+                          <div className="text-sm font-black text-slate-800">{entry.subject}</div>
+                          <div className="mt-2">
+                            {canEdit
+                              ? <span className="tp-live-badge">Edit Allowed</span>
+                              : pendingReq
+                              ? <span className="tp-past-badge">Request Pending</span>
+                              : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRequestEditPermission(editingGroup.studentId, editingGroup.date, entry.subject)}
+                                  className="tp-mini-action-btn"
+                                >
+                                  Request Edit
+                                </button>
+                              )
+                            }
+                          </div>
+                        </div>
+                        <div className="tp-subjects-col-topics">
+                          {canEdit ? (
+                            <SubjectEntryCard
+                              entry={entry}
+                              index={index}
+                              totalEntries={editSubjectEntries.length}
+                              onChange={updated => setEditSubjectEntries(prev => prev.map((e, i) => i === index ? updated : e))}
+                              onRemove={() => {}}
+                            />
+                          ) : (
+                            <div className="tp-compact-card">
+                              <div className="tp-compact-header">
+                                <span className="tp-compact-summary" style={{ opacity: 0.6 }}>
+                                  {getTopicSummary(entry) || "No topic"}
+                                </span>
+                                <span className="tp-past-badge">Locked</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              {/* Add another subject in edit mode */}
+              <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-3 flex-wrap">
+                <select
+                  defaultValue=""
+                  onChange={e => {
+                    const newSubject = e.target.value;
+                    if (!newSubject) return;
+                    if (editSubjectEntries.some(en => en.subject === newSubject)) return;
+                    const fresh = newSubjectEntry(newSubject);
+                    fresh.expanded = true;
+                    setEditSubjectEntries(prev => [...prev, fresh]);
+                    e.target.value = "";
+                  }}
+                  className="tp-compact-select max-w-xs"
+                >
+                  <option value="">+ Add another subject…</option>
+                  {ALL_SUBJECTS
+                    .filter(s => !editSubjectEntries.some(en => en.subject === s))
+                    .map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <span className="text-xs text-slate-400 font-semibold">Request edit permission after adding</span>
+              </div>
             </div>
 
-
+              {editSubjectEntries.some(entry =>
+                Boolean(getEditPermissionForLesson(editingGroup.studentId, editingGroup.date, entry.subject))
+              ) && (
+                <div className="tp-card flex items-center justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-black text-slate-800">Save Edited Lesson</div>
+                    <p className="text-xs text-slate-500 mt-0.5">{editingGroup.studentName} · {formatDate(editingGroup.date)}</p>
+                  </div>
+                  <button type="button" onClick={handleSaveEdit} disabled={editSaving} className="tp-save-btn px-8">
+                    {editSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    {editSaving ? "Saving..." : "Save Changes"}
+                  </button>
+                </div>
+              )}
+            </div>
           )}
         </div>
-        
       </main>
 
-      <style>{`
-        /* ── Root & Sidebar ── */
-        .tp-root {
-          background: #f8f9fc;
-          font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-        }
-
-
-
-.tp-clock-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 58px;
-  padding: 8px 14px 8px 8px;
-  border-radius: 24px;
-  background: #ffffff;
-  border: 1px solid #e8eef7;
-  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.07);
-}
-
-.tp-analog-clock {
-  position: relative;
-  width: 48px;
-  height: 48px;
-  border-radius: 999px;
-  background:
-    radial-gradient(circle at center, #ffffff 0%, #f8fafc 62%, #eef2ff 100%);
-  border: 1px solid #e2e8f0;
-  box-shadow:
-    inset 0 3px 8px rgba(15, 23, 42, 0.06),
-    0 8px 20px rgba(15, 23, 42, 0.08);
-}
-
-.tp-clock-mark {
-  position: absolute;
-  font-size: 6px;
-  font-weight: 950;
-  color: #94a3b8;
-  line-height: 1;
-}
-
-.tp-clock-mark-12 {
-  top: 6px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.tp-clock-mark-3 {
-  right: 5px;
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.tp-clock-mark-6 {
-  bottom: 5px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.tp-clock-mark-9 {
-  left: 5px;
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.tp-clock-hand {
-  position: absolute;
-  left: 50%;
-  bottom: 50%;
-  transform-origin: bottom center;
-  border-radius: 999px;
-}
-
-.tp-clock-hour {
-  width: 3px;
-  height: 13px;
-  background: #0f172a;
-}
-
-.tp-clock-minute {
-  width: 2px;
-  height: 17px;
-  background: #64748b;
-}
-
-.tp-clock-second {
-  width: 1.5px;
-  height: 19px;
-  background: #ef4444;
-}
-
-.tp-clock-center {
-  position: absolute;
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: #ef4444;
-  border: 2px solid #ffffff;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  box-shadow: 0 2px 5px rgba(239, 68, 68, 0.35);
-}
-
-.tp-theme-btn {
-  width: 46px;
-  height: 46px;
-  border-radius: 17px;
-  border: 1px solid #e8eef7;
-  background: #ffffff;
-  color: #475569;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
-  transition: all 180ms ease;
-}
-
-.tp-theme-btn:hover {
-  transform: translateY(-1px);
-  color: #4f46e5;
-  background: #eef2ff;
-}
-
-
-.tp-today-panel {
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.92));
-}
-
-.tp-total-class-card {
-  border-radius: 22px;
-  background: #ffffff;
-  border: 1px solid #e8eef7;
-  padding: 18px;
-  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
-  transition: transform 180ms ease, box-shadow 180ms ease;
-}
-
-.tp-total-class-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 20px 44px rgba(15, 23, 42, 0.10);
-}
-
-.tp-pagination {
-  margin-top: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-}
-
-.tp-page-btn {
-  border-radius: 14px;
-  border: 1px solid #e0e7ff;
-  background: #eef2ff;
-  color: #4f46e5;
-  padding: 9px 16px;
-  font-size: 12px;
-  font-weight: 900;
-  transition: all 160ms ease;
-}
-
-.tp-page-btn:hover:not(:disabled) {
-  background: #4f46e5;
-  color: #ffffff;
-}
-
-.tp-page-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.tp-page-info {
-  font-size: 12px;
-  font-weight: 900;
-  color: #64748b;
-}
-
-.tp-today-class-card {
-  border-radius: 20px;
-  background: #ffffff;
-  border: 1px solid #e8eef7;
-  padding: 18px;
-  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
-  transition: all 180ms ease;
-}
-
-.tp-today-class-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 20px 44px rgba(15, 23, 42, 0.10);
-}
-
-.tp-today-class-card.live {
-  border-color: #86efac;
-  background:
-    radial-gradient(circle at 100% 0%, rgba(34,197,94,0.12), transparent 32%),
-    #ffffff;
-}
-
-.tp-today-class-card.past {
-  opacity: 0.72;
-}
-
-.tp-past-badge {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 999px;
-  padding: 5px 11px;
-  font-size: 11px;
-  font-weight: 900;
-  color: #64748b;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-}
-
-.tp-mini-action-btn {
-  border-radius: 12px;
-  border: 1px solid #e0e7ff;
-  background: #eef2ff;
-  color: #4f46e5;
-  padding: 7px 10px;
-  font-size: 11px;
-  font-weight: 900;
-  transition: all 160ms ease;
-}
-
-.tp-locked-note {
-  font-size: 11px;
-  font-weight: 900;
-  color: #94a3b8;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 999px;
-  padding: 7px 10px;
-}
-
-
-
-.tp-mini-action-btn:hover {
-  background: #4f46e5;
-  color: white;
-}
-
-
-.tp-page-scroll {
-  scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 transparent;
-}
-
-.tp-page-scroll::-webkit-scrollbar {
-  width: 10px;
-}
-
-.tp-page-scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.tp-page-scroll::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 999px;
-  border: 3px solid #f8f9fc;
-}
-
-.tp-page-scroll::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
-}
-        
-/* ── Premium Sidebar ── */
-.tp-sidebar {
-  width: 276px;
-  min-height: 100vh;
-  background:
-    radial-gradient(circle at 20% 0%, rgba(99, 102, 241, 0.12), transparent 30%),
-    linear-gradient(180deg, #ffffff 0%, #f8fbff 52%, #f3f7fc 100%);
-  border-right: 1px solid #e4ecf7;
-  flex-direction: column;
-  flex-shrink: 0;
-  overflow: hidden;
-  padding: 18px 14px;
-  box-shadow:
-    24px 0 70px rgba(15, 23, 42, 0.09),
-    inset -1px 0 0 rgba(255, 255, 255, 0.85);
-}
-
-.tp-sidebar-logo {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  padding: 12px;
-  border-radius: 26px;
-  background:
-    linear-gradient(135deg, rgba(255,255,255,0.98), rgba(248,250,252,0.94));
-  border: 1px solid #e2ebf6;
-  box-shadow:
-    0 22px 52px rgba(15, 23, 42, 0.10),
-    inset 0 1px 0 rgba(255,255,255,0.95);
-}
-
-.tp-logo-icon {
-  width: 58px;
-  height: 58px;
-  border-radius: 22px;
-  background:
-    radial-gradient(circle at center, #ffffff 0%, #ffffff 50%, #eef4ff 100%);
-  border: 1px solid #dce7f5;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  flex-shrink: 0;
-  box-shadow:
-    0 14px 30px rgba(15, 23, 42, 0.09),
-    inset 0 2px 8px rgba(255,255,255,0.95);
-}
-
-.tp-sidebar-logo-img {
-  width: 50px;
-  height: 50px;
-  object-fit: contain;
-  display: block;
-  border-radius: 999px;
-}
-
-.tp-sidebar-logo .text-white {
-  color: #0f172a !important;
-}
-
-.tp-sidebar-logo .text-slate-400 {
-  color: #64748b !important;
-}
-
-/* ── Sidebar Nav ── */
-.tp-nav-btn {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  min-height: 56px;
-  padding: 8px 10px;
-  border-radius: 22px;
-  font-size: 14px;
-  font-weight: 900;
-  color: #334155;
-  transition: all 0.2s ease;
-  text-align: left;
-  background: transparent;
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-
-.tp-nav-btn svg {
-  width: 42px;
-  height: 42px;
-  padding: 11px;
-  border-radius: 16px;
-  color: #64748b;
-  background:
-    linear-gradient(135deg, #ffffff, #f8fafc);
-  border: 1px solid #e4edf7;
-  box-shadow:
-    0 12px 26px rgba(15, 23, 42, 0.07),
-    inset 0 1px 0 rgba(255,255,255,0.95);
-  flex-shrink: 0;
-}
-
-.tp-nav-btn:hover {
-  background: rgba(255,255,255,0.82);
-  color: #111827;
-  transform: translateX(2px);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
-}
-
-.tp-nav-btn:hover svg {
-  color: #4f46e5;
-  background: #eef2ff;
-  border-color: #dbe5ff;
-}
-
-.tp-nav-btn.active {
-  background:
-    linear-gradient(135deg, #ffffff 0%, #f8faff 100%);
-  color: #4f46e5;
-  border-color: #111827;
-  box-shadow:
-    0 20px 46px rgba(15, 23, 42, 0.12),
-    inset 0 1px 0 rgba(255,255,255,0.95);
-}
-
-
-.tp-nav-btn.active svg {
-  color: #4f46e5;
-  background:
-    linear-gradient(135deg, #eef2ff, #f5f3ff);
-  border-color: #dbe5ff;
-}
-
-/* ── Teacher Card ── */
-.tp-teacher-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px;
-  background:
-    linear-gradient(135deg, #ffffff, #f8fafc);
-  border: 1px solid #e2ebf6;
-  border-radius: 24px;
-  box-shadow:
-    0 18px 44px rgba(15, 23, 42, 0.09),
-    inset 0 1px 0 rgba(255,255,255,0.95);
-}
-
-.tp-avatar-sm {
-  width: 40px;
-  height: 40px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: 950;
-  color: white;
-  flex-shrink: 0;
-  box-shadow: 0 12px 24px rgba(99,102,241,0.25);
-}
-
-.tp-logout-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  padding: 14px 16px;
-  border-radius: 22px;
-  font-size: 14px;
-  font-weight: 950;
-  color: #e11d48;
-  background:
-    linear-gradient(135deg, #fff1f2, #fff7f7);
-  border: 1px solid #fecdd3;
-  transition: all 0.18s ease;
-  cursor: pointer;
-  box-shadow:
-    0 14px 30px rgba(225, 29, 72, 0.08),
-    inset 0 1px 0 rgba(255,255,255,0.95);
-}
-
-.tp-logout-btn:hover {
-  background: #ffe4e6;
-  transform: translateY(-1px);
-}
-        /* ── Topbar ── */
-        .tp-topbar {
-          background: #ffffff;
-          border-bottom: 1px solid #f1f5f9;
-          flex-shrink: 0;
-        }
-
-        .tp-time-chip {
-          display: flex; align-items: center; gap: 6px;
-          padding: 6px 12px;
-          border: 1px solid #e2e8f0;
-          border-radius: 20px;
-          background: #f8fafc;
-        }
-
-        .tp-icon-btn {
-          width: 34px; height: 34px;
-          border-radius: 8px;
-          border: 1px solid #e2e8f0;
-          background: white;
-          display: flex; align-items: center; justify-content: center;
-          color: #64748b;
-          cursor: pointer;
-          transition: all 0.15s;
-        }
-        .tp-icon-btn:hover { background: #f8fafc; color: #1e293b; }
-
-        .tp-avatar-chip {
-          display: flex; align-items: center; gap: 8px;
-          padding: 4px 10px 4px 4px;
-          border: 1px solid #e2e8f0;
-          border-radius: 20px;
-          background: white;
-        }
-
-        .tp-avatar-sm {
-          width: 28px; height: 28px;
-          border-radius: 8px;
-          background: linear-gradient(135deg, #6366f1, #8b5cf6);
-          display: flex; align-items: center; justify-content: center;
-          font-size: 10px; font-weight: 800; color: white;
-          flex-shrink: 0;
-        }
-
-        /* ── Cards ── */
-        .tp-card {
-          background: white;
-          border-radius: 16px;
-          border: 1px solid #f1f5f9;
-          padding: 20px;
-          box-shadow: 0 1px 4px rgba(15,23,42,0.05);
-        }
-         
-                .tp-hero-panel {
-          border-radius: 28px;
-          padding: 28px;
-          background:
-            radial-gradient(circle at 10% 10%, rgba(236, 72, 153, 0.10), transparent 30%),
-            radial-gradient(circle at 85% 10%, rgba(99, 102, 241, 0.18), transparent 35%),
-            linear-gradient(135deg, #ffffff, #f7f7ff);
-          border: 1px solid #eef2ff;
-          box-shadow: 0 24px 70px rgba(15, 23, 42, 0.08);
-        }
-
-        .tp-hero-stat {
-          min-height: 108px;
-          border-radius: 20px;
-          padding: 20px;
-          background: rgba(255,255,255,0.92);
-          border: 1px solid #e9eef8;
-          box-shadow: 0 16px 38px rgba(15, 23, 42, 0.06);
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-        }
-
-        .tp-hero-label {
-          font-size: 12px;
-          font-weight: 800;
-          color: #64748b;
-        }
-
-        .tp-hero-number {
-          font-size: 30px;
-          line-height: 1;
-          font-weight: 950;
-          margin-top: 8px;
-        }
-
-        .tp-hero-icon {
-          width: 44px;
-          height: 44px;
-          border-radius: 16px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .tp-live-dot {
-          width: 44px;
-          height: 44px;
-          border-radius: 16px;
-          background: #fff1f2;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .tp-live-dot span {
-          width: 9px;
-          height: 9px;
-          border-radius: 999px;
-          background: #fb7185;
-          box-shadow: 0 0 0 8px rgba(251, 113, 133, 0.12);
-        }
-
-        .tp-insight-bar {
-          border-radius: 22px;
-          background: #ffffff;
-          border: 1px solid #eef2f7;
-          box-shadow: 0 12px 34px rgba(15, 23, 42, 0.06);
-          padding: 18px 20px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 16px;
-        }
-
-        .tp-open-btn {
-          border: 1px solid #e0e7ff;
-          background: #eef2ff;
-          color: #4f46e5;
-          font-size: 12px;
-          font-weight: 900;
-          border-radius: 14px;
-          padding: 9px 16px;
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-        }
-
-        .tp-section-title {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          font-size: 17px;
-          font-weight: 950;
-          color: #111827;
-        }
-
-        .tp-time-pill {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          border-radius: 999px;
-          border: 1px solid #e2e8f0;
-          background: #ffffff;
-          padding: 7px 13px;
-          font-size: 12px;
-          font-weight: 900;
-          color: #334155;
-          box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
-        }
-
-        .tp-daily-card {
-          border-radius: 20px;
-          background: #ffffff;
-          border: 1px solid #dbe5ff;
-          padding: 22px;
-          box-shadow: 0 14px 34px rgba(15, 23, 42, 0.07);
-          transition: transform 180ms ease, box-shadow 180ms ease;
-        }
-
-        .tp-daily-card:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 20px 46px rgba(15, 23, 42, 0.10);
-        }
-
-        .tp-daily-card-live {
-          border-color: #bbf7d0;
-          box-shadow: 0 18px 48px rgba(16, 185, 129, 0.12);
-        }
-
-        .tp-live-badge,
-        .tp-upnext-badge {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          border-radius: 999px;
-          padding: 5px 11px;
-          font-size: 11px;
-          font-weight: 900;
-        }
-
-        .tp-live-badge {
-          color: #047857;
-          background: #d1fae5;
-          border: 1px solid #a7f3d0;
-        }
-
-        .tp-upnext-badge {
-          color: #4f46e5;
-          background: #eef2ff;
-          border: 1px solid #dbe5ff;
-        }
-
-        .tp-countdown-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: 999px;
-  padding: 5px 11px;
-  font-size: 11px;
-  font-weight: 900;
-  color: #7c3aed;
-  background: #f5f3ff;
-  border: 1px solid #ddd6fe;
-}
-
-        .tp-soft-pill {
-          display: inline-flex;
-          align-items: center;
-          border-radius: 999px;
-          border: 1px solid #e2e8f0;
-          background: #f8fafc;
-          padding: 5px 12px;
-          font-size: 12px;
-          font-weight: 800;
-          color: #475569;
-        }
-
-        .tp-action-card {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-          border-radius: 14px;
-          border: 1px solid #e2e8f0;
-          background: #f8fafc;
-          padding: 12px 14px;
-          font-size: 13px;
-          font-weight: 900;
-          color: #334155;
-          transition: all 180ms ease;
-        }
-
-        .tp-action-card:hover {
-          background: #eef2ff;
-          border-color: #c7d2fe;
-          color: #4f46e5;
-        }
-
-        .tp-glass {
-          background: white;
-          border: 1px solid rgba(255,255,255,0.9);
-        }
-
-        .tp-rounded-xl { border-radius: 20px; }
-
-        .tp-brand-icon {
-          width: 52px; height: 52px;
-          border-radius: 16px;
-          background: linear-gradient(135deg, #6366f1, #8b5cf6);
-          display: flex; align-items: center; justify-content: center;
-          color: white;
-        }
-
-        .tp-brand-icon-sm {
-          width: 36px; height: 36px;
-          border-radius: 10px;
-          background: linear-gradient(135deg, #6366f1, #8b5cf6);
-          display: flex; align-items: center; justify-content: center;
-          color: white;
-          flex-shrink: 0;
-        }
-
-        /* ── Stat cards ── */
-        .tp-stat-card {
-          background: white;
-          border: 1px solid #f1f5f9;
-          border-radius: 16px;
-          padding: 16px;
-          box-shadow: 0 1px 3px rgba(15,23,42,0.05);
-        }
-
-        .tp-stat-icon {
-          width: 36px; height: 36px;
-          border-radius: 10px;
-          display: flex; align-items: center; justify-content: center;
-        }
-        .tp-stat-icon--indigo { background: #eef2ff; color: #6366f1; }
-        .tp-stat-icon--violet { background: #f5f3ff; color: #8b5cf6; }
-        .tp-stat-icon--emerald { background: #ecfdf5; color: #10b981; }
-        .tp-stat-icon--rose { background: #fff1f2; color: #f43f5e; }
-
-        /* ── Schedule cards (coordinator style) ── */
-        .tp-schedule-card {
-          background: white;
-          border: 1px solid #f1f5f9;
-          border-radius: 14px;
-          padding: 16px;
-          box-shadow: 0 1px 3px rgba(15,23,42,0.05);
-          transition: box-shadow 0.2s, transform 0.2s;
-        }
-        .tp-schedule-card:hover {
-          box-shadow: 0 4px 16px rgba(15,23,42,0.09);
-          transform: translateY(-1px);
-        }
-
-        .tp-student-count-badge {
-          background: #eef2ff;
-          color: #6366f1;
-          border: 1px solid #e0e7ff;
-          border-radius: 20px;
-          padding: 4px 10px;
-          font-size: 11px;
-          font-weight: 700;
-        }
-
-        .tp-mini-avatar {
-          width: 22px; height: 22px;
-          border-radius: 6px;
-          background: linear-gradient(135deg, #6366f1, #8b5cf6);
-          display: flex; align-items: center; justify-content: center;
-          font-size: 8px; font-weight: 800; color: white;
-          flex-shrink: 0;
-        }
-
-        /* ── Search ── */
-        .tp-search-input {
-          width: 100%;
-          padding: 7px 7px 7px 30px;
-          border: 1px solid #e2e8f0;
-          border-radius: 10px;
-          font-size: 12px;
-          font-weight: 500;
-          color: #1e293b;
-          background: #f8fafc;
-          outline: none;
-          transition: all 0.15s;
-        }
-        .tp-search-input:focus {
-          border-color: #a5b4fc;
-          box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
-          background: white;
-        }
-
-        /* ── Form elements ── */
-        .tp-field { display: flex; flex-direction: column; }
-        .tp-label { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
-
-        .tp-select, .tp-input-el {
-          width: 100%;
-          padding: 9px 12px;
-          border: 1px solid #e2e8f0;
-          border-radius: 10px;
-          font-size: 13px;
-          font-weight: 600;
-          color: #1e293b;
-          background: #f8fafc;
-          outline: none;
-          transition: all 0.15s;
-        }
-        .tp-select:focus, .tp-input-el:focus {
-          border-color: #a5b4fc;
-          box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
-          background: white;
-        }
-        .tp-select:disabled { opacity: 0.5; cursor: not-allowed; }
-
-        .tp-textarea {
-          width: 100%;
-          padding: 9px 12px;
-          border: 1px solid #e2e8f0;
-          border-radius: 10px;
-          font-size: 13px;
-          font-weight: 500;
-          color: #1e293b;
-          background: #f8fafc;
-          outline: none;
-          transition: all 0.15s;
-          resize: vertical;
-          font-family: inherit;
-        }
-        .tp-textarea:focus {
-          border-color: #a5b4fc;
-          box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
-          background: white;
-        }
-
-        /* ── Mode buttons ── */
-        .tp-mode-btn {
-          padding: 9px 16px;
-          border-radius: 10px;
-          font-size: 13px;
-          font-weight: 700;
-          border: 1px solid #e2e8f0;
-          background: white;
-          color: #64748b;
-          cursor: pointer;
-          transition: all 0.15s;
-        }
-        .tp-mode-btn.active {
-          background: #6366f1;
-          color: white;
-          border-color: #6366f1;
-          box-shadow: 0 4px 12px rgba(99,102,241,0.3);
-        }
-        .tp-mode-btn:not(.active):hover { background: #f8fafc; }
-
-        /* ── Topic chips ── */
-        .tp-topic-chip {
-          padding: 5px 12px;
-          border-radius: 20px;
-          font-size: 11px;
-          font-weight: 700;
-          border: 1px solid #e2e8f0;
-          background: white;
-          color: #64748b;
-          cursor: pointer;
-          transition: all 0.15s;
-        }
-        .tp-topic-chip.active {
-          background: #6366f1;
-          color: white;
-          border-color: #6366f1;
-        }
-        .tp-topic-chip:not(.active):hover { border-color: #c7d2fe; background: #f5f3ff; color: #6366f1; }
-
-        /* ── Auto remarks ── */
-        .tp-auto-btn {
-          display: flex; align-items: center; gap: 6px;
-          padding: 9px 16px;
-          border-radius: 10px;
-          font-size: 12px;
-          font-weight: 700;
-          border: 1px solid #e0e7ff;
-          background: #eef2ff;
-          color: #6366f1;
-          cursor: pointer;
-          transition: all 0.15s;
-          white-space: nowrap;
-        }
-        .tp-auto-btn:hover { background: #e0e7ff; }
-
-        /* ── Save button ── */
-        .tp-save-btn {
-          display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-          padding: 10px 20px;
-          border-radius: 10px;
-          font-size: 13px;
-          font-weight: 700;
-          background: linear-gradient(135deg, #6366f1, #8b5cf6);
-          color: white;
-          border: none;
-          cursor: pointer;
-          transition: all 0.15s;
-          box-shadow: 0 4px 12px rgba(99,102,241,0.3);
-        }
-        .tp-save-btn:hover { opacity: 0.92; transform: translateY(-1px); }
-        .tp-save-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
-
-        /* ── Attendance stats ── */
-.tp-att-stat {
-  border-radius: 22px;
-  padding: 22px;
-  border: 1px solid transparent;
-  min-height: 112px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
-}
-        .tp-att-stat--emerald { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
-        .tp-att-stat--rose { background: #fff1f2; border-color: #fecdd3; color: #9f1239; }
-        .tp-att-stat--amber { background: #fffbeb; border-color: #fde68a; color: #92400e; }
-
-        /* ── Lesson card ── */
-        .tp-lesson-card { transition: box-shadow 0.15s; }
-        .tp-lesson-card:hover { box-shadow: 0 4px 16px rgba(15,23,42,0.08); }
-
-        /* ── Empty states ── */
-        .tp-empty-state {
-          text-align: center;
-          padding: 40px 20px;
-          background: #f8fafc;
-          border-radius: 14px;
-          border: 1px dashed #e2e8f0;
-        }
-
-        /* ── Mobile tabs ── */
-        .tp-mob-tab {
-          padding: 5px 10px;
-          border-radius: 8px;
-          font-size: 11px;
-          font-weight: 700;
-          border: 1px solid #e2e8f0;
-          background: white;
-          color: #64748b;
-          cursor: pointer;
-          transition: all 0.15s;
-        }
-        .tp-mob-tab.active {
-          background: #6366f1;
-          color: white;
-          border-color: #6366f1;
-        }
-
-        /* Better dark mode compatibility */
-
-/* ---------- Premium helper styles ---------- */
-.tp-form-hero {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 18px;
-  margin-bottom: 20px;
-  border-bottom: 1px solid #eef2f7;
-}
-
-.tp-form-hero-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.tp-form-hero-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 40px;
-  padding: 10px 16px;
-  border-radius: 999px;
-  background: linear-gradient(135deg, #eef2ff, #f5f3ff);
-  border: 1px solid #dbe5ff;
-  color: #4f46e5;
-  font-size: 12px;
-  font-weight: 900;
-}
-
-.tp-filter-shell {
-  border-radius: 18px;
-  padding: 16px;
-  background: #f8fafc;
-  border: 1px solid #e8eef7;
-}
-
-.tp-filter-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
-}
-
-@media (max-width: 1100px) {
-  .tp-filter-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 640px) {
-  .tp-filter-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-
-.tp-student-profile-card:hover,
-.tp-all-class-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 20px 44px rgba(15, 23, 42, 0.10);
-}
-
-
-
-
-.tp-student-schedule-row strong {
-  color: #0f172a;
-  font-weight: 900;
-}
-
-.tp-class-row-btn {
-  border-radius: 999px;
-  border: 1px solid #e0e7ff;
-  background: #eef2ff;
-  color: #4f46e5;
-  padding: 7px 11px;
-  font-size: 11px;
-  font-weight: 900;
-  transition: all 160ms ease;
-}
-
-.tp-class-row-btn:hover {
-  background: #4f46e5;
-  color: white;
-}
-
-/* ---------- Single clean dark theme ---------- */
-.tp-root.tp-dark {
-  background: #071224;
-  color: #e5edf8;
-}
-
-.tp-root.tp-dark main,
-.tp-root.tp-dark .tp-page-scroll {
-  background: #071224;
-}
-
-.tp-root.tp-dark .tp-topbar,
-.tp-root.tp-dark .tp-sidebar,
-.tp-root.tp-dark .tp-sidebar-logo,
-.tp-root.tp-dark .tp-teacher-card,
-.tp-root.tp-dark .tp-card,
-.tp-root.tp-dark .tp-insight-bar,
-.tp-root.tp-dark .tp-daily-card,
-.tp-root.tp-dark .tp-today-class-card,
-.tp-root.tp-dark .tp-all-class-card,
-.tp-root.tp-dark .tp-student-profile-card,
-.tp-root.tp-dark .tp-hero-stat,
-.tp-root.tp-dark .tp-filter-shell,
-.tp-root.tp-dark .tp-clock-card {
-  background: #0f172a !important;
-  border-color: rgba(255,255,255,0.10) !important;
-  color: #e5edf8 !important;
-  box-shadow: 0 18px 44px rgba(0,0,0,0.24) !important;
-}
-
-.tp-root.tp-dark .tp-sidebar {
-  background: linear-gradient(180deg, #08111f 0%, #0b1220 100%) !important;
-}
-
-.tp-root.tp-dark .tp-hero-panel {
-  background:
-    radial-gradient(circle at 12% 12%, rgba(236, 72, 153, 0.14), transparent 30%),
-    radial-gradient(circle at 86% 8%, rgba(99, 102, 241, 0.26), transparent 34%),
-    linear-gradient(135deg, #101827, #111827) !important;
-  border-color: rgba(255,255,255,0.10) !important;
-}
-
-.tp-root.tp-dark .tp-today-class-card.live {
-  background:
-    radial-gradient(circle at 100% 0%, rgba(34,197,94,0.16), transparent 34%),
-    #0f172a !important;
-  border-color: rgba(134, 239, 172, 0.55) !important;
-}
-
-.tp-root.tp-dark .tp-today-class-card.past {
-  opacity: 0.62;
-}
-
-.tp-root.tp-dark .tp-nav-btn {
-  color: #cbd5e1 !important;
-}
-
-.tp-root.tp-dark .tp-nav-btn svg {
-  background: #162033 !important;
-  color: #cbd5e1 !important;
-  border-color: rgba(255,255,255,0.10) !important;
-}
-
-.tp-root.tp-dark .tp-nav-btn:hover {
-  background: rgba(255,255,255,0.06) !important;
-  color: #ffffff !important;
-}
-
-.tp-root.tp-dark .tp-nav-btn.active {
-  background: #ffffff !important;
-  color: #4f46e5 !important;
-  border-color: #ffffff !important;
-}
-
-.tp-root.tp-dark .tp-nav-btn.active svg {
-  background: #eef2ff !important;
-  color: #4f46e5 !important;
-}
-
-.tp-root.tp-dark .tp-search-input,
-.tp-root.tp-dark .tp-select,
-.tp-root.tp-dark .tp-input-el,
-.tp-root.tp-dark .tp-textarea {
-  background: #071224 !important;
-  color: #f8fafc !important;
-  border-color: rgba(255,255,255,0.14) !important;
-}
-
-.tp-root.tp-dark .tp-search-input::placeholder,
-.tp-root.tp-dark .tp-textarea::placeholder,
-.tp-root.tp-dark .tp-input-el::placeholder {
-  color: #94a3b8 !important;
-}
-
-.tp-root.tp-dark select option {
-  background: #0f172a !important;
-  color: #ffffff !important;
-}
-
-.tp-root.tp-dark .text-slate-900,
-.tp-root.tp-dark .text-slate-800,
-.tp-root.tp-dark .text-slate-700,
-.tp-root.tp-dark .text-slate-600 {
-  color: #f8fafc !important;
-}
-
-.tp-root.tp-dark .text-slate-500,
-.tp-root.tp-dark .text-slate-400,
-.tp-root.tp-dark .tp-label {
-  color: #94a3b8 !important;
-}
-
-.tp-root.tp-dark .bg-white,
-.tp-root.tp-dark .bg-slate-50,
-.tp-root.tp-dark .bg-indigo-50\/50 {
-  background-color: #0f172a !important;
-}
-
-.tp-root.tp-dark .bg-slate-900 {
-  background-color: #071224 !important;
-}
-
-.tp-root.tp-dark .border-slate-100,
-.tp-root.tp-dark .border-slate-200,
-.tp-root.tp-dark .border-indigo-100 {
-  border-color: rgba(255,255,255,0.10) !important;
-}
-
-.tp-root.tp-dark .tp-soft-pill,
-.tp-root.tp-dark .tp-time-pill {
-  background: #ffffff !important;
-  color: #0f172a !important;
-  border-color: #e2e8f0 !important;
-}
-
-.tp-root.tp-dark .tp-open-btn,
-.tp-root.tp-dark .tp-auto-btn,
-.tp-root.tp-dark .tp-mini-action-btn,
-.tp-root.tp-dark .tp-action-card,
-.tp-root.tp-dark .tp-class-row-btn {
-  background: #eef2ff !important;
-  color: #4f46e5 !important;
-  border-color: #dbe5ff !important;
-}
-
-.tp-root.tp-dark .tp-save-btn {
-  background: linear-gradient(135deg, #5b5cf0, #8b5cf6) !important;
-  color: white !important;
-}
-
-.tp-root.tp-dark .tp-empty-state {
-  background: #071224 !important;
-  border-color: rgba(255,255,255,0.12) !important;
-}
-
-.tp-root.tp-dark .tp-att-stat--emerald {
-  background: rgba(16, 185, 129, 0.12) !important;
-  border-color: rgba(16, 185, 129, 0.35) !important;
-  color: #6ee7b7 !important;
-}
-
-.tp-root.tp-dark .tp-att-stat--rose {
-  background: rgba(244, 63, 94, 0.12) !important;
-  border-color: rgba(244, 63, 94, 0.35) !important;
-  color: #fda4af !important;
-}
-
-.tp-root.tp-dark .tp-att-stat--amber {
-  background: rgba(245, 158, 11, 0.12) !important;
-  border-color: rgba(245, 158, 11, 0.35) !important;
-  color: #fcd34d !important;
-}
-
-.tp-root.tp-dark input[type="date"]::-webkit-calendar-picker-indicator {
-  filter: invert(1);
-  opacity: 0.85;
-}
-
-.tp-dark .tp-total-class-card {
-  background: #0f172a !important;
-  border-color: rgba(255,255,255,0.10) !important;
-  box-shadow: 0 18px 44px rgba(0,0,0,0.24) !important;
-}
-
-.tp-dark .tp-page-info {
-  color: #94a3b8 !important;
-}
-
-.tp-dark .tp-page-btn {
-  background: #eef2ff !important;
-  color: #4f46e5 !important;
-  border-color: #dbe5ff !important;
-}
-
-.tp-dark .tp-page-btn:hover:not(:disabled) {
-  background: #4f46e5 !important;
-  color: #ffffff !important;
-}
-
-.tp-summary-card {
-  border-radius: 24px;
-  padding: 22px;
-  background:
-    radial-gradient(circle at 100% 0%, rgba(99, 102, 241, 0.12), transparent 34%),
-    linear-gradient(135deg, #ffffff 0%, #f8faff 100%);
-  border: 1px solid #dbe5ff;
-  box-shadow:
-    0 20px 46px rgba(15, 23, 42, 0.08),
-    inset 0 1px 0 rgba(255,255,255,0.95);
-}
-
-.tp-summary-label {
-  font-size: 11px;
-  font-weight: 950;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: #64748b;
-  margin-bottom: 10px;
-}
-
-.tp-summary-value {
-  font-size: 14px;
-  font-weight: 900;
-  line-height: 1.55;
-  color: #0f172a;
-}
-
-.tp-summary-card .text-white {
-  color: #0f172a !important;
-}
-
-.tp-summary-card .text-slate-300 {
-  color: #475569 !important;
-}
-
-.tp-summary-card .text-slate-400 {
-  color: #64748b !important;
-}
-
-.tp-summary-card .text-slate-200 {
-  color: #475569 !important;
-}
-
-.tp-summary-card .bg-white\/5 {
-  background: rgba(99, 102, 241, 0.08) !important;
-  border: 1px solid rgba(99, 102, 241, 0.14);
-}
-
-.tp-dark .tp-summary-card {
-  background:
-    radial-gradient(circle at 100% 0%, rgba(99, 102, 241, 0.20), transparent 34%),
-    linear-gradient(135deg, #111827 0%, #0f172a 100%) !important;
-  border-color: rgba(129, 140, 248, 0.28) !important;
-  box-shadow: 0 20px 46px rgba(0,0,0,0.26) !important;
-}
-
-.tp-dark .tp-summary-label {
-  color: #a5b4fc !important;
-}
-
-.tp-dark .tp-summary-value,
-.tp-dark .tp-summary-card .text-slate-900,
-.tp-dark .tp-summary-card .text-slate-800,
-.tp-dark .tp-summary-card .text-white {
-  color: #f8fafc !important;
-}
-
-.tp-dark .tp-summary-card .text-slate-600,
-.tp-dark .tp-summary-card .text-slate-500,
-.tp-dark .tp-summary-card .text-slate-400,
-.tp-dark .tp-summary-card .text-slate-300,
-.tp-dark .tp-summary-card .text-slate-200 {
-  color: #cbd5e1 !important;
-}
-
-.tp-dark .tp-summary-card .bg-white\/5 {
-  background: rgba(255, 255, 255, 0.06) !important;
-  border-color: rgba(255,255,255,0.10);
-}
-
-.tp-dark .tp-summary-card {
-  background: rgba(99, 102, 241, 0.14) !important;
-  border-color: rgba(129, 140, 248, 0.30) !important;
-}
-
-.tp-dark .tp-summary-label {
-  color: #a5b4fc !important;
-}
-
-.tp-dark .tp-summary-value {
-  color: #f8fafc !important;
-}
-      `}</style>
+      <style>{styles}</style>
     </div>
   );
 }
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function HeroStat({ label, value, color, icon }: { label: string; value: number; color: string; icon: React.ReactNode }) {
+  return (
+    <div className="tp-hero-stat">
+      <div>
+        <p className="tp-hero-label">{label}</p>
+        <h3 className={`tp-hero-number text-${color}-600`}>{value}</h3>
+      </div>
+      <div className={`tp-hero-icon bg-${color}-50 text-${color}-600`}>{icon}</div>
+    </div>
+  );
+}
+
+function DailySchedulePanel({ title, rows, emptyTitle, teacherName, onWrite, onAttendance }: {
+  title: string; rows: ScheduleRow[]; emptyTitle: string; teacherName: string;
+  onWrite: (row: ScheduleRow) => void; onAttendance: (row: ScheduleRow) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="tp-section-title">{title}</h3>
+        <span className="tp-time-pill">{rows[0] ? formatTime(rows[0].time_slot) : "--"}</span>
+      </div>
+      {rows.length > 0 ? rows.map(row => (
+        <div key={row.id} className={`tp-daily-card ${title === "Live Now" ? "tp-daily-card-live" : ""}`}>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h4 className="text-base font-black text-slate-900">{getScheduleStudentName(row)}</h4>
+                <span className={title === "Live Now" ? "tp-live-badge" : "tp-upnext-badge"}>{title}</span>
+                {title !== "Live Now" && <span className="tp-countdown-badge">⏳ {countdownLabel(row.time_slot)}</span>}
+              </div>
+              <p className="text-sm text-slate-600 mt-2"><span className="font-black text-emerald-700">Teacher:</span> {teacherName}</p>
+              <div className="flex flex-wrap items-center gap-2 mt-3">
+                <span className="tp-soft-pill">{normalizeDay(row.weekday)}</span>
+              </div>
+            </div>
+            <span className="tp-time-pill">{formatTime(row.time_slot)}</span>
+          </div>
+          <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button type="button" onClick={() => onWrite(row)} className="tp-action-card"><BookOpen size={16} /> Add Lesson</button>
+            <button type="button" onClick={() => onAttendance(row)} className="tp-action-card"><CheckCircle2 size={16} /> View Attendance</button>
+          </div>
+        </div>
+      )) : (
+        <div className="tp-empty-state bg-white">
+          <CalendarDays size={28} className="text-slate-300 mx-auto mb-3" />
+          <div className="font-bold text-slate-600">{emptyTitle}</div>
+          <div className="text-xs text-slate-400 mt-1">Upcoming classes will appear here.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmptyState({ title, subtitle }: { title: string; subtitle: string }) {
+  return (
+    <div className="col-span-full tp-empty-state">
+      <CalendarDays size={28} className="text-slate-300 mx-auto mb-3" />
+      <div className="font-bold text-slate-600">{title}</div>
+      <div className="text-xs text-slate-400 mt-1">{subtitle}</div>
+    </div>
+  );
+}
+
+function Pagination({ page, totalPages, onPrev, onNext }: { page: number; totalPages: number; onPrev: () => void; onNext: () => void }) {
+  return (
+    <div className="tp-pagination">
+      <button type="button" onClick={onPrev} disabled={page === 1} className="tp-page-btn">Previous</button>
+      <span className="tp-page-info">Page {page} of {totalPages}</span>
+      <button type="button" onClick={onNext} disabled={page === totalPages} className="tp-page-btn">Next</button>
+    </div>
+  );
+}
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const styles = `
+.tp-root { background: #f8f9fc; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+.tp-page-scroll { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+.tp-page-scroll::-webkit-scrollbar { width: 10px; }
+.tp-page-scroll::-webkit-scrollbar-track { background: transparent; }
+.tp-page-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; border: 3px solid #f8f9fc; }
+.tp-page-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+.tp-sidebar { width: 276px; min-height: 100vh; background: radial-gradient(circle at 20% 0%, rgba(99,102,241,.12), transparent 30%), linear-gradient(180deg,#fff 0%,#f8fbff 52%,#f3f7fc 100%); border-right: 1px solid #e4ecf7; flex-shrink: 0; overflow: hidden; padding: 18px 14px; box-shadow: 24px 0 70px rgba(15,23,42,.09), inset -1px 0 0 rgba(255,255,255,.85); }
+.tp-sidebar-logo { display: flex; align-items: center; gap: 13px; padding: 12px; border-radius: 26px; background: linear-gradient(135deg,rgba(255,255,255,.98),rgba(248,250,252,.94)); border: 1px solid #e2ebf6; box-shadow: 0 22px 52px rgba(15,23,42,.10), inset 0 1px 0 rgba(255,255,255,.95); }
+.tp-logo-icon { width: 58px; height: 58px; border-radius: 22px; background: radial-gradient(circle at center,#fff 0%,#fff 50%,#eef4ff 100%); border: 1px solid #dce7f5; display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0; box-shadow: 0 14px 30px rgba(15,23,42,.09), inset 0 2px 8px rgba(255,255,255,.95); }
+.tp-sidebar-logo-img { width: 50px; height: 50px; object-fit: contain; display: block; border-radius: 999px; }
+.tp-nav-btn { position: relative; display: flex; align-items: center; gap: 13px; min-height: 56px; padding: 8px 10px; border-radius: 22px; font-size: 14px; font-weight: 900; color: #334155; transition: all .2s ease; text-align: left; background: transparent; border: 1px solid transparent; cursor: pointer; }
+.tp-nav-btn svg { width: 42px; height: 42px; padding: 11px; border-radius: 16px; color: #64748b; background: linear-gradient(135deg,#fff,#f8fafc); border: 1px solid #e4edf7; box-shadow: 0 12px 26px rgba(15,23,42,.07), inset 0 1px 0 rgba(255,255,255,.95); flex-shrink: 0; }
+.tp-nav-btn:hover { background: rgba(255,255,255,.82); color: #111827; transform: translateX(2px); box-shadow: 0 12px 28px rgba(15,23,42,.06); }
+.tp-nav-btn.active { background: linear-gradient(135deg,#fff 0%,#f8faff 100%); color: #4f46e5; border-color: #111827; box-shadow: 0 20px 46px rgba(15,23,42,.12), inset 0 1px 0 rgba(255,255,255,.95); }
+.tp-teacher-card { display: flex; align-items: center; gap: 12px; padding: 14px; background: linear-gradient(135deg,#fff,#f8fafc); border: 1px solid #e2ebf6; border-radius: 24px; box-shadow: 0 18px 44px rgba(15,23,42,.09), inset 0 1px 0 rgba(255,255,255,.95); }
+.tp-avatar-sm { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg,#6366f1,#8b5cf6); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: white; flex-shrink: 0; }
+.tp-logout-btn { display: flex; align-items: center; justify-content: center; gap: 9px; padding: 14px 16px; border-radius: 22px; font-size: 14px; font-weight: 950; color: #e11d48; background: linear-gradient(135deg,#fff1f2,#fff7f7); border: 1px solid #fecdd3; transition: all .18s ease; cursor: pointer; box-shadow: 0 14px 30px rgba(225,29,72,.08), inset 0 1px 0 rgba(255,255,255,.95); }
+.tp-topbar { background: #fff; border-bottom: 1px solid #f1f5f9; flex-shrink: 0; }
+.tp-clock-card { display: flex; align-items: center; gap: 12px; min-height: 58px; padding: 8px 14px 8px 8px; border-radius: 24px; background: #fff; border: 1px solid #e8eef7; box-shadow: 0 14px 36px rgba(15,23,42,.07); }
+.tp-analog-clock { position: relative; width: 48px; height: 48px; border-radius: 999px; background: radial-gradient(circle at center,#fff 0%,#f8fafc 62%,#eef2ff 100%); border: 1px solid #e2e8f0; box-shadow: inset 0 3px 8px rgba(15,23,42,.06), 0 8px 20px rgba(15,23,42,.08); }
+.tp-clock-mark { position: absolute; font-size: 6px; font-weight: 950; color: #94a3b8; line-height: 1; }
+.tp-clock-mark-12 { top: 6px; left: 50%; transform: translateX(-50%); }
+.tp-clock-mark-3 { right: 5px; top: 50%; transform: translateY(-50%); }
+.tp-clock-mark-6 { bottom: 5px; left: 50%; transform: translateX(-50%); }
+.tp-clock-mark-9 { left: 5px; top: 50%; transform: translateY(-50%); }
+.tp-clock-hand { position: absolute; left: 50%; bottom: 50%; transform-origin: bottom center; border-radius: 999px; }
+.tp-clock-hour { width: 3px; height: 13px; background: #0f172a; }
+.tp-clock-minute { width: 2px; height: 17px; background: #64748b; }
+.tp-clock-second { width: 1.5px; height: 19px; background: #ef4444; }
+.tp-clock-center { position: absolute; width: 7px; height: 7px; border-radius: 999px; background: #ef4444; border: 2px solid #fff; left: 50%; top: 50%; transform: translate(-50%,-50%); box-shadow: 0 2px 5px rgba(239,68,68,.35); }
+.tp-theme-btn { width: 46px; height: 46px; border-radius: 17px; border: 1px solid #e8eef7; background: #fff; color: #475569; display: flex; align-items: center; justify-content: center; box-shadow: 0 14px 34px rgba(15,23,42,.06); transition: all .18s ease; }
+.tp-card { background: #fff; border-radius: 16px; border: 1px solid #f1f5f9; padding: 20px; box-shadow: 0 1px 4px rgba(15,23,42,.05); }
+.tp-brand-icon, .tp-brand-icon-sm { background: linear-gradient(135deg,#6366f1,#8b5cf6); display: flex; align-items: center; justify-content: center; color: white; flex-shrink: 0; }
+.tp-brand-icon { width: 52px; height: 52px; border-radius: 16px; }
+.tp-brand-icon-sm { width: 36px; height: 36px; border-radius: 10px; }
+.tp-hero-panel { border-radius: 28px; padding: 28px; background: radial-gradient(circle at 10% 10%,rgba(236,72,153,.10),transparent 30%), radial-gradient(circle at 85% 10%,rgba(99,102,241,.18),transparent 35%), linear-gradient(135deg,#fff,#f7f7ff); border: 1px solid #eef2ff; box-shadow: 0 24px 70px rgba(15,23,42,.08); }
+.tp-hero-stat { min-height: 108px; border-radius: 20px; padding: 20px; background: rgba(255,255,255,.92); border: 1px solid #e9eef8; box-shadow: 0 16px 38px rgba(15,23,42,.06); display: flex; align-items: center; justify-content: space-between; }
+.tp-hero-label { font-size: 12px; font-weight: 800; color: #64748b; }
+.tp-hero-number { font-size: 30px; line-height: 1; font-weight: 950; margin-top: 8px; }
+.tp-hero-icon, .tp-live-dot { width: 44px; height: 44px; border-radius: 16px; display: flex; align-items: center; justify-content: center; }
+.tp-live-dot { background: #fff1f2; }
+.tp-live-dot span { width: 9px; height: 9px; border-radius: 999px; background: #fb7185; box-shadow: 0 0 0 8px rgba(251,113,133,.12); }
+.tp-insight-bar { border-radius: 22px; background: #fff; border: 1px solid #eef2f7; box-shadow: 0 12px 34px rgba(15,23,42,.06); padding: 18px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.tp-open-btn, .tp-auto-btn, .tp-mini-action-btn, .tp-page-btn { border: 1px solid #e0e7ff; background: #eef2ff; color: #4f46e5; font-weight: 900; transition: all .16s ease; cursor: pointer; }
+.tp-open-btn { font-size: 12px; border-radius: 14px; padding: 9px 16px; display: inline-flex; align-items: center; gap: 8px; }
+.tp-auto-btn { display: flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 10px; font-size: 12px; white-space: nowrap; }
+.tp-mini-action-btn { border-radius: 12px; padding: 7px 10px; font-size: 11px; }
+.tp-section-title { display: inline-flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 950; color: #111827; }
+.tp-time-pill, .tp-soft-pill { display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; border: 1px solid #e2e8f0; background: #fff; font-weight: 900; color: #334155; }
+.tp-time-pill { padding: 7px 13px; font-size: 12px; box-shadow: 0 8px 20px rgba(15,23,42,.05); }
+.tp-soft-pill { background: #f8fafc; padding: 5px 12px; font-size: 12px; color: #475569; }
+.tp-daily-card, .tp-today-class-card, .tp-total-class-card { border-radius: 20px; background: #fff; border: 1px solid #e8eef7; padding: 18px; box-shadow: 0 14px 34px rgba(15,23,42,.06); transition: transform .18s ease, box-shadow .18s ease; }
+.tp-daily-card { border-color: #dbe5ff; padding: 22px; }
+.tp-daily-card-live { border-color: #bbf7d0; box-shadow: 0 18px 48px rgba(16,185,129,.12); }
+.tp-today-class-card.live { border-color: #86efac; background: radial-gradient(circle at 100% 0%,rgba(34,197,94,.12),transparent 32%), #fff; }
+.tp-today-class-card.past { opacity: .72; }
+.tp-live-badge, .tp-upnext-badge, .tp-countdown-badge, .tp-past-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 5px 11px; font-size: 11px; font-weight: 900; }
+.tp-live-badge { color: #047857; background: #d1fae5; border: 1px solid #a7f3d0; }
+.tp-upnext-badge { color: #4f46e5; background: #eef2ff; border: 1px solid #dbe5ff; }
+.tp-countdown-badge { color: #7c3aed; background: #f5f3ff; border: 1px solid #ddd6fe; }
+.tp-past-badge { color: #64748b; background: #f1f5f9; border: 1px solid #e2e8f0; }
+.tp-action-card { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border-radius: 14px; border: 1px solid #e2e8f0; background: #f8fafc; padding: 12px 14px; font-size: 13px; font-weight: 900; color: #334155; transition: all .18s ease; cursor: pointer; }
+.tp-search-input { width: 100%; padding: 7px 7px 7px 30px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 12px; font-weight: 500; color: #1e293b; background: #f8fafc; outline: none; transition: all .15s; }
+.tp-search-input:focus, .tp-select:focus, .tp-input-el:focus, .tp-textarea:focus { border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(99,102,241,.12); background: #fff; }
+.tp-field { display: flex; flex-direction: column; }
+.tp-label { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+.tp-select, .tp-input-el, .tp-textarea { width: 100%; padding: 9px 12px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 13px; font-weight: 600; color: #1e293b; background: #f8fafc; outline: none; transition: all .15s; }
+.tp-select:disabled { opacity: .5; cursor: not-allowed; }
+.tp-textarea { resize: vertical; font-family: inherit; }
+.tp-form-hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 18px; border-bottom: 1px solid #eef2f7; }
+.tp-form-hero-left { display: flex; align-items: center; gap: 12px; }
+.tp-form-hero-badge { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 10px 16px; border-radius: 999px; background: linear-gradient(135deg,#eef2ff,#f5f3ff); border: 1px solid #dbe5ff; color: #4f46e5; font-size: 12px; font-weight: 900; }
+.tp-mode-btn { padding: 9px 16px; border-radius: 10px; font-size: 13px; font-weight: 700; border: 1px solid #e2e8f0; background: #fff; color: #64748b; cursor: pointer; transition: all .15s; }
+.tp-mode-btn.active { background: #6366f1; color: white; border-color: #6366f1; box-shadow: 0 4px 12px rgba(99,102,241,.3); }
+.tp-save-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 20px; border-radius: 10px; font-size: 13px; font-weight: 700; background: linear-gradient(135deg,#6366f1,#8b5cf6); color: #fff; border: none; cursor: pointer; transition: all .15s; box-shadow: 0 4px 12px rgba(99,102,241,.3); }
+.tp-save-btn:disabled { opacity: .6; cursor: not-allowed; transform: none; }
+.tp-permission-panel { border-radius: 18px; background: #f8fafc; border: 1px solid #e8eef7; padding: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.tp-summary-card { border-radius: 24px; padding: 22px; background: radial-gradient(circle at 100% 0%,rgba(99,102,241,.12),transparent 34%), linear-gradient(135deg,#fff 0%,#f8faff 100%); border: 1px solid #dbe5ff; box-shadow: 0 20px 46px rgba(15,23,42,.08), inset 0 1px 0 rgba(255,255,255,.95); }
+.tp-summary-label { font-size: 11px; font-weight: 950; text-transform: uppercase; letter-spacing: .14em; color: #64748b; margin-bottom: 10px; }
+.tp-filter-shell { border-radius: 18px; padding: 16px; background: #f8fafc; border: 1px solid #e8eef7; }
+.tp-filter-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; }
+.tp-att-stat { border-radius: 22px; padding: 22px; border: 1px solid transparent; min-height: 112px; display: flex; flex-direction: column; justify-content: center; box-shadow: 0 14px 34px rgba(15,23,42,.06); }
+.tp-att-stat--emerald { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+.tp-att-stat--rose { background: #fff1f2; border-color: #fecdd3; color: #9f1239; }
+.tp-att-stat--amber { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+.tp-history-subject-card { border-radius: 14px; border: 1px solid #e8eef7; background: #f8fafc; padding: 12px; }
+.tp-empty-state { text-align: center; padding: 40px 20px; background: #f8fafc; border-radius: 14px; border: 1px dashed #e2e8f0; }
+.tp-mob-tab { padding: 5px 10px; border-radius: 8px; font-size: 11px; font-weight: 700; border: 1px solid #e2e8f0; background: #fff; color: #64748b; cursor: pointer; transition: all .15s; white-space: nowrap; }
+.tp-mob-tab.active { background: #6366f1; color: #fff; border-color: #6366f1; }
+.tp-pagination { margin-top: 20px; display: flex; align-items: center; justify-content: center; gap: 12px; }
+.tp-page-btn { border-radius: 14px; padding: 9px 16px; font-size: 12px; }
+.tp-page-btn:disabled { opacity: .45; cursor: not-allowed; }
+.tp-page-info { font-size: 12px; font-weight: 900; color: #64748b; }
+
+/* ── Subject table layout (matching screenshots) ── */
+.tp-subjects-table-header { display: grid; grid-template-columns: 200px 1fr; gap: 0; background: #1a2540; padding: 14px 20px; }
+.tp-subjects-col-subject { font-size: 13px; font-weight: 900; color: #fff; }
+.tp-subjects-col-topics { font-size: 13px; font-weight: 900; color: #fff; }
+.tp-subjects-row { display: grid; grid-template-columns: 200px 1fr; gap: 0; align-items: start; padding: 16px 20px; gap: 16px; }
+.tp-subjects-row:hover { background: #f8fafc; }
+
+/* ── Subject card (right column collapsible panel) ── */
+.tp-subject-card { border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; background: #f8fafc; }
+.tp-subject-card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; cursor: pointer; background: #f0f4fa; transition: background .15s; }
+.tp-subject-card-header:hover { background: #e8eef7; }
+.tp-subject-card-left { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
+.tp-subject-card-body { padding: 16px 18px; background: #fff; border-top: 1px solid #e8eef7; display: flex; flex-direction: column; gap: 14px; }
+
+/* ── Checklist box ── */
+.tp-checklist-box { max-height: 220px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; padding: 10px; display: flex; flex-direction: column; gap: 6px; scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+.tp-checklist-item { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer; transition: background .12s; font-size: 13px; color: #334155; }
+.tp-checklist-item:hover { background: #f0f4fa; }
+.tp-checkbox { width: 16px; height: 16px; accent-color: #6366f1; flex-shrink: 0; }
+
+/* ── Remove button ── */
+.tp-remove-btn { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; border: 1px solid #fecdd3; background: #fff1f2; color: #e11d48; cursor: pointer; transition: all .15s; flex-shrink: 0; }
+.tp-remove-btn:hover { background: #ffe4e6; }
+
+/* ── Add subject button ── */
+.tp-add-subject-btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 12px; font-size: 13px; font-weight: 900; color: #fff; background: linear-gradient(135deg, #0f9d8a, #0d8c7a); border: none; cursor: pointer; transition: all .15s; box-shadow: 0 4px 12px rgba(15,157,138,.25); }
+.tp-add-subject-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(15,157,138,.35); }
+
+/* ── Summary preview ── */
+.tp-summary-preview { background: #f0f4fa; border: 1px solid #dbe5ff; border-radius: 10px; padding: 10px 14px; }
+
+@media (max-width: 768px) {
+  .tp-subjects-table-header { grid-template-columns: 1fr; }
+  .tp-subjects-col-topics { display: none; }
+  .tp-subjects-row { grid-template-columns: 1fr; }
+  .tp-filter-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@media (max-width: 640px) {
+  .tp-filter-grid { grid-template-columns: 1fr; }
+  .tp-form-hero { align-items: flex-start; flex-direction: column; }
+}
+
+/* ── Dark mode ── */
+.tp-root.tp-dark { background: #071224; color: #e5edf8; }
+.tp-root.tp-dark main, .tp-root.tp-dark .tp-page-scroll { background: #071224; }
+.tp-root.tp-dark .tp-topbar, .tp-root.tp-dark .tp-sidebar, .tp-root.tp-dark .tp-sidebar-logo, .tp-root.tp-dark .tp-teacher-card, .tp-root.tp-dark .tp-card, .tp-root.tp-dark .tp-insight-bar, .tp-root.tp-dark .tp-daily-card, .tp-root.tp-dark .tp-today-class-card, .tp-root.tp-dark .tp-total-class-card, .tp-root.tp-dark .tp-filter-shell, .tp-root.tp-dark .tp-clock-card, .tp-root.tp-dark .tp-permission-panel { background: #0f172a !important; border-color: rgba(255,255,255,.10) !important; color: #e5edf8 !important; box-shadow: 0 18px 44px rgba(0,0,0,.24) !important; }
+.tp-root.tp-dark .tp-sidebar { background: linear-gradient(180deg,#08111f 0%,#0b1220 100%) !important; }
+.tp-root.tp-dark .tp-hero-panel { background: radial-gradient(circle at 12% 12%,rgba(236,72,153,.14),transparent 30%), radial-gradient(circle at 86% 8%,rgba(99,102,241,.26),transparent 34%), linear-gradient(135deg,#101827,#111827) !important; border-color: rgba(255,255,255,.10) !important; }
+.tp-root.tp-dark .tp-nav-btn { color: #cbd5e1 !important; }
+.tp-root.tp-dark .tp-nav-btn svg { background: #162033 !important; color: #cbd5e1 !important; border-color: rgba(255,255,255,.10) !important; }
+.tp-root.tp-dark .tp-nav-btn.active { background: #fff !important; color: #4f46e5 !important; border-color: #fff !important; }
+.tp-root.tp-dark .tp-search-input, .tp-root.tp-dark .tp-select, .tp-root.tp-dark .tp-input-el, .tp-root.tp-dark .tp-textarea { background: #071224 !important; color: #f8fafc !important; border-color: rgba(255,255,255,.14) !important; }
+.tp-root.tp-dark select option { background: #0f172a !important; color: #fff !important; }
+.tp-root.tp-dark .text-slate-900, .tp-root.tp-dark .text-slate-800, .tp-root.tp-dark .text-slate-700, .tp-root.tp-dark .text-slate-600 { color: #f8fafc !important; }
+.tp-root.tp-dark .text-slate-500, .tp-root.tp-dark .text-slate-400, .tp-root.tp-dark .tp-label { color: #94a3b8 !important; }
+.tp-root.tp-dark .bg-white, .tp-root.tp-dark .bg-slate-50 { background-color: #0f172a !important; }
+.tp-root.tp-dark .border-slate-100, .tp-root.tp-dark .border-slate-200 { border-color: rgba(255,255,255,.10) !important; }
+.tp-root.tp-dark .tp-soft-pill, .tp-root.tp-dark .tp-time-pill { background: #fff !important; color: #0f172a !important; border-color: #e2e8f0 !important; }
+.tp-root.tp-dark .tp-open-btn, .tp-root.tp-dark .tp-auto-btn, .tp-root.tp-dark .tp-mini-action-btn, .tp-root.tp-dark .tp-action-card, .tp-root.tp-dark .tp-page-btn { background: #eef2ff !important; color: #4f46e5 !important; border-color: #dbe5ff !important; }
+.tp-root.tp-dark .tp-save-btn { background: linear-gradient(135deg,#5b5cf0,#8b5cf6) !important; color: #fff !important; }
+.tp-root.tp-dark .tp-empty-state { background: #071224 !important; border-color: rgba(255,255,255,.12) !important; }
+.tp-root.tp-dark .tp-history-subject-card { background: #071224 !important; border-color: rgba(255,255,255,.10) !important; }
+.tp-root.tp-dark .tp-subject-card { background: #0f172a !important; border-color: rgba(255,255,255,.10) !important; }
+.tp-root.tp-dark .tp-subject-card-header { background: #162033 !important; }
+.tp-root.tp-dark .tp-subject-card-body { background: #0f172a !important; border-color: rgba(255,255,255,.10) !important; }
+.tp-root.tp-dark .tp-checklist-box { background: #071224 !important; border-color: rgba(255,255,255,.10) !important; }
+.tp-root.tp-dark .tp-checklist-item { color: #e5edf8 !important; }
+.tp-root.tp-dark .tp-checklist-item:hover { background: #1a2540 !important; }
+.tp-root.tp-dark .tp-subjects-row:hover { background: #0f172a !important; }
+.tp-root.tp-dark .tp-summary-preview { background: #162033 !important; border-color: rgba(129,140,248,.30) !important; }
+.tp-root.tp-dark .tp-summary-card { background: rgba(99,102,241,.14) !important; border-color: rgba(129,140,248,.30) !important; }
+.tp-root.tp-dark input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); opacity: .85; }
+
+/* ── Compact subject card styles ── */
+.tp-compact-card { border-radius: 12px; border: 1px solid #e8eef7; background: #fff; overflow: hidden; }
+.tp-compact-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 14px; cursor: pointer; background: #f8fafc; transition: background .13s; min-height: 44px; }
+.tp-compact-header:hover { background: #f0f4fa; }
+.tp-compact-header-left { flex: 1; min-width: 0; }
+.tp-compact-summary { font-size: 13px; font-weight: 700; color: #1e293b; }
+.tp-compact-placeholder { font-size: 13px; font-weight: 500; color: #94a3b8; font-style: italic; }
+.tp-compact-body { padding: 12px 14px; border-top: 1px solid #eef2f7; display: flex; flex-direction: column; gap: 10px; background: #fff; }
+.tp-compact-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.tp-compact-field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 120px; }
+.tp-compact-field--sm { flex: 0 0 80px; min-width: 70px; }
+.tp-compact-label { font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .05em; }
+.tp-compact-select { padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; font-weight: 600; color: #1e293b; background: #f8fafc; outline: none; width: 100%; transition: border-color .15s; }
+.tp-compact-select:focus { border-color: #a5b4fc; box-shadow: 0 0 0 2px rgba(99,102,241,.10); background: #fff; }
+.tp-compact-search { width: 100%; padding: 7px 10px 7px 30px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; font-weight: 500; color: #1e293b; background: #f8fafc; outline: none; }
+.tp-checklist-compact { max-height: 180px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; padding: 6px; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin; }
+.tp-checklist-compact-item { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 6px; cursor: pointer; font-size: 12px; color: #334155; transition: background .12s; }
+.tp-checklist-compact-item:hover { background: #f0f4fa; }
+
+/* Dark mode for compact styles */
+.tp-root.tp-dark .tp-compact-card { background: #0f172a !important; border-color: rgba(255,255,255,.10) !important; }
+.tp-root.tp-dark .tp-compact-header { background: #162033 !important; }
+.tp-root.tp-dark .tp-compact-header:hover { background: #1a2540 !important; }
+.tp-root.tp-dark .tp-compact-body { background: #0f172a !important; border-color: rgba(255,255,255,.08) !important; }
+.tp-root.tp-dark .tp-compact-summary { color: #f1f5f9 !important; }
+.tp-root.tp-dark .tp-compact-select { background: #071224 !important; color: #f8fafc !important; border-color: rgba(255,255,255,.14) !important; }
+.tp-root.tp-dark .tp-compact-search { background: #071224 !important; color: #f8fafc !important; border-color: rgba(255,255,255,.14) !important; }
+.tp-root.tp-dark .tp-checklist-compact { background: #071224 !important; border-color: rgba(255,255,255,.10) !important; }
+.tp-root.tp-dark .tp-checklist-compact-item { color: #e5edf8 !important; }
+.tp-root.tp-dark .tp-checklist-compact-item:hover { background: #1a2540 !important; }
+`;
 
 export default TeacherPortal;

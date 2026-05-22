@@ -767,7 +767,7 @@ Only say "I do not have information" if there are truly no direct or relevant ma
           zIndex: 60,
           width: 400,
           maxWidth: "calc(100vw - 2rem)",
-          height: 620,
+          height: "min(680px, calc(100vh - 5rem))",
           maxHeight: "calc(100vh - 5rem)",
           borderRadius: 20,
           overflow: "hidden",
@@ -929,15 +929,16 @@ Only say "I do not have information" if there are truly no direct or relevant ma
           ref={scrollRef}
           className="ivs-chat-scroll"
           onScroll={handleScroll}
-          style={{
-            flex: 1,
-            overflowY: "auto",
-            padding: "16px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-            background: chatTheme.bodyBg,
-          }}
+style={{
+  flex: 1,
+  overflowY: "auto",
+  padding: "16px",
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  background: chatTheme.bodyBg,
+  minHeight: 0,
+}}
         >
           {messages.map((msg, idx) => {
             const isUser = msg.role === "user";
@@ -972,15 +973,19 @@ Only say "I do not have information" if there are truly no direct or relevant ma
                   </div>
                 )}
 
-                <div
-                  style={{
-                    maxWidth: "78%",
-                    borderRadius: isUser
-                      ? "18px 18px 5px 18px"
-                      : "18px 18px 18px 5px",
-                    padding: "10px 14px",
-                    fontSize: 13,
-                    lineHeight: 1.6,
+<div
+  style={{
+    maxWidth: "78%",
+    minWidth: 0,
+    borderRadius: isUser
+      ? "18px 18px 5px 18px"
+      : "18px 18px 18px 5px",
+    padding: "10px 14px",
+    fontSize: 13,
+    lineHeight: 1.6,
+    wordBreak: "break-word",
+    overflowWrap: "break-word",
+    overflow: "visible",
                     ...(isUser
                       ? {
                           background:

@@ -3,6 +3,10 @@ import { clearSession, loadSession, saveSession, type Session } from "./sessionS
 const DJANGO_API_BASE =
   (import.meta as any).env?.VITE_DJANGO_API_BASE_URL || "http://127.0.0.1:8000";
 
+// ============================================================
+// Shared Types
+// ============================================================
+
 export type ProgressStatus =
   | "excellent"
   | "good"
@@ -11,6 +15,11 @@ export type ProgressStatus =
   | "";
 
 export type UserRole = "coordinator" | "teacher" | "student";
+
+// Backend now uses add/edit for lesson access permissions.
+// "write" is accepted in a few places as a safe legacy alias and is converted to "add" before sending.
+export type LessonAccessType = "add" | "edit";
+export type LegacyLessonAccessType = "write" | "add" | "edit";
 
 export type DjangoUser = {
   id: number;
@@ -35,6 +44,10 @@ export type AssignedSubject = {
   notes: string;
 };
 
+// ============================================================
+// Dashboard Types
+// ============================================================
+
 export type DashboardTeacher = {
   id: number;
   user_id: number;
@@ -58,6 +71,7 @@ export type DashboardStudent = {
   teacher_id: number;
   teacher_name: string;
   assigned_subjects: AssignedSubject[];
+  enrollment_date?: string | null;
 };
 
 export type DashboardSchedule = {
@@ -67,6 +81,21 @@ export type DashboardSchedule = {
   weekday: string;
   time_slot: string;
   is_active: boolean;
+
+  // Optional fields returned by newer backend versions.
+  lesson_access?: {
+    can_add_lesson?: boolean;
+    can_create_lesson?: boolean;
+    can_write_lesson?: boolean;
+    can_edit_lesson?: boolean;
+    reason?: string;
+    expires_at?: string | null;
+    permission_id?: number | null;
+  };
+  can_add_lesson?: boolean;
+  can_create_lesson?: boolean;
+  can_write_lesson?: boolean;
+  can_edit_lesson?: boolean;
 };
 
 export type DashboardAttendance = {
@@ -80,7 +109,6 @@ export type DashboardAttendance = {
   status: "present" | "absent" | "leave";
 
   marked_by: string;
-
   marked_by_id?: number;
   marked_by_username?: string;
   marked_by_name?: string;
@@ -89,6 +117,131 @@ export type DashboardAttendance = {
   created_at?: string | null;
   updated_at?: string | null;
 };
+
+// ============================================================
+// Lesson Permission Types
+// ============================================================
+
+export type LessonAccessPermissionPayload = {
+  id: number;
+  teacher_id: number;
+  teacher_name: string;
+  student_id: number;
+  student_name: string;
+
+  lesson_date: string;
+  date?: string;
+  subject?: string;
+
+  access_type: LessonAccessType;
+  is_active: boolean;
+  reason: string;
+  granted_by_id?: number | null;
+  granted_by?: string;
+  granted_by_name: string;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export async function getLessonAccessRequests(params?: {
+  status?: "pending" | "approved" | "rejected" | "all";
+  student_id?: number;
+  teacher_id?: number;
+  request_type?: LegacyLessonAccessType;
+}): Promise<{ count: number; results: LessonAccessRequestPayload[] }> {
+  const query = new URLSearchParams();
+
+  if (params?.status && params.status !== "all") query.set("status", params.status);
+  if (params?.student_id) query.set("student_id", String(params.student_id));
+  if (params?.teacher_id) query.set("teacher_id", String(params.teacher_id));
+  if (params?.request_type) query.set("request_type", normalizeLessonAccessType(params.request_type));
+
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+
+  return request<{ count: number; results: LessonAccessRequestPayload[] }>(
+    `/api/academy/lesson-access-requests/${suffix}`
+  );
+}
+
+export async function createLessonAccessRequest(
+  input: CreateLessonAccessRequestInput
+): Promise<LessonAccessRequestPayload> {
+  const lessonDate = input.lesson_date || input.date;
+
+  if (!lessonDate) throw new Error("lesson_date is required.");
+
+  return request<LessonAccessRequestPayload>("/api/academy/lesson-access-requests/", {
+    method: "POST",
+    body: JSON.stringify({
+      student_id: input.student_id,
+      lesson_date: lessonDate,
+      subject: input.subject || "",
+      request_type: normalizeLessonAccessType(input.request_type),
+      reason: input.reason || "",
+    }),
+  });
+}
+
+export async function reviewLessonAccessRequest(
+  requestId: number,
+  input: ReviewLessonAccessRequestInput
+): Promise<LessonAccessRequestPayload> {
+  return request<LessonAccessRequestPayload>(`/api/academy/lesson-access-requests/${requestId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+
+export type LessonAccessRequestPayload = {
+  id: number;
+  teacher_id: number;
+  teacher_name: string;
+  student_id: number;
+  student_name: string;
+  lesson_date: string;
+  date?: string;
+  subject: string;
+  request_type: LessonAccessType;
+  status: "pending" | "approved" | "rejected";
+  reason: string;
+  coordinator_note?: string;
+  reviewed_by_id?: number | null;
+  reviewed_by_name?: string;
+  permission_id?: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type CreateLessonAccessRequestInput = {
+  student_id: number;
+  lesson_date?: string;
+  date?: string;
+  subject?: string;
+  request_type: LegacyLessonAccessType;
+  reason?: string;
+};
+
+export type ReviewLessonAccessRequestInput = {
+  action: "approve" | "reject";
+  coordinator_note?: string;
+};
+
+export type GrantLessonPermissionInput = {
+  teacher_id?: number | null;
+  student_id: number;
+  lesson_date?: string;
+  date?: string;
+  subject?: string;
+  access_type: LegacyLessonAccessType;
+  reason?: string;
+};
+
+
+
+// ============================================================
+// Lesson Types
+// ============================================================
 
 export type LessonPayload = {
   id: number;
@@ -113,12 +266,22 @@ export type LessonPayload = {
   created_by_name?: string;
   created_by_role?: string;
 
+  can_add?: boolean;
+  can_write?: boolean;
+  can_edit?: boolean;
+  add_permission?: LessonAccessPermissionPayload | null;
+  write_permission?: LessonAccessPermissionPayload | null;
+  edit_permission?: LessonAccessPermissionPayload | null;
+  lesson_window_status?: string;
+  lesson_window_message?: string;
+
   created_at: string;
   updated_at: string;
 };
 
 export type CreateLessonInput = {
   student_id: number;
+  teacher_id?: number | null;
   date?: string;
   subject: string;
   topic_summary: string;
@@ -126,6 +289,76 @@ export type CreateLessonInput = {
   remarks?: string;
   notes?: string;
   lesson_data?: Record<string, any>;
+};
+
+export type UpdateLessonInput = Partial<{
+  subject: string;
+  topic_summary: string;
+  progress_status: ProgressStatus;
+  remarks: string;
+  notes: string;
+  lesson_data: Record<string, any>;
+}>;
+
+export type DailyLessonSubjectInput = {
+  subject: string;
+  topic_summary: string;
+  progress_status?: ProgressStatus;
+  remarks?: string;
+  notes?: string;
+  lesson_data?: Record<string, any>;
+};
+
+export type DailyLessonSubjectEntryPayload = {
+  id: number;
+  subject: string;
+  topic_summary: string;
+  progress_status: ProgressStatus;
+  remarks: string;
+  lesson_data: Record<string, any>;
+  sort_order: number;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type DailyLessonReportPayload = {
+  id: number;
+  student_id: number;
+  student_name: string;
+  teacher_id: number;
+  teacher_name: string;
+  date: string;
+  notes: string;
+  subject_entries: DailyLessonSubjectEntryPayload[];
+
+  created_by: string;
+  created_by_id?: number;
+  created_by_username?: string;
+  created_by_name?: string;
+  created_by_role?: string;
+
+  can_add?: boolean;
+  can_write?: boolean;
+  can_edit?: boolean;
+  edit_permission_until?: string | null;
+  edit_permission_note?: string;
+
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateDailyLessonReportInput = {
+  student_id: number;
+  teacher_id?: number | null;
+  date?: string;
+  notes?: string;
+  subject_entries: {
+    subject: string;
+    topic_summary: string;
+    progress_status?: ProgressStatus;
+    remarks?: string;
+    lesson_data?: Record<string, any>;
+  }[];
 };
 
 // ============================================================
@@ -145,7 +378,6 @@ export type MonthlyLessonPlanPayload = {
   subject: string;
 
   plan_text: string;
-
   target_summary: string;
   notes: string;
   status: MonthlyPlanStatus;
@@ -168,7 +400,6 @@ export type CreateMonthlyLessonPlanInput = {
   subject: string;
 
   plan_text: string;
-
   target_summary?: string;
   notes?: string;
   status?: MonthlyPlanStatus;
@@ -193,12 +424,16 @@ export type MonthlyLessonSummaryPayload = {
   teacher_name: string;
   month: number;
   year: number;
+  subject?: string;
 
   summary_text: string;
   strengths: string;
-  improvement_areas: string;
-  parent_message: string;
-  ai_generated: boolean;
+  weaknesses?: string;
+  recommendations?: string;
+
+  improvement_areas?: string;
+  parent_message?: string;
+  ai_generated?: boolean;
 
   created_by: string;
   created_by_id?: number;
@@ -218,6 +453,9 @@ export type CreateMonthlyLessonSummaryInput = {
 
   summary_text?: string;
   strengths?: string;
+  weaknesses?: string;
+  recommendations?: string;
+
   improvement_areas?: string;
   parent_message?: string;
   ai_generated?: boolean;
@@ -253,6 +491,10 @@ export type MonthlyLessonSummaryResponse = {
   }[];
 };
 
+// ============================================================
+// Dashboard Response
+// ============================================================
+
 export type DashboardResponse = {
   user: DjangoUser;
   dashboard_type: UserRole;
@@ -264,6 +506,7 @@ export type DashboardResponse = {
     attendance_records: number;
     lessons: number;
     student_subjects?: number;
+    monthly_lesson_plans?: number;
     monthly_plans?: number;
     monthly_summaries?: number;
   };
@@ -277,6 +520,7 @@ export type DashboardResponse = {
   recent_attendance?: DashboardAttendance[];
 
   lessons?: LessonPayload[];
+  monthly_lesson_plans?: MonthlyLessonPlanPayload[];
   monthly_plans?: MonthlyLessonPlanPayload[];
   monthly_summaries?: MonthlyLessonSummaryPayload[];
 
@@ -346,6 +590,23 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
+function buildQuery(params?: Record<string, string | number | boolean | null | undefined>) {
+  const query = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    query.set(key, String(value));
+  });
+
+  const text = query.toString();
+  return text ? `?${text}` : "";
+}
+
+
+function normalizeLessonAccessType(accessType: LegacyLessonAccessType): LessonAccessType {
+  return accessType === "write" ? "add" : accessType;
+}
+
 // ============================================================
 // Auth
 // ============================================================
@@ -396,14 +657,133 @@ export async function getDjangoDashboard(): Promise<DashboardResponse> {
 // Lessons
 // ============================================================
 
-export async function getLessons(): Promise<{ count: number; results: LessonPayload[] }> {
-  return request<{ count: number; results: LessonPayload[] }>("/api/academy/lessons/");
+export async function getLessons(params?: {
+  month?: number;
+  year?: number;
+  student_id?: number;
+  teacher_id?: number;
+}): Promise<{ count: number; results: LessonPayload[] }> {
+  const suffix = buildQuery(params);
+
+  return request<{ count: number; results: LessonPayload[] }>(
+    `/api/academy/lessons/${suffix}`
+  );
 }
 
 export async function createLesson(input: CreateLessonInput): Promise<LessonPayload> {
   return request<LessonPayload>("/api/academy/lessons/", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export async function updateLesson(
+  lessonId: number,
+  input: UpdateLessonInput
+): Promise<LessonPayload> {
+  return request<LessonPayload>(`/api/academy/lessons/${lessonId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function createDailyLessonReport(
+  input: CreateDailyLessonReportInput
+): Promise<DailyLessonReportPayload> {
+  return request<DailyLessonReportPayload>("/api/academy/daily-lesson-reports/", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getDailyLessonReports(params?: {
+  month?: number;
+  year?: number;
+  student_id?: number;
+  teacher_id?: number;
+}): Promise<{ count: number; results: DailyLessonReportPayload[] }> {
+  const suffix = buildQuery(params);
+
+  return request<{ count: number; results: DailyLessonReportPayload[] }>(
+    `/api/academy/daily-lesson-reports/${suffix}`
+  );
+}
+
+// ============================================================
+// Lesson Permissions
+// ============================================================
+
+export async function getLessonPermissions(params?: {
+  student_id?: number;
+  teacher_id?: number;
+  lesson_date?: string;
+  date?: string;
+  access_type?: LegacyLessonAccessType;
+  is_active?: boolean;
+}): Promise<{ count: number; results: LessonAccessPermissionPayload[] }> {
+  const query = new URLSearchParams();
+
+  if (params?.student_id) query.set("student_id", String(params.student_id));
+  if (params?.teacher_id) query.set("teacher_id", String(params.teacher_id));
+
+  const lessonDate = params?.lesson_date || params?.date;
+  if (lessonDate) query.set("lesson_date", lessonDate);
+
+  if (params?.access_type) {
+    query.set("access_type", normalizeLessonAccessType(params.access_type));
+  }
+
+  if (typeof params?.is_active === "boolean") {
+    query.set("is_active", String(params.is_active));
+  }
+
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+
+  return request<{ count: number; results: LessonAccessPermissionPayload[] }>(
+    `/api/academy/lesson-permissions/${suffix}`
+  );
+}
+
+export async function grantLessonPermission(
+  input: GrantLessonPermissionInput
+): Promise<LessonAccessPermissionPayload> {
+  const lessonDate = input.lesson_date || input.date;
+
+  if (!lessonDate) {
+    throw new Error("lesson_date is required.");
+  }
+
+  return request<LessonAccessPermissionPayload>("/api/academy/lesson-permissions/", {
+    method: "POST",
+    body: JSON.stringify({
+      teacher_id: input.teacher_id ?? null,
+      student_id: input.student_id,
+      lesson_date: lessonDate,
+      subject: input.subject || "",
+      access_type: normalizeLessonAccessType(input.access_type),
+      reason: input.reason || "",
+    }),
+  });
+}
+
+// Your current backend LessonAccessPermissionView.delete reads ?id= from query params.
+export async function disableLessonPermission(
+  permissionId: number
+): Promise<{ detail: string }> {
+  return request<{ detail: string }>(
+    `/api/academy/lesson-permissions/?id=${permissionId}`,
+    {
+      method: "DELETE",
+    }
+  );
+}
+
+// Keep this helper only if you later add a /lesson-permissions/<id>/ delete route.
+export async function disableLessonPermissionByPath(
+  permissionId: number
+): Promise<{ detail: string }> {
+  return request<{ detail: string }>(`/api/academy/lesson-permissions/${permissionId}/`, {
+    method: "DELETE",
   });
 }
 
@@ -417,14 +797,7 @@ export async function getMonthlyLessonPlans(params?: {
   student_id?: number;
   teacher_id?: number;
 }): Promise<{ count: number; results: MonthlyLessonPlanPayload[] }> {
-  const query = new URLSearchParams();
-
-  if (params?.month) query.set("month", String(params.month));
-  if (params?.year) query.set("year", String(params.year));
-  if (params?.student_id) query.set("student_id", String(params.student_id));
-  if (params?.teacher_id) query.set("teacher_id", String(params.teacher_id));
-
-  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const suffix = buildQuery(params);
 
   return request<{ count: number; results: MonthlyLessonPlanPayload[] }>(
     `/api/academy/monthly-lesson-plans/${suffix}`
@@ -466,16 +839,10 @@ export async function getMonthlyLessonSummary(params: {
   student_id?: number;
   teacher_id?: number;
 }): Promise<MonthlyLessonSummaryResponse> {
-  const query = new URLSearchParams();
-
-  query.set("month", String(params.month));
-  query.set("year", String(params.year));
-
-  if (params.student_id) query.set("student_id", String(params.student_id));
-  if (params.teacher_id) query.set("teacher_id", String(params.teacher_id));
+  const suffix = buildQuery(params);
 
   return request<MonthlyLessonSummaryResponse>(
-    `/api/academy/monthly-lesson-summary/?${query.toString()}`
+    `/api/academy/monthly-lesson-summary/${suffix}`
   );
 }
 
@@ -488,9 +855,6 @@ export async function createMonthlyLessonSummary(
   });
 }
 
-// This function is safe for your current backend.
-// It generates the summary from existing lessons if your backend supports ai_generated/empty summary_text.
-// If your backend does not call Gemini yet, it will still save a backend-generated fallback summary.
 export async function generateMonthlyLessonSummary(params: {
   student_id: number;
   teacher_id?: number | null;
@@ -504,6 +868,8 @@ export async function generateMonthlyLessonSummary(params: {
     year: params.year,
     summary_text: "",
     strengths: "",
+    weaknesses: "",
+    recommendations: "",
     improvement_areas: "",
     parent_message: "",
     ai_generated: true,
@@ -533,7 +899,6 @@ export type AttendanceApiResponse = {
   status: "present" | "absent" | "leave";
 
   marked_by: string;
-
   marked_by_id?: number;
   marked_by_username?: string;
   marked_by_name?: string;
@@ -548,13 +913,7 @@ export async function getAttendance(params?: {
   student_id?: number;
   teacher_id?: number;
 }): Promise<{ count: number; results: AttendanceApiResponse[] }> {
-  const query = new URLSearchParams();
-
-  if (params?.date) query.set("date", params.date);
-  if (params?.student_id) query.set("student_id", String(params.student_id));
-  if (params?.teacher_id) query.set("teacher_id", String(params.teacher_id));
-
-  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const suffix = buildQuery(params);
 
   return request<{ count: number; results: AttendanceApiResponse[] }>(
     `/api/academy/attendance/${suffix}`
@@ -575,8 +934,6 @@ export async function deleteAttendanceInDjango(attendanceId: number) {
     method: "DELETE",
   });
 }
-
-
 
 // ============================================================
 // Coordinator Accounts
@@ -628,27 +985,27 @@ export type CoordinatorStudentAccount = {
   is_active: boolean;
   is_staff?: boolean;
   is_superuser?: boolean;
-student_profile: {
-  id: number;
-  phone: string;
-  notes: string;
-  teacher_id: number;
-  teacher_name: string;
-
-  time_slot?: string;
-  class_days?: string[];
-  schedules?: {
+  student_profile: {
     id: number;
+    phone: string;
+    notes: string;
     teacher_id: number;
     teacher_name: string;
-    weekday: string;
-    weekday_display: string;
-    time_slot: string;
-    is_active: boolean;
-  }[];
 
-  assigned_subjects?: AssignedSubject[];
-} | null;
+    time_slot?: string;
+    class_days?: string[];
+    schedules?: {
+      id: number;
+      teacher_id: number;
+      teacher_name: string;
+      weekday: string;
+      weekday_display: string;
+      time_slot: string;
+      is_active: boolean;
+    }[];
+
+    assigned_subjects?: AssignedSubject[];
+  } | null;
 };
 
 export type CoordinatorAccountsResponse = {
@@ -687,23 +1044,21 @@ export async function getCoordinatorAccounts(): Promise<CoordinatorAccountsRespo
 }
 
 export async function createCoordinatorAccount(input: CreateAccountInput) {
-  return request<CoordinatorCoordinatorAccount | CoordinatorTeacherAccount | CoordinatorStudentAccount>(
-    "/api/auth/accounts/",
-    {
-      method: "POST",
-      body: JSON.stringify(input),
-    }
-  );
+  return request<
+    CoordinatorCoordinatorAccount | CoordinatorTeacherAccount | CoordinatorStudentAccount
+  >("/api/auth/accounts/", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function updateCoordinatorAccount(userId: number, input: UpdateAccountInput) {
-  return request<CoordinatorCoordinatorAccount | CoordinatorTeacherAccount | CoordinatorStudentAccount>(
-    `/api/auth/accounts/${userId}/`,
-    {
-      method: "PATCH",
-      body: JSON.stringify(input),
-    }
-  );
+  return request<
+    CoordinatorCoordinatorAccount | CoordinatorTeacherAccount | CoordinatorStudentAccount
+  >(`/api/auth/accounts/${userId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function disableCoordinatorAccount(userId: number) {

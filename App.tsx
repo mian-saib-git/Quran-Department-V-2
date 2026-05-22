@@ -1,4 +1,4 @@
-
+import { connectAcademyWS, disconnectAcademyWS } from "././hooks/useAcademyWS";
 import React, { useState, useEffect, useMemo, lazy, Suspense,  useRef } from "react";
 import Lottie from "lottie-react";
 import { loadSession, saveSession, clearSession, type Session } from "./services/sessionService";
@@ -1060,6 +1060,7 @@ if (rememberLogin) {
 
     setSession(nextSession);
     saveSession(nextSession);
+    connectAcademyWS();
 
     setLoginUsername("");
     setLoginPassword("");
@@ -2226,7 +2227,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
       {/* Collapsed */}
       <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-1">
-        <button onClick={() => { clearSession(); setSession(null); navigateToTab("dashboard"); }} title="Logout" className="transition-all duration-300">
+        <button onClick={() => {disconnectAcademyWS(); clearSession(); setSession(null); navigateToTab("dashboard"); }} title="Logout" className="transition-all duration-300">
           <div className="w-[52px] h-[52px] rounded-[17px] bg-white/95 border border-rose-100 flex items-center justify-center text-rose-600 shadow-[-5px_-5px_12px_rgba(255,255,255,0.95),5px_7px_16px_rgba(244,63,94,0.12),inset_0_1px_0_rgba(255,255,255,1)]">
             <LogOut size={19} />
           </div>
@@ -2235,7 +2236,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
       {/* Expanded — compact pill */}
       <button
-        onClick={() => { clearSession(); setSession(null); navigateToTab("dashboard"); }}
+        onClick={() => { disconnectAcademyWS(); clearSession(); setSession(null); navigateToTab("dashboard"); }}
         title="Logout"
         className="w-full flex md:hidden md:group-hover:flex rounded-[16px] bg-rose-50/90 border border-rose-100/80 hover:bg-rose-100/90 transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] shadow-[-4px_-4px_12px_rgba(255,255,255,0.95),4px_6px_14px_rgba(244,63,94,0.08)]"
       >

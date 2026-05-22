@@ -58,6 +58,8 @@ class LoginView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        from django.core.cache import cache
+
         username = str(request.data.get("username", "")).strip()
         password = str(request.data.get("password", ""))
 
@@ -67,9 +69,22 @@ class LoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # ── Brute Force Protection ────────────────────────────
+        cache_key = f"login_fail_{username}"
+        fail_count = cache.get(cache_key, 0)
+
+        if fail_count >= 5:
+            return Response(
+                {"detail": "Too many failed attempts. Please wait 15 minutes and try again."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        # ─────────────────────────────────────────────────────
+
         user = authenticate(request, username=username, password=password)
 
         if user is None:
+            # Increase fail counter by 1, block for 15 minutes
+            cache.set(cache_key, fail_count + 1, timeout=900)
             return Response(
                 {"detail": "Invalid username or password."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -80,6 +95,10 @@ class LoginView(APIView):
                 {"detail": "This account is disabled."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        # ── Reset fail counter on successful login ────────────
+        cache.delete(cache_key)
+        # ─────────────────────────────────────────────────────
 
         refresh = RefreshToken.for_user(user)
 

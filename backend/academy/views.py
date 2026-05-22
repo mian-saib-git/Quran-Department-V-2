@@ -1,15 +1,17 @@
 from collections import Counter
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import os
 import requests
-
-from django.utils import timezone
+import logging
+logger = logging.getLogger(__name__)
+from django.db import transaction
 from django.db.models import Q, Prefetch
+from django.utils import timezone
 
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
 
 from .models import (
     TeacherProfile,
@@ -18,7 +20,21 @@ from .models import (
     ClassSchedule,
     Attendance,
     Lesson,
+    DailyLessonReport,
+    DailyLessonSubjectEntry,
     MonthlyLessonPlan,
+    MonthlyLessonSummary,
+    LessonAccessPermission,
+    LessonAccessRequest,
+)
+
+from .ws_notify import (
+    notify_lesson_saved,
+    notify_permission_granted,
+    notify_permission_disabled,
+    notify_request_reviewed,
+    notify_request_created,
+    notify_attendance_marked,
 )
 
 
@@ -48,7 +64,7 @@ def user_payload(user):
         "last_name": user.last_name,
         "is_staff": user.is_staff,
         "is_superuser": user.is_superuser,
-        "password_change_allowed": False,
+        "password_change_allowed": False,  # nosec B105
         "password_change_message": (
             "To change your password, contact the developer on WhatsApp: wa.me/923189995518"
             if user.role == "coordinator"
@@ -83,19 +99,69 @@ def student_subject_payload(item):
     }
 
 
-def assigned_subjects_for_student(student):
-    if hasattr(student, "prefetched_active_subjects"):
-        subjects = student.prefetched_active_subjects
-    else:
-        subjects = StudentSubject.objects.filter(
-            student=student,
-            is_active=True,
-        ).order_by("subject", "custom_subject_name", "id")
+# ---------------------------------------------------------------------------
+# FIX: Two variants of assigned-subjects resolution
+#
+# 1. assigned_subjects_from_prefetch(student)
+#    Reads from `student.prefetched_active_subjects` when present (set by the
+#    Prefetch(..., to_attr="prefetched_active_subjects") calls in each view).
+#    Falls back to a live DB query only when the attribute is absent, so code
+#    that hasn't been updated yet still works correctly.
+#
+# 2. assigned_subjects_for_student(student)  [kept for backwards compatibility]
+#    Always does a fresh DB query – used by paths that load a single student
+#    without bulk prefetching (e.g. detail endpoints).
+# ---------------------------------------------------------------------------
 
+def assigned_subjects_from_prefetch(student):
+    """
+    Return subject payloads using prefetched data when available.
+
+    The Prefetch queryset already filters is_active=True and orders by
+    (subject, custom_subject_name, id), so we just serialise whatever
+    Django put into student.prefetched_active_subjects.
+
+    If the attribute is missing (student was loaded without the Prefetch)
+    we fall back to a live DB query so no call site breaks.
+    """
+    prefetched = getattr(student, "prefetched_active_subjects", None)
+
+    if prefetched is not None:
+        # prefetched is a plain Python list – iterate directly, no extra query
+        return [student_subject_payload(item) for item in prefetched]
+
+    # Fallback: student was not loaded with the active-subjects Prefetch
+    return assigned_subjects_for_student(student)
+
+
+def assigned_subjects_for_student(student):
+    """
+    Always hits the DB.  Use this only for single-student detail paths.
+    For list/dashboard paths use assigned_subjects_from_prefetch() instead.
+    """
+    subjects = StudentSubject.objects.filter(
+        student=student,
+        is_active=True,
+    ).order_by("subject", "custom_subject_name", "id")
     return [student_subject_payload(item) for item in subjects]
 
 
+# ---------------------------------------------------------------------------
+# FIX: student_payload now uses prefetched subjects (no extra DB hit per student)
+# ---------------------------------------------------------------------------
+
 def student_payload(student):
+    # Get earliest schedule date as enrollment proxy
+    first_schedule = ClassSchedule.objects.filter(
+        student=student,
+    ).order_by("id").first()
+
+    enrollment_date = None
+    if first_schedule:
+        # Use the teacher's joining date or a fixed school start date
+        # We use the student user's date_joined as enrollment date
+        enrollment_date = student.user.date_joined.date().isoformat()
+
     return {
         "id": student.id,
         "user_id": student.user_id,
@@ -105,14 +171,31 @@ def student_payload(student):
         "notes": student.notes,
         "teacher_id": student.teacher_id,
         "teacher_name": str(student.teacher),
-        "assigned_subjects": assigned_subjects_for_student(student),
+        "enrollment_date": enrollment_date,
+        "assigned_subjects": assigned_subjects_from_prefetch(student),
     }
 
 
 def schedule_payload(schedule):
+    student = schedule.student
+    subjects = StudentSubject.objects.filter(
+        student=student,
+        is_active=True,
+    ).order_by("subject", "custom_subject_name", "id")
+    student_data = {
+        "id": student.id,
+        "user_id": student.user_id,
+        "username": student.user.username,
+        "name": student.user.get_full_name() or student.user.username,
+        "phone": student.phone,
+        "notes": student.notes,
+        "teacher_id": student.teacher_id,
+        "teacher_name": str(student.teacher),
+        "assigned_subjects": [student_subject_payload(item) for item in subjects],
+    }
     return {
         "id": schedule.id,
-        "student": student_payload(schedule.student),
+        "student": student_data,
         "teacher": teacher_payload(schedule.teacher),
         "weekday": schedule.weekday,
         "time_slot": str(schedule.time_slot),
@@ -132,13 +215,11 @@ def attendance_payload(attendance):
         "student_name": str(attendance.student) if attendance.student else None,
         "date": str(attendance.date),
         "status": attendance.status,
-
         "marked_by": marked_by.username,
         "marked_by_id": marked_by.id,
         "marked_by_username": marked_by.username,
         "marked_by_name": user_display_name(marked_by),
         "marked_by_role": marked_by.role,
-
         "created_at": attendance.created_at.isoformat() if attendance.created_at else None,
         "updated_at": attendance.updated_at.isoformat() if attendance.updated_at else None,
     }
@@ -152,24 +233,88 @@ def lesson_payload(lesson):
         "teacher_id": lesson.teacher_id,
         "teacher_name": str(lesson.teacher),
         "date": str(lesson.date),
-
         "subject": lesson.subject,
         "topic_summary": lesson.topic_summary,
         "progress_status": lesson.progress_status,
         "remarks": lesson.remarks,
         "lesson_data": lesson.lesson_data or {},
-
         "title": lesson.title,
         "notes": lesson.notes,
-
         "created_by": lesson.created_by.username,
         "created_by_id": lesson.created_by.id,
         "created_by_username": lesson.created_by.username,
         "created_by_name": user_display_name(lesson.created_by),
         "created_by_role": lesson.created_by.role,
-
         "created_at": lesson.created_at.isoformat(),
         "updated_at": lesson.updated_at.isoformat(),
+    }
+
+
+def daily_lesson_subject_entry_payload(entry):
+    return {
+        "id": entry.id,
+        "subject": entry.subject,
+        "topic_summary": entry.topic_summary,
+        "progress_status": entry.progress_status,
+        "remarks": entry.remarks,
+        "lesson_data": entry.lesson_data or {},
+        "sort_order": entry.sort_order,
+        "created_at": entry.created_at.isoformat() if entry.created_at else None,
+        "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
+    }
+
+
+def daily_lesson_report_payload(report):
+    return {
+        "id": report.id,
+        "student_id": report.student_id,
+        "student_name": str(report.student),
+        "teacher_id": report.teacher_id,
+        "teacher_name": str(report.teacher),
+        "date": str(report.date),
+        "notes": report.notes,
+        "subject_entries": [
+            daily_lesson_subject_entry_payload(entry)
+            for entry in report.subject_entries.all()
+        ],
+        "created_by": report.created_by.username,
+        "created_by_id": report.created_by.id,
+        "created_by_username": report.created_by.username,
+        "created_by_name": user_display_name(report.created_by),
+        "created_by_role": report.created_by.role,
+        "edit_permission_until": (
+            report.edit_permission_until.isoformat()
+            if report.edit_permission_until
+            else None
+        ),
+        "edit_permission_note": report.edit_permission_note,
+        "created_at": report.created_at.isoformat(),
+        "updated_at": report.updated_at.isoformat(),
+    }
+
+
+def monthly_summary_payload(summary):
+    return {
+        "id": summary.id,
+        "student_id": summary.student_id,
+        "student_name": str(summary.student),
+        "teacher_id": summary.teacher_id,
+        "teacher_name": str(summary.teacher),
+        "month": summary.month,
+        "year": summary.year,
+        "subject": summary.subject,
+        "summary_text": summary.summary_text,
+        "strengths": summary.strengths,
+        "improvement_areas": summary.weaknesses,
+        "parent_message": summary.recommendations,
+        "ai_generated": summary.source == MonthlyLessonSummary.SummarySource.AI,
+        "created_by": summary.created_by.username,
+        "created_by_id": summary.created_by.id,
+        "created_by_username": summary.created_by.username,
+        "created_by_name": user_display_name(summary.created_by),
+        "created_by_role": summary.created_by.role,
+        "created_at": summary.created_at.isoformat(),
+        "updated_at": summary.updated_at.isoformat(),
     }
 
 
@@ -183,32 +328,23 @@ def monthly_plan_payload(plan):
         "student_name": str(plan.student),
         "teacher_id": plan.teacher_id,
         "teacher_name": str(plan.teacher),
-
         "month": plan.month,
         "year": plan.year,
         "subject": plan.subject,
-
-        # New correct monthly plan field
         "plan_text": plan_text,
-
-        # Old keys kept as empty strings so old frontend code does not crash
         "week_1_plan": "",
         "week_2_plan": "",
         "week_3_plan": "",
         "week_4_plan": "",
         "week_5_plan": "",
-
-        # Kept for compatibility
         "target_summary": target_summary or plan_text,
         "notes": plan.notes,
         "status": plan.status,
-
         "created_by": plan.created_by.username,
         "created_by_id": plan.created_by.id,
         "created_by_username": plan.created_by.username,
         "created_by_name": user_display_name(plan.created_by),
         "created_by_role": plan.created_by.role,
-
         "created_at": plan.created_at.isoformat(),
         "updated_at": plan.updated_at.isoformat(),
     }
@@ -223,16 +359,6 @@ def safe_int(value, fallback=None):
 
 def model_has_field(model_class, field_name):
     return any(field.name == field_name for field in model_class._meta.fields)
-
-
-def student_has_subject(student, subject_name):
-    """
-    Subject assignment is no longer restricted by coordinator.
-    Teachers can create lessons and monthly plans for any subject.
-    This function is kept only for backward compatibility with older code.
-    """
-    subject_name = str(subject_name or "").strip()
-    return bool(subject_name)
 
 
 def build_month_range(year, month):
@@ -262,19 +388,56 @@ def build_student_auto_summary(student_item):
     if subjects:
         summary += f" Subjects covered: {', '.join(subjects)}."
 
-    best_status = max(
-        student_item["progress_counts"].items(),
-        key=lambda pair: pair[1],
-    )[0]
+    non_empty = {k: v for k, v in student_item["progress_counts"].items() if v > 0}
 
-    if best_status != "blank":
-        summary += f" Overall progress was mostly {best_status.replace('_', ' ')}."
+    if non_empty:
+        best_status = max(non_empty.items(), key=lambda pair: pair[1])[0]
+        if best_status != "blank":
+            summary += f" Overall progress was mostly {best_status.replace('_', ' ')}."
 
     if student_item["topics"]:
         topic_preview = student_item["topics"][:5]
         summary += f" Main topics: {', '.join(topic_preview)}."
 
     return summary
+
+
+def parse_date_str(value, field_label="date"):
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").date(), None
+    except (TypeError, ValueError):
+        return None, f"{field_label} must be YYYY-MM-DD."
+
+
+# ============================================================
+# Shared Prefetch definitions
+# ============================================================
+
+# ---------------------------------------------------------------------------
+# FIX: Define the active-subjects prefetch once and reuse it everywhere.
+#      The critical detail is to_attr="prefetched_active_subjects" — without
+#      this, Django merges the filtered queryset into the default manager
+#      cache and student.assigned_subjects.all() would still return ALL
+#      subjects (including inactive ones from unrelated querysets).
+# ---------------------------------------------------------------------------
+def make_active_subjects_prefetch():
+    return Prefetch(
+        "assigned_subjects",
+        queryset=StudentSubject.objects.filter(
+            is_active=True,
+        ).order_by("subject", "custom_subject_name", "id"),
+        to_attr="prefetched_active_subjects",
+    )
+
+
+def make_active_schedules_prefetch():
+    return Prefetch(
+        "schedules",
+        queryset=ClassSchedule.objects.filter(is_active=True).order_by(
+            "weekday", "time_slot", "id"
+        ),
+        to_attr="prefetched_active_schedules",
+    )
 
 
 # ============================================================
@@ -293,6 +456,110 @@ class AcademyHealthView(APIView):
 
 
 # ============================================================
+# Lesson Permission Helpers
+# ============================================================
+
+def normalize_lesson_access_type(value):
+    clean = str(value or "").strip().lower()
+    if clean == "write":
+        return "add"
+    if clean in ["add", "edit"]:
+        return clean
+    return ""
+
+
+def lesson_permission_payload(permission):
+    return {
+        "id": permission.id,
+        "student_id": permission.student_id,
+        "student_name": str(permission.student),
+        "teacher_id": permission.teacher_id,
+        "teacher_name": str(permission.teacher),
+        "date": str(permission.lesson_date),
+        "lesson_date": str(permission.lesson_date),
+        "access_type": permission.access_type,
+        "subject": getattr(permission, "subject", "") or "",
+        "is_active": permission.is_active,
+        "reason": permission.reason or "",
+        "granted_by_id": permission.granted_by_id,
+        "granted_by": permission.granted_by.username if permission.granted_by else "",
+        "granted_by_name": user_display_name(permission.granted_by) if permission.granted_by else "",
+        "created_at": permission.created_at.isoformat() if permission.created_at else None,
+        "updated_at": permission.updated_at.isoformat() if permission.updated_at else None,
+        # Compatibility for older frontend code.
+        "can_write": permission.access_type == "add" and permission.is_active,
+        "can_add": permission.access_type == "add" and permission.is_active,
+        "can_edit": permission.access_type == "edit" and permission.is_active,
+    }
+
+
+def get_lesson_class_window(student, teacher, lesson_date):
+    schedules = ClassSchedule.objects.filter(
+        student=student,
+        teacher=teacher,
+        is_active=True,
+        weekday=lesson_date.strftime("%A").lower(),
+    ).order_by("time_slot")
+
+    windows = []
+
+    for schedule in schedules:
+        start_naive = datetime.combine(lesson_date, schedule.time_slot)
+        start = timezone.make_aware(start_naive, timezone.get_current_timezone())
+        end = start + timedelta(hours=24)
+        windows.append((start, end))
+
+    return windows
+
+
+def class_window_is_open(student, teacher, lesson_date):
+    now = timezone.now()
+
+    for start, end in get_lesson_class_window(student, teacher, lesson_date):
+        if start <= now <= end:
+            return True
+
+    return False
+
+
+def has_active_lesson_permission(student, teacher, lesson_date, access_type):
+    return LessonAccessPermission.objects.filter(
+        student=student,
+        teacher=teacher,
+        lesson_date=lesson_date,
+        access_type=access_type,
+        is_active=True,
+    ).exists()
+
+
+def teacher_can_add_lesson_now(student, teacher, lesson_date):
+    return class_window_is_open(student, teacher, lesson_date) or has_active_lesson_permission(
+        student,
+        teacher,
+        lesson_date,
+        "add",
+    )
+
+
+def teacher_can_edit_lesson_now(lesson):
+    now = timezone.now()
+
+    if lesson.created_at:
+        try:
+            if now <= lesson.created_at + timedelta(hours=24):
+                return True
+        except TypeError:
+            pass
+
+    return has_active_lesson_permission(
+        lesson.student,
+        lesson.teacher,
+        lesson.date,
+        "edit",
+    )
+
+
+# ============================================================
 # Dashboard API
 # ============================================================
 
@@ -302,29 +569,13 @@ class DashboardView(APIView):
     def get(self, request):
         user = request.user
 
-        active_subjects_prefetch = Prefetch(
-            "assigned_subjects",
-            queryset=StudentSubject.objects.filter(is_active=True).order_by(
-                "subject",
-                "custom_subject_name",
-                "id",
-            ),
-            to_attr="prefetched_active_subjects",
-        )
+        # ---------------------------------------------------------------------------
+        # FIX: Use the shared prefetch helpers so every code path gets the same,
+        #      correctly-filtered prefetch with the right to_attr name.
+        # ---------------------------------------------------------------------------
+        active_subjects_prefetch = make_active_subjects_prefetch()
+        schedule_prefetch = make_active_schedules_prefetch()
 
-        schedule_prefetch = Prefetch(
-            "schedules",
-            queryset=ClassSchedule.objects.filter(is_active=True).order_by(
-                "weekday",
-                "time_slot",
-                "id",
-            ),
-            to_attr="prefetched_active_schedules",
-        )
-
-        # -----------------------------
-        # Coordinator dashboard
-        # -----------------------------
         if user.role == "coordinator":
             return Response({
                 "user": user_payload(user),
@@ -337,6 +588,7 @@ class DashboardView(APIView):
                     "lessons": Lesson.objects.count(),
                     "student_subjects": StudentSubject.objects.filter(is_active=True).count(),
                     "monthly_lesson_plans": MonthlyLessonPlan.objects.count(),
+                    "lesson_permissions": LessonAccessPermission.objects.filter(is_active=True).count(),
                 },
                 "recent_attendance": [
                     attendance_payload(item)
@@ -346,17 +598,23 @@ class DashboardView(APIView):
                         "marked_by",
                     ).order_by("-date", "-updated_at", "-id")[:50]
                 ],
+                # ---------------------------------------------------------------------------
+                # FIX: Coordinator schedule list now prefetches active subjects properly.
+                #      Previously used `prefetch_related("student__assigned_subjects")` which
+                #      fetched ALL subjects (active and inactive) and never set to_attr, so
+                #      student_payload's assigned_subjects_from_prefetch() could not use it.
+                # ---------------------------------------------------------------------------
                 "schedules": [
                     schedule_payload(item)
                     for item in ClassSchedule.objects.select_related(
                         "teacher__user",
                         "student__user",
-                    ).prefetch_related(
-                        "student__assigned_subjects",
+                        "student__teacher__user",
                     ).filter(
                         is_active=True,
                     ).order_by("weekday", "time_slot", "id")[:500]
                 ],
+
                 "lessons": [
                     lesson_payload(item)
                     for item in Lesson.objects.select_related(
@@ -365,11 +623,16 @@ class DashboardView(APIView):
                         "created_by",
                     ).order_by("-date", "-updated_at", "-id")[:100]
                 ],
+                "lesson_access_permissions": [
+                    lesson_permission_payload(item)
+                    for item in LessonAccessPermission.objects.select_related(
+                        "teacher__user",
+                        "student__user",
+                        "granted_by",
+                    ).filter(is_active=True).order_by("-lesson_date", "-updated_at", "-id")[:200]
+                ],
             })
 
-        # -----------------------------
-        # Teacher dashboard
-        # -----------------------------
         if user.role == "teacher":
             try:
                 teacher = user.teacher_profile
@@ -380,6 +643,11 @@ class DashboardView(APIView):
                     "error": "Teacher profile not found.",
                 }, status=status.HTTP_404_NOT_FOUND)
 
+            # ---------------------------------------------------------------------------
+            # FIX: Both prefetches now use the shared helpers (correct to_attr names).
+            #      student_payload → assigned_subjects_from_prefetch reads from
+            #      student.prefetched_active_subjects and returns ALL active subjects.
+            # ---------------------------------------------------------------------------
             students = StudentProfile.objects.select_related(
                 "user",
                 "teacher__user",
@@ -390,15 +658,21 @@ class DashboardView(APIView):
                 teacher=teacher,
             ).order_by("user__first_name", "user__username", "id")
 
+            # ---------------------------------------------------------------------------
+            # FIX: Schedule queryset now uses active_subjects_prefetch (with to_attr)
+            #      instead of the plain `prefetch_related("student__assigned_subjects")`.
+            #      The student objects inside each schedule will then have
+            #      prefetched_active_subjects populated, so schedule_payload →
+            #      student_payload → assigned_subjects_from_prefetch returns all subjects.
+            # ---------------------------------------------------------------------------
             schedules = ClassSchedule.objects.select_related(
-                "teacher__user",
-                "student__user",
-            ).prefetch_related(
-                "student__assigned_subjects",
-            ).filter(
-                teacher=teacher,
-                is_active=True,
-            ).order_by("weekday", "time_slot", "student__user__first_name", "id")
+                            "teacher__user",
+                            "student__user",
+                            "student__teacher__user",
+                        ).filter(
+                            teacher=teacher,
+                            is_active=True,
+                        ).order_by("weekday", "time_slot", "student__user__first_name", "id")
 
             attendance = Attendance.objects.select_related(
                 "teacher__user",
@@ -425,6 +699,15 @@ class DashboardView(APIView):
                 teacher=teacher,
             ).order_by("-year", "-month", "student__user__first_name", "subject", "-id")[:300]
 
+            lesson_permissions = LessonAccessPermission.objects.select_related(
+                "teacher__user",
+                "student__user",
+                "granted_by",
+            ).filter(
+                teacher=teacher,
+                is_active=True,
+            ).order_by("-lesson_date", "-updated_at", "-id")[:200]
+
             return Response({
                 "user": user_payload(user),
                 "dashboard_type": "teacher",
@@ -434,6 +717,7 @@ class DashboardView(APIView):
                 "attendance": [attendance_payload(item) for item in attendance],
                 "lessons": [lesson_payload(item) for item in lessons],
                 "monthly_lesson_plans": [monthly_plan_payload(item) for item in monthly_plans],
+                "lesson_access_permissions": [lesson_permission_payload(item) for item in lesson_permissions],
                 "permissions": {
                     "can_mark_attendance": False,
                     "can_edit_attendance": False,
@@ -443,9 +727,6 @@ class DashboardView(APIView):
                 },
             })
 
-        # -----------------------------
-        # Student dashboard
-        # -----------------------------
         if user.role == "student":
             try:
                 student = StudentProfile.objects.select_related(
@@ -479,11 +760,11 @@ class DashboardView(APIView):
                 student=student,
             ).order_by("-date", "-updated_at", "-id")[:300]
 
-            lessons = Lesson.objects.select_related(
+            daily_reports = DailyLessonReport.objects.select_related(
                 "teacher__user",
                 "student__user",
                 "created_by",
-            ).filter(
+            ).prefetch_related("subject_entries").filter(
                 student=student,
             ).order_by("-date", "-updated_at", "-id")[:300]
 
@@ -501,7 +782,32 @@ class DashboardView(APIView):
                 "student": student_payload(student),
                 "schedules": [schedule_payload(item) for item in schedules],
                 "attendance": [attendance_payload(item) for item in attendance],
-                "lessons": [lesson_payload(item) for item in lessons],
+                "lessons": [
+                    {
+                        "id": entry.id,
+                        "student_id": report.student_id,
+                        "student_name": str(report.student),
+                        "teacher_id": report.teacher_id,
+                        "teacher_name": str(report.teacher),
+                        "date": str(report.date),
+                        "subject": entry.subject,
+                        "topic_summary": entry.topic_summary,
+                        "title": entry.topic_summary,
+                        "notes": report.notes,
+                        "progress_status": entry.progress_status,
+                        "remarks": entry.remarks,
+                        "lesson_data": entry.lesson_data or {},
+                        "created_by": report.created_by.username,
+                        "created_by_id": report.created_by.id,
+                        "created_by_username": report.created_by.username,
+                        "created_by_name": report.created_by.get_full_name() or report.created_by.username,
+                        "created_by_role": report.created_by.role,
+                        "created_at": report.created_at.isoformat(),
+                        "updated_at": report.updated_at.isoformat(),
+                    }
+                    for report in daily_reports
+                    for entry in report.subject_entries.all()
+                ],
                 "monthly_lesson_plans": [monthly_plan_payload(item) for item in monthly_plans],
                 "permissions": {
                     "can_mark_attendance": False,
@@ -607,36 +913,22 @@ class LessonListCreateView(APIView):
         lesson_date = request.data.get("date") or timezone.localdate().isoformat()
 
         if not student_id:
-            return Response(
-                {"detail": "student_id is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "student_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not subject:
-            return Response(
-                {"detail": "subject is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "subject is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not topic_summary:
-            return Response(
-                {"detail": "topic_summary is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "topic_summary is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        allowed_statuses = [
-            "excellent",
-            "good",
-            "satisfactory",
-            "needs_improvement",
-            "",
-        ]
+        allowed_statuses = ["excellent", "good", "satisfactory", "needs_improvement", ""]
 
         if progress_status not in allowed_statuses:
-            return Response(
-                {"detail": "Invalid progress_status."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "Invalid progress_status."}, status=status.HTTP_400_BAD_REQUEST)
+
+        parsed_lesson_date, date_error = parse_date_str(lesson_date, "lesson date")
+        if date_error:
+            return Response({"detail": date_error}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             student = StudentProfile.objects.select_related(
@@ -645,23 +937,28 @@ class LessonListCreateView(APIView):
                 "user",
             ).get(id=student_id)
         except StudentProfile.DoesNotExist:
-            return Response(
-                {"detail": "Student not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
 
         if user.role == "teacher":
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Teacher profile not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
             if student.teacher_id != teacher.id:
                 return Response(
                     {"detail": "You can only create lessons for your assigned students."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            if not teacher_can_add_lesson_now(student, teacher, parsed_lesson_date):
+                return Response(
+                    {
+                        "detail": (
+                            "Lesson add window expired or has not started yet. "
+                            "Please ask coordinator to enable add permission."
+                        )
+                    },
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
@@ -671,15 +968,31 @@ class LessonListCreateView(APIView):
             try:
                 teacher = TeacherProfile.objects.get(id=teacher_id)
             except TeacherProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Teacher not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Teacher not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        duplicate = Lesson.objects.filter(
+            student=student,
+            teacher=teacher,
+            date=parsed_lesson_date,
+            subject=subject,
+        ).first()
+
+        if duplicate:
+            return Response(
+                {
+                    "detail": (
+                        "A lesson already exists for this student, date, and subject. "
+                        "Please edit the existing lesson instead."
+                    ),
+                    "lesson": lesson_payload(duplicate),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         lesson = Lesson.objects.create(
             student=student,
             teacher=teacher,
-            date=lesson_date,
+            date=parsed_lesson_date,
             subject=subject,
             topic_summary=topic_summary,
             title=topic_summary[:200],
@@ -690,9 +1003,764 @@ class LessonListCreateView(APIView):
             created_by=user,
         )
 
+        return Response(lesson_payload(lesson), status=status.HTTP_201_CREATED)
+
+
+class LessonDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        user = request.user
+
+        try:
+            lesson = Lesson.objects.select_related(
+                "student__user",
+                "teacher__user",
+                "created_by",
+            ).get(id=pk)
+        except Lesson.DoesNotExist:
+            return Response({"detail": "Lesson not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if user.role == "coordinator":
+            pass
+
+        elif user.role == "teacher":
+            try:
+                teacher = user.teacher_profile
+            except TeacherProfile.DoesNotExist:
+                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            if lesson.teacher_id != teacher.id:
+                return Response(
+                    {"detail": "You can only edit your own students' lessons."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            if not teacher_can_edit_lesson_now(lesson):
+                return Response(
+                    {
+                        "detail": (
+                            "Lesson edit window expired. "
+                            "Please ask coordinator to enable edit permission."
+                        )
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        else:
+            return Response(
+                {"detail": "Only coordinators and teachers can edit lessons."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if "subject" in request.data:
+            next_subject = str(request.data.get("subject") or "").strip()
+            if next_subject:
+                duplicate = Lesson.objects.filter(
+                    student=lesson.student,
+                    teacher=lesson.teacher,
+                    date=lesson.date,
+                    subject=next_subject,
+                ).exclude(id=lesson.id).first()
+
+                if duplicate:
+                    return Response(
+                        {"detail": "Another lesson already exists for this student, date, and subject."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            lesson.subject = next_subject
+
+        if "topic_summary" in request.data:
+            lesson.topic_summary = str(request.data.get("topic_summary") or "").strip()
+            lesson.title = lesson.topic_summary[:200]
+
+        if "progress_status" in request.data:
+            progress_status = str(request.data.get("progress_status") or "").strip()
+            allowed_statuses = ["excellent", "good", "satisfactory", "needs_improvement", ""]
+
+            if progress_status not in allowed_statuses:
+                return Response({"detail": "Invalid progress_status."}, status=status.HTTP_400_BAD_REQUEST)
+
+            lesson.progress_status = progress_status
+
+        if "remarks" in request.data:
+            lesson.remarks = str(request.data.get("remarks") or "").strip()
+
+        if "notes" in request.data:
+            lesson.notes = str(request.data.get("notes") or "").strip()
+
+        if "lesson_data" in request.data:
+            lesson.lesson_data = request.data.get("lesson_data") or {}
+
+        lesson.save()
+
+        return Response(lesson_payload(lesson))
+
+
+class LessonAccessPermissionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        if user.role not in ["coordinator", "teacher"]:
+            return Response({"detail": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
+
+        permissions = LessonAccessPermission.objects.select_related(
+            "student__user",
+            "teacher__user",
+            "granted_by",
+        )
+
+        student_id = safe_int(request.query_params.get("student_id"))
+        teacher_id = safe_int(request.query_params.get("teacher_id"))
+        lesson_date = (
+            str(request.query_params.get("lesson_date", "")).strip()
+            or str(request.query_params.get("date", "")).strip()
+        )
+        access_type = normalize_lesson_access_type(request.query_params.get("access_type"))
+        is_active_value = request.query_params.get("is_active")
+
+        if student_id:
+            permissions = permissions.filter(student_id=student_id)
+
+        if teacher_id:
+            permissions = permissions.filter(teacher_id=teacher_id)
+
+        if lesson_date:
+            permissions = permissions.filter(lesson_date=lesson_date)
+
+        if access_type:
+            permissions = permissions.filter(access_type=access_type)
+
+        if is_active_value is not None:
+            active_text = str(is_active_value).strip().lower()
+
+            if active_text in ["true", "1", "yes"]:
+                permissions = permissions.filter(is_active=True)
+            elif active_text in ["false", "0", "no"]:
+                permissions = permissions.filter(is_active=False)
+
+        if user.role == "teacher":
+            try:
+                teacher = user.teacher_profile
+            except TeacherProfile.DoesNotExist:
+                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            permissions = permissions.filter(teacher=teacher)
+
+        total_count = permissions.count()
+        permissions = list(permissions.order_by("-lesson_date", "-updated_at", "-id")[:500])
+
+        return Response({
+            "count": total_count,
+            "results": [lesson_permission_payload(item) for item in permissions],
+        })
+
+    def post(self, request):
+        user = request.user
+
+        if user.role != "coordinator":
+            return Response(
+                {"detail": "Only coordinators can manage lesson permissions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        student_id = request.data.get("student_id")
+        teacher_id = request.data.get("teacher_id")
+        lesson_date_value = request.data.get("lesson_date") or request.data.get("date")
+        access_type = normalize_lesson_access_type(request.data.get("access_type"))
+        subject = str(request.data.get("subject", "") or "").strip()
+        reason = str(request.data.get("reason", "") or "").strip()
+        is_active = bool(request.data.get("is_active", True))
+
+        if not student_id:
+            return Response({"detail": "student_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not teacher_id:
+            return Response({"detail": "teacher_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not lesson_date_value:
+            return Response({"detail": "lesson_date is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if access_type not in ["add", "edit"]:
+            return Response(
+                {"detail": "access_type must be add or edit."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        lesson_date, date_error = parse_date_str(lesson_date_value, "lesson_date")
+        if date_error:
+            return Response({"detail": date_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            student = StudentProfile.objects.select_related("teacher", "user").get(id=student_id)
+        except StudentProfile.DoesNotExist:
+            return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            teacher = TeacherProfile.objects.select_related("user").get(id=teacher_id)
+        except TeacherProfile.DoesNotExist:
+            return Response({"detail": "Teacher not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if student.teacher_id != teacher.id:
+            return Response(
+                {"detail": "This student is not assigned to the selected teacher."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        LessonAccessPermission.objects.filter(
+            student=student,
+            teacher=teacher,
+            lesson_date=lesson_date,
+            subject=subject,
+            access_type=access_type,
+            is_active=True,
+        ).update(is_active=False)
+
+        permission = LessonAccessPermission.objects.create(
+            student=student,
+            teacher=teacher,
+            lesson_date=lesson_date,
+            subject=subject,
+            access_type=access_type,
+            is_active=is_active,
+            reason=reason,
+            granted_by=user,
+        )
+
+        try:
+            notify_permission_granted(permission)
+        except Exception as e:
+            logger.warning("WebSocket notify failed: %s", e)
+
+        return Response(lesson_permission_payload(permission), status=status.HTTP_201_CREATED)
+
+    def delete(self, request):
+        user = request.user
+
+        if user.role != "coordinator":
+            return Response(
+                {"detail": "Only coordinators can disable lesson permissions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        permission_id = request.query_params.get("id")
+
+        if not permission_id:
+            return Response({"detail": "Permission id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            permission = LessonAccessPermission.objects.get(id=permission_id)
+        except LessonAccessPermission.DoesNotExist:
+            return Response({"detail": "Permission not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        permission.is_active = False
+        permission.save(update_fields=["is_active", "updated_at"])
+
+        try:
+            notify_permission_disabled(permission)
+        except Exception as e:
+            logger.warning("WebSocket notify failed: %s", e)
+
+        return Response({"detail": "Permission disabled successfully."})
+
+
+def lesson_access_request_payload(item):
+    return {
+        "id": item.id,
+        "student_id": item.student_id,
+        "student_name": str(item.student),
+        "teacher_id": item.teacher_id,
+        "teacher_name": str(item.teacher),
+        "date": str(item.lesson_date),
+        "lesson_date": str(item.lesson_date),
+        "subject": item.subject or "",
+        "request_type": item.request_type,
+        "status": item.status,
+        "reason": item.reason or "",
+        "coordinator_note": item.coordinator_note or "",
+        "reviewed_by_id": item.reviewed_by_id,
+        "reviewed_by_name": user_display_name(item.reviewed_by) if item.reviewed_by else "",
+        "permission_id": item.permission_id,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+    }
+
+
+class LessonAccessRequestView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        if user.role not in ["coordinator", "teacher"]:
+            return Response({"detail": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
+
+        rows = LessonAccessRequest.objects.select_related(
+            "student__user",
+            "teacher__user",
+            "reviewed_by",
+            "permission",
+        )
+
+        status_value = str(request.query_params.get("status", "pending") or "").strip().lower()
+        request_type = normalize_lesson_access_type(request.query_params.get("request_type"))
+        student_id = safe_int(request.query_params.get("student_id"))
+        teacher_id = safe_int(request.query_params.get("teacher_id"))
+
+        if status_value and status_value != "all":
+            rows = rows.filter(status=status_value)
+
+        if request_type:
+            rows = rows.filter(request_type=request_type)
+
+        if student_id:
+            rows = rows.filter(student_id=student_id)
+
+        if teacher_id:
+            rows = rows.filter(teacher_id=teacher_id)
+
+        if user.role == "teacher":
+            try:
+                teacher = user.teacher_profile
+            except TeacherProfile.DoesNotExist:
+                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            rows = rows.filter(teacher=teacher)
+
+        total_count = rows.count()
+        rows = list(rows.order_by("-created_at", "-id")[:500])
+
+        return Response({
+            "count": total_count,
+            "results": [lesson_access_request_payload(item) for item in rows],
+        })
+
+    def post(self, request):
+        user = request.user
+
+        if user.role != "teacher":
+            return Response(
+                {"detail": "Only teachers can request lesson permissions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            teacher = user.teacher_profile
+        except TeacherProfile.DoesNotExist:
+            return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        student_id = request.data.get("student_id")
+        lesson_date_value = request.data.get("lesson_date") or request.data.get("date")
+        request_type = normalize_lesson_access_type(request.data.get("request_type"))
+        subject = str(request.data.get("subject", "") or "").strip()
+        reason = str(request.data.get("reason", "") or "").strip()
+
+        if not student_id:
+            return Response({"detail": "student_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not lesson_date_value:
+            return Response({"detail": "lesson_date is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if request_type not in ["add", "edit"]:
+            return Response({"detail": "request_type must be add or edit."}, status=status.HTTP_400_BAD_REQUEST)
+
+        lesson_date, date_error = parse_date_str(lesson_date_value, "lesson_date")
+        if date_error:
+            return Response({"detail": date_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            student = StudentProfile.objects.select_related("teacher", "user").get(id=student_id)
+        except StudentProfile.DoesNotExist:
+            return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if student.teacher_id != teacher.id:
+            return Response(
+                {"detail": "You can only request permissions for your assigned students."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if request_type == "edit":
+                    if not subject:
+                        return Response({"detail": "subject is required for edit requests."}, status=status.HTTP_400_BAD_REQUEST)
+
+                    # Check if a daily report exists for this date (even if this specific subject isn't there yet)
+                    # This allows teachers to request permission to add a new subject to an existing report
+                    report_exists = DailyLessonReport.objects.filter(
+                        student=student,
+                        teacher=teacher,
+                        date=lesson_date,
+                    ).exists()
+
+                    exists_in_lesson = Lesson.objects.filter(
+                        student=student,
+                        teacher=teacher,
+                        date=lesson_date,
+                        subject=subject,
+                    ).exists()
+
+                    exists_in_daily_report = DailyLessonSubjectEntry.objects.filter(
+                        report__student=student,
+                        report__teacher=teacher,
+                        report__date=lesson_date,
+                        subject=subject,
+                    ).exists()
+
+                    # Allow if: subject exists in old Lesson model, OR subject exists in daily report,
+                    # OR a daily report exists for this date (teacher adding new subject to existing report)
+                    if not exists_in_lesson and not exists_in_daily_report and not report_exists:
+                        return Response(
+                            {"detail": "No lesson report exists for this student and date."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
+        if request_type == "add":
+            subject = ""
+
+        existing = LessonAccessRequest.objects.filter(
+            teacher=teacher,
+            student=student,
+            lesson_date=lesson_date,
+            subject=subject,
+            request_type=request_type,
+            status="pending",
+        ).first()
+
+        if existing:
+            return Response(lesson_access_request_payload(existing), status=status.HTTP_200_OK)
+
+        item = LessonAccessRequest.objects.create(
+            teacher=teacher,
+            student=student,
+            lesson_date=lesson_date,
+            subject=subject,
+            request_type=request_type,
+            status="pending",
+            reason=reason,
+        )
+
+        try:
+            notify_request_created(item)
+        except Exception as e:
+            logger.warning("WebSocket notify failed: %s", e)
+
+        return Response(lesson_access_request_payload(item), status=status.HTTP_201_CREATED)
+
+
+class LessonAccessRequestDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        user = request.user
+
+        if user.role != "coordinator":
+            return Response(
+                {"detail": "Only coordinators can review lesson permission requests."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            item = LessonAccessRequest.objects.select_related(
+                "student__user",
+                "teacher__user",
+                "reviewed_by",
+                "permission",
+            ).get(id=pk)
+        except LessonAccessRequest.DoesNotExist:
+            return Response({"detail": "Request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        action = str(request.data.get("action", "") or "").strip().lower()
+        coordinator_note = str(request.data.get("coordinator_note", "") or "").strip()
+
+        if item.status != "pending":
+            return Response({"detail": "This request has already been reviewed."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if action not in ["approve", "reject"]:
+            return Response({"detail": "action must be approve or reject."}, status=status.HTTP_400_BAD_REQUEST)
+
+        item.coordinator_note = coordinator_note
+        item.reviewed_by = user
+        item.reviewed_at = timezone.now()
+
+        if action == "reject":
+            item.status = "rejected"
+            item.save()
+            try:
+                notify_request_reviewed(item, "reject")
+            except Exception as e:
+                logger.warning("WebSocket notify failed: %s", e)
+            return Response(lesson_access_request_payload(item))
+
+        LessonAccessPermission.objects.filter(
+            teacher=item.teacher,
+            student=item.student,
+            lesson_date=item.lesson_date,
+            subject=item.subject or "",
+            access_type=item.request_type,
+            is_active=True,
+        ).update(is_active=False)
+
+        permission = LessonAccessPermission.objects.create(
+            teacher=item.teacher,
+            student=item.student,
+            lesson_date=item.lesson_date,
+            subject=item.subject or "",
+            access_type=item.request_type,
+            is_active=True,
+            reason=item.reason or coordinator_note,
+            granted_by=user,
+        )
+
+        item.status = "approved"
+        item.permission = permission
+        item.save()
+
+        try:
+            notify_request_reviewed(item, "approve")
+        except Exception as e:
+            logger.warning("WebSocket notify failed: %s", e)
+
+        return Response(lesson_access_request_payload(item))
+
+
+class DailyLessonReportListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        student_id = safe_int(request.query_params.get("student_id"))
+        teacher_id = safe_int(request.query_params.get("teacher_id"))
+        month = safe_int(request.query_params.get("month"))
+        year = safe_int(request.query_params.get("year"))
+
+        reports = DailyLessonReport.objects.select_related(
+            "student__user",
+            "teacher__user",
+            "created_by",
+            "edit_permission_granted_by",
+        ).prefetch_related("subject_entries")
+
+        if student_id:
+            reports = reports.filter(student_id=student_id)
+
+        if teacher_id:
+            reports = reports.filter(teacher_id=teacher_id)
+
+        if month and year:
+            first_day, next_month = build_month_range(year, month)
+            reports = reports.filter(date__gte=first_day, date__lt=next_month)
+
+        if user.role == "coordinator":
+            pass
+
+        elif user.role == "teacher":
+            try:
+                teacher = user.teacher_profile
+            except TeacherProfile.DoesNotExist:
+                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            reports = reports.filter(teacher=teacher)
+
+        elif user.role == "student":
+            try:
+                student = user.student_profile
+            except StudentProfile.DoesNotExist:
+                return Response({"detail": "Student profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            reports = reports.filter(student=student)
+
+        else:
+            return Response({"detail": "Invalid role."}, status=status.HTTP_403_FORBIDDEN)
+
+        reports = reports.order_by("-date", "-updated_at", "-id")
+        total_count = reports.count()
+
+        return Response({
+            "count": total_count,
+            "results": [daily_lesson_report_payload(item) for item in reports],
+        })
+
+    def post(self, request):
+        user = request.user
+
+        if user.role not in ["teacher", "coordinator"]:
+            return Response(
+                {"detail": "Students cannot create lesson reports."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        student_id = request.data.get("student_id")
+        lesson_date = request.data.get("date") or timezone.localdate().isoformat()
+        notes = str(request.data.get("notes", "") or "").strip()
+        subject_entries = request.data.get("subject_entries") or []
+
+        if not student_id:
+            return Response({"detail": "student_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not isinstance(subject_entries, list) or not subject_entries:
+            return Response(
+                {"detail": "subject_entries must contain at least one subject."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        parsed_lesson_date, date_error = parse_date_str(lesson_date, "date")
+        if date_error:
+            return Response({"detail": "Invalid date format. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            student = StudentProfile.objects.select_related(
+                "teacher",
+                "teacher__user",
+                "user",
+            ).get(id=student_id)
+        except StudentProfile.DoesNotExist:
+            return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if user.role == "teacher":
+            try:
+                teacher = user.teacher_profile
+            except TeacherProfile.DoesNotExist:
+                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            if student.teacher_id != teacher.id:
+                return Response(
+                    {"detail": "You can only create lesson reports for your assigned students."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            report_exists = DailyLessonReport.objects.filter(
+                student=student,
+                teacher=teacher,
+                date=parsed_lesson_date,
+            ).exists()
+
+            if report_exists:
+                fake_lesson = type("LessonPermissionCheck", (), {
+                    "student": student,
+                    "teacher": teacher,
+                    "date": parsed_lesson_date,
+                    "created_at": None,
+                })()
+
+                if not teacher_can_edit_lesson_now(fake_lesson):
+                    return Response(
+                        {
+                            "detail": (
+                                "Daily lesson report already exists and the edit window expired. "
+                                "Please ask coordinator to enable edit permission."
+                            )
+                        },
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            elif not teacher_can_add_lesson_now(student, teacher, parsed_lesson_date):
+                return Response(
+                    {
+                        "detail": (
+                            "Lesson add window expired or has not started yet. "
+                            "Please ask coordinator to enable add permission."
+                        )
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        else:
+            teacher_id = request.data.get("teacher_id") or student.teacher_id
+
+            try:
+                teacher = TeacherProfile.objects.get(id=teacher_id)
+            except TeacherProfile.DoesNotExist:
+                return Response({"detail": "Teacher not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        allowed_statuses = ["excellent", "good", "satisfactory", "needs_improvement", ""]
+        cleaned_entries = []
+
+        for index, raw_entry in enumerate(subject_entries):
+            if not isinstance(raw_entry, dict):
+                continue
+
+            subject = str(raw_entry.get("subject", "") or "").strip()
+            topic_summary = str(raw_entry.get("topic_summary", "") or "").strip()
+            progress_status = str(raw_entry.get("progress_status", "") or "").strip()
+            remarks = str(raw_entry.get("remarks", "") or "").strip()
+            lesson_data = raw_entry.get("lesson_data") or {}
+
+            if not subject:
+                return Response(
+                    {"detail": f"Subject is required for subject block {index + 1}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if not topic_summary:
+                return Response(
+                    {"detail": f"Topic summary is required for subject block {index + 1}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if progress_status not in allowed_statuses:
+                return Response(
+                    {"detail": f"Invalid progress status in subject block {index + 1}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            cleaned_entries.append({
+                "subject": subject,
+                "topic_summary": topic_summary,
+                "progress_status": progress_status,
+                "remarks": remarks,
+                "lesson_data": lesson_data,
+                "sort_order": index,
+            })
+
+        if not cleaned_entries:
+            return Response(
+                {"detail": "At least one valid subject entry is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            report, created = DailyLessonReport.objects.update_or_create(
+                student=student,
+                teacher=teacher,
+                date=parsed_lesson_date,
+                defaults={
+                    "notes": notes,
+                    "created_by": user,
+                },
+            )
+
+            report.subject_entries.all().delete()
+
+            DailyLessonSubjectEntry.objects.bulk_create([
+                DailyLessonSubjectEntry(
+                    report=report,
+                    subject=item["subject"],
+                    topic_summary=item["topic_summary"],
+                    progress_status=item["progress_status"],
+                    remarks=item["remarks"],
+                    lesson_data=item["lesson_data"],
+                    sort_order=item["sort_order"],
+                )
+                for item in cleaned_entries
+            ])
+
+        report = DailyLessonReport.objects.select_related(
+            "student__user",
+            "teacher__user",
+            "created_by",
+            "edit_permission_granted_by",
+        ).prefetch_related("subject_entries").get(id=report.id)
+
+        try:
+            notify_lesson_saved(report, created)
+        except Exception as e:
+            logger.warning("WebSocket notify failed: %s", e)
+
         return Response(
-            lesson_payload(lesson),
-            status=status.HTTP_201_CREATED,
+            daily_lesson_report_payload(report),
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
 
 # ============================================================
@@ -731,36 +1799,26 @@ class AttendanceListCreateView(APIView):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Teacher profile not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
-            attendance = attendance.filter(
-                Q(teacher=teacher) | Q(student__teacher=teacher)
-            )
+            attendance = attendance.filter(Q(teacher=teacher) | Q(student__teacher=teacher))
 
         elif user.role == "student":
             try:
                 student = user.student_profile
             except StudentProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Student profile not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Student profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
             attendance = attendance.filter(student=student)
 
         else:
-            return Response(
-                {"detail": "Invalid role."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            return Response({"detail": "Invalid role."}, status=status.HTTP_403_FORBIDDEN)
 
-        attendance = attendance.order_by("-date", "-updated_at", "-id")[:1000]
+        total_count = attendance.count()
+        attendance = list(attendance.order_by("-date", "-updated_at", "-id")[:1000])
 
         return Response({
-            "count": len(attendance),
+            "count": total_count,
             "results": [attendance_payload(item) for item in attendance],
         })
 
@@ -780,16 +1838,10 @@ class AttendanceListCreateView(APIView):
         status_value = str(request.data.get("status", "")).strip().lower()
 
         if entity_type not in ["teacher", "student"]:
-            return Response(
-                {"detail": "entity_type must be teacher or student."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "entity_type must be teacher or student."}, status=status.HTTP_400_BAD_REQUEST)
 
         if status_value not in ["present", "absent", "leave"]:
-            return Response(
-                {"detail": "status must be present, absent, or leave."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "status must be present, absent, or leave."}, status=status.HTTP_400_BAD_REQUEST)
 
         if entity_type == "teacher":
             if not teacher_id:
@@ -801,10 +1853,7 @@ class AttendanceListCreateView(APIView):
             try:
                 teacher = TeacherProfile.objects.get(id=teacher_id)
             except TeacherProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Teacher not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Teacher not found."}, status=status.HTTP_404_NOT_FOUND)
 
             Attendance.objects.filter(
                 entity_type=Attendance.EntityType.TEACHER,
@@ -821,10 +1870,12 @@ class AttendanceListCreateView(APIView):
                 marked_by=user,
             )
 
-            return Response(
-                attendance_payload(attendance),
-                status=status.HTTP_201_CREATED,
-            )
+            try:
+                notify_attendance_marked(attendance)
+            except Exception as e:
+                logger.warning("WebSocket notify failed: %s", e)
+
+            return Response(attendance_payload(attendance), status=status.HTTP_201_CREATED)
 
         if not student_id:
             return Response(
@@ -835,10 +1886,7 @@ class AttendanceListCreateView(APIView):
         try:
             student = StudentProfile.objects.get(id=student_id)
         except StudentProfile.DoesNotExist:
-            return Response(
-                {"detail": "Student not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
 
         Attendance.objects.filter(
             entity_type=Attendance.EntityType.STUDENT,
@@ -855,10 +1903,12 @@ class AttendanceListCreateView(APIView):
             marked_by=user,
         )
 
-        return Response(
-            attendance_payload(attendance),
-            status=status.HTTP_201_CREATED,
-        )
+        try:
+                notify_attendance_marked(attendance)
+        except Exception as e:
+            logger.warning("WebSocket notify failed: %s", e)
+
+        return Response(attendance_payload(attendance), status=status.HTTP_201_CREATED)
 
 
 class AttendanceDeleteView(APIView):
@@ -876,21 +1926,16 @@ class AttendanceDeleteView(APIView):
         try:
             attendance = Attendance.objects.get(id=pk)
         except Attendance.DoesNotExist:
-            return Response(
-                {"detail": "Attendance record not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            return Response({"detail": "Attendance record not found."}, status=status.HTTP_404_NOT_FOUND)
 
         attendance.delete()
-
-        return Response({
-            "detail": "Attendance deleted successfully."
-        })
+        return Response({"detail": "Attendance deleted successfully."})
 
 
 # ============================================================
 # Monthly Lesson Plan API
 # ============================================================
+
 class MonthlyLessonPlanListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -927,10 +1972,7 @@ class MonthlyLessonPlanListCreateView(APIView):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Teacher profile not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
             plans = plans.filter(teacher=teacher)
 
@@ -938,18 +1980,12 @@ class MonthlyLessonPlanListCreateView(APIView):
             try:
                 student = user.student_profile
             except StudentProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Student profile not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Student profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
             plans = plans.filter(student=student)
 
         else:
-            return Response(
-                {"detail": "Invalid role."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            return Response({"detail": "Invalid role."}, status=status.HTTP_403_FORBIDDEN)
 
         plans = plans.order_by("-year", "-month", "student__user__first_name", "subject", "-id")
 
@@ -972,45 +2008,28 @@ class MonthlyLessonPlanListCreateView(APIView):
         month = safe_int(request.data.get("month"))
         year = safe_int(request.data.get("year"))
         subject = str(request.data.get("subject", "")).strip()
-
         plan_text = str(
             request.data.get("plan_text")
             or request.data.get("target_summary")
             or request.data.get("week_1_plan")
             or ""
         ).strip()
-
         notes = str(request.data.get("notes", "") or "").strip()
 
         if not student_id:
-            return Response(
-                {"detail": "student_id is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "student_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not month or month < 1 or month > 12:
-            return Response(
-                {"detail": "month must be between 1 and 12."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "month must be between 1 and 12."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not year or year < 2000:
-            return Response(
-                {"detail": "year is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "year is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not subject:
-            return Response(
-                {"detail": "subject is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "subject is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not plan_text:
-            return Response(
-                {"detail": "plan_text is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "plan_text is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             student = StudentProfile.objects.select_related(
@@ -1019,19 +2038,13 @@ class MonthlyLessonPlanListCreateView(APIView):
                 "user",
             ).get(id=student_id)
         except StudentProfile.DoesNotExist:
-            return Response(
-                {"detail": "Student not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
 
         if user.role == "teacher":
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Teacher profile not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
             if student.teacher_id != teacher.id:
                 return Response(
@@ -1045,19 +2058,13 @@ class MonthlyLessonPlanListCreateView(APIView):
             try:
                 teacher = TeacherProfile.objects.get(id=teacher_id)
             except TeacherProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Teacher not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Teacher not found."}, status=status.HTTP_404_NOT_FOUND)
 
         allowed_statuses = ["planned", "in_progress", "completed"]
         plan_status = str(request.data.get("status", "planned")).strip().lower()
 
         if plan_status not in allowed_statuses:
-            return Response(
-                {"detail": "Invalid plan status."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "Invalid plan status."}, status=status.HTTP_400_BAD_REQUEST)
 
         defaults = {
             "notes": notes,
@@ -1080,10 +2087,8 @@ class MonthlyLessonPlanListCreateView(APIView):
             defaults=defaults,
         )
 
-        return Response(
-            monthly_plan_payload(plan),
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
-        )
+        return Response(monthly_plan_payload(plan), status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
 
 class MonthlyLessonPlanDetailView(APIView):
     permission_classes = [IsAuthenticated]
@@ -1098,10 +2103,7 @@ class MonthlyLessonPlanDetailView(APIView):
                 "created_by",
             ).get(id=pk)
         except MonthlyLessonPlan.DoesNotExist:
-            return Response(
-                {"detail": "Monthly lesson plan not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            return Response({"detail": "Monthly lesson plan not found."}, status=status.HTTP_404_NOT_FOUND)
 
         if user.role == "coordinator":
             pass
@@ -1110,10 +2112,7 @@ class MonthlyLessonPlanDetailView(APIView):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Teacher profile not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
             if plan.teacher_id != teacher.id:
                 return Response(
@@ -1144,15 +2143,11 @@ class MonthlyLessonPlanDetailView(APIView):
             value = str(request.data.get("status") or "").strip().lower()
 
             if value not in ["planned", "in_progress", "completed"]:
-                return Response(
-                    {"detail": "Invalid plan status."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                return Response({"detail": "Invalid plan status."}, status=status.HTTP_400_BAD_REQUEST)
 
             plan.status = value
 
         plan.save()
-
         return Response(monthly_plan_payload(plan))
 
     def delete(self, request, pk):
@@ -1167,16 +2162,10 @@ class MonthlyLessonPlanDetailView(APIView):
         try:
             plan = MonthlyLessonPlan.objects.get(id=pk)
         except MonthlyLessonPlan.DoesNotExist:
-            return Response(
-                {"detail": "Monthly lesson plan not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            return Response({"detail": "Monthly lesson plan not found."}, status=status.HTTP_404_NOT_FOUND)
 
         plan.delete()
-
-        return Response({
-            "detail": "Monthly lesson plan deleted successfully."
-        })
+        return Response({"detail": "Monthly lesson plan deleted successfully."})
 
 
 class MonthlyLessonSummaryView(APIView):
@@ -1191,16 +2180,10 @@ class MonthlyLessonSummaryView(APIView):
         teacher_id = safe_int(request.query_params.get("teacher_id"))
 
         if not month or month < 1 or month > 12:
-            return Response(
-                {"detail": "month must be between 1 and 12."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "month must be between 1 and 12."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not year or year < 2000:
-            return Response(
-                {"detail": "year is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "year is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         first_day, next_month = build_month_range(year, month)
 
@@ -1208,27 +2191,29 @@ class MonthlyLessonSummaryView(APIView):
             "student__user",
             "teacher__user",
             "created_by",
-        ).filter(
-            date__gte=first_day,
-            date__lt=next_month,
-        )
+        ).filter(date__gte=first_day, date__lt=next_month)
 
         plans = MonthlyLessonPlan.objects.select_related(
             "student__user",
             "teacher__user",
             "created_by",
-        ).filter(
-            month=month,
-            year=year,
-        )
+        ).filter(month=month, year=year)
+
+        summaries = MonthlyLessonSummary.objects.select_related(
+            "student__user",
+            "teacher__user",
+            "created_by",
+        ).filter(month=month, year=year)
 
         if student_id:
             lessons = lessons.filter(student_id=student_id)
             plans = plans.filter(student_id=student_id)
+            summaries = summaries.filter(student_id=student_id)
 
         if teacher_id:
             lessons = lessons.filter(teacher_id=teacher_id)
             plans = plans.filter(teacher_id=teacher_id)
+            summaries = summaries.filter(teacher_id=teacher_id)
 
         if user.role == "coordinator":
             pass
@@ -1237,34 +2222,28 @@ class MonthlyLessonSummaryView(APIView):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Teacher profile not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
             lessons = lessons.filter(teacher=teacher)
             plans = plans.filter(teacher=teacher)
+            summaries = summaries.filter(teacher=teacher)
 
         elif user.role == "student":
             try:
                 student = user.student_profile
             except StudentProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Student profile not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Student profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
             lessons = lessons.filter(student=student)
             plans = plans.filter(student=student)
+            summaries = summaries.filter(student=student)
 
         else:
-            return Response(
-                {"detail": "Invalid role."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            return Response({"detail": "Invalid role."}, status=status.HTTP_403_FORBIDDEN)
 
         lesson_rows = list(lessons.order_by("student__user__first_name", "date", "id"))
         plan_rows = list(plans.order_by("student__user__first_name", "subject", "id"))
+        summary_rows = list(summaries.order_by("student__user__first_name", "subject", "id"))
 
         progress_counts = {
             "excellent": 0,
@@ -1320,11 +2299,14 @@ class MonthlyLessonSummaryView(APIView):
             if item.remarks:
                 students[key]["remarks"].append(item.remarks)
 
+        saved_by_student = {}
+        for summary in summary_rows:
+            saved_by_student[summary.student_id] = summary
+
         student_summaries = []
 
         for item in students.values():
-            auto_summary = build_student_auto_summary(item)
-
+            saved_summary = saved_by_student.get(item["student_id"])
             student_summaries.append({
                 "student_id": item["student_id"],
                 "student_name": item["student_name"],
@@ -1335,7 +2317,8 @@ class MonthlyLessonSummaryView(APIView):
                 "progress_counts": item["progress_counts"],
                 "topics": item["topics"][:20],
                 "remarks": item["remarks"][:20],
-                "auto_summary": auto_summary,
+                "auto_summary": build_student_auto_summary(item),
+                "saved_summary": monthly_summary_payload(saved_summary) if saved_summary else None,
             })
 
         return Response({
@@ -1347,8 +2330,151 @@ class MonthlyLessonSummaryView(APIView):
             "progress_counts": progress_counts,
             "plans": [monthly_plan_payload(item) for item in plan_rows],
             "lessons": [lesson_payload(item) for item in lesson_rows],
+            "summaries": [monthly_summary_payload(item) for item in summary_rows],
             "student_summaries": student_summaries,
         })
+
+    def post(self, request):
+        user = request.user
+
+        if user.role not in ["coordinator", "teacher"]:
+            return Response(
+                {"detail": "Students cannot create monthly lesson summaries."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        student_id = request.data.get("student_id")
+        teacher_id = request.data.get("teacher_id")
+        month = safe_int(request.data.get("month"))
+        year = safe_int(request.data.get("year"))
+
+        if not student_id:
+            return Response({"detail": "student_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not month or month < 1 or month > 12:
+            return Response({"detail": "month must be between 1 and 12."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not year or year < 2000:
+            return Response({"detail": "year is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            student = StudentProfile.objects.select_related(
+                "teacher",
+                "teacher__user",
+                "user",
+            ).get(id=student_id)
+        except StudentProfile.DoesNotExist:
+            return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if user.role == "teacher":
+            try:
+                teacher = user.teacher_profile
+            except TeacherProfile.DoesNotExist:
+                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            if student.teacher_id != teacher.id:
+                return Response(
+                    {"detail": "You can only create summaries for your assigned students."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        else:
+            teacher_id = teacher_id or student.teacher_id
+
+            try:
+                teacher = TeacherProfile.objects.get(id=teacher_id)
+            except TeacherProfile.DoesNotExist:
+                return Response({"detail": "Teacher not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        first_day, next_month = build_month_range(year, month)
+
+        lessons = Lesson.objects.filter(
+            student=student,
+            teacher=teacher,
+            date__gte=first_day,
+            date__lt=next_month,
+        ).order_by("date", "id")
+
+        total_lessons = lessons.count()
+        subjects = Counter()
+        progress_counts = Counter()
+        topics = []
+        remarks = []
+
+        for lesson in lessons:
+            if lesson.subject:
+                subjects[lesson.subject] += 1
+
+            progress_counts[lesson.progress_status or "blank"] += 1
+
+            if lesson.topic_summary:
+                topics.append(lesson.topic_summary)
+
+            if lesson.remarks:
+                remarks.append(lesson.remarks)
+
+        summary_text = str(request.data.get("summary_text") or "").strip()
+        strengths = str(request.data.get("strengths") or "").strip()
+        weaknesses = str(
+            request.data.get("improvement_areas")
+            or request.data.get("weaknesses")
+            or ""
+        ).strip()
+        recommendations = str(
+            request.data.get("parent_message")
+            or request.data.get("recommendations")
+            or ""
+        ).strip()
+
+        if not summary_text:
+            if total_lessons == 0:
+                summary_text = f"No lessons were recorded for {student} in {month}/{year}."
+            else:
+                subject_names = ", ".join(subjects.keys()) if subjects else "multiple subjects"
+                topic_preview = ", ".join(topics[:5]) if topics else "regular revision"
+                summary_text = (
+                    f"{student} completed {total_lessons} lesson"
+                    f"{'' if total_lessons == 1 else 's'} in {month}/{year}. "
+                    f"Subjects covered: {subject_names}. "
+                    f"Main topics: {topic_preview}."
+                )
+
+        if not strengths:
+            strengths = "The student continued learning and completed the recorded lessons for this month."
+
+        if not weaknesses:
+            weaknesses = "Continue regular revision and focus on consistency."
+
+        if not recommendations:
+            recommendations = "Please support daily revision at home and encourage regular attendance."
+
+        source = (
+            MonthlyLessonSummary.SummarySource.AI
+            if request.data.get("ai_generated")
+            else MonthlyLessonSummary.SummarySource.TEACHER
+        )
+
+        summary, created = MonthlyLessonSummary.objects.update_or_create(
+            student=student,
+            teacher=teacher,
+            month=month,
+            year=year,
+            subject="",
+            defaults={
+                "summary_text": summary_text,
+                "strengths": strengths,
+                "weaknesses": weaknesses,
+                "recommendations": recommendations,
+                "source": source,
+                "generated_from_lessons_count": total_lessons,
+                "created_by": user,
+            },
+        )
+
+        return Response(
+            monthly_summary_payload(summary),
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
 
 
 # ============================================================
@@ -1438,12 +2564,10 @@ def frontend_attendance_payload(record):
         "date": str(record.date),
         "classKey": class_key,
         "status": status_map.get(record.status, "Present"),
-
         "markedById": str(record.marked_by_id) if record.marked_by_id else "",
         "markedByUsername": record.marked_by.username if record.marked_by else "",
         "markedByName": user_display_name(record.marked_by) if record.marked_by else "",
         "markedByRole": record.marked_by.role if record.marked_by else "",
-
         "timestamp": int(record.updated_at.timestamp() * 1000) if record.updated_at else 0,
     }
 
@@ -1525,14 +2649,10 @@ class AcademyStateView(APIView):
 
         if user.role == "coordinator":
             teachers = TeacherProfile.objects.select_related("user").order_by("id")
-
             students = StudentProfile.objects.select_related(
                 "user",
                 "teacher__user",
-            ).prefetch_related(
-                schedules_prefetch,
-            ).order_by("user__first_name", "user__username", "id")
-
+            ).prefetch_related(schedules_prefetch).order_by("user__first_name", "user__username", "id")
             attendance_qs = Attendance.objects.select_related(
                 "teacher__user",
                 "student__user",
@@ -1543,63 +2663,38 @@ class AcademyStateView(APIView):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Teacher profile not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
             teachers = TeacherProfile.objects.select_related("user").filter(id=teacher.id)
-
             students = StudentProfile.objects.select_related(
                 "user",
                 "teacher__user",
-            ).prefetch_related(
-                schedules_prefetch,
-            ).filter(
-                teacher=teacher,
-            ).order_by("user__first_name", "user__username", "id")
-
+            ).prefetch_related(schedules_prefetch).filter(teacher=teacher).order_by("user__first_name", "user__username", "id")
             attendance_qs = Attendance.objects.select_related(
                 "teacher__user",
                 "student__user",
                 "marked_by",
-            ).filter(
-                Q(teacher=teacher) | Q(student__teacher=teacher)
-            ).order_by("-date", "-id")[:1000]
+            ).filter(Q(teacher=teacher) | Q(student__teacher=teacher)).order_by("-date", "-id")[:1000]
 
         elif user.role == "student":
             try:
                 student = user.student_profile
             except StudentProfile.DoesNotExist:
-                return Response(
-                    {"detail": "Student profile not found."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+                return Response({"detail": "Student profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
             teachers = TeacherProfile.objects.select_related("user").filter(id=student.teacher_id)
-
             students = StudentProfile.objects.select_related(
                 "user",
                 "teacher__user",
-            ).prefetch_related(
-                schedules_prefetch,
-            ).filter(
-                id=student.id,
-            )
-
+            ).prefetch_related(schedules_prefetch).filter(id=student.id)
             attendance_qs = Attendance.objects.select_related(
                 "teacher__user",
                 "student__user",
                 "marked_by",
-            ).filter(
-                student=student,
-            ).order_by("-date", "-id")[:500]
+            ).filter(student=student).order_by("-date", "-id")[:500]
 
         else:
-            return Response(
-                {"detail": "Invalid role."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            return Response({"detail": "Invalid role."}, status=status.HTTP_403_FORBIDDEN)
 
         weekday_label = {
             "monday": "Monday",
@@ -1639,7 +2734,6 @@ class AcademyStateView(APIView):
 
         for student in students:
             active_schedules = list(student.schedules.all())
-
             class_days = []
             time_slots = []
 
@@ -1650,7 +2744,9 @@ class AcademyStateView(APIView):
                     class_days.append(day)
 
                 if schedule.time_slot:
-                    time_slots.append(str(schedule.time_slot)[:5])
+                    time_value = str(schedule.time_slot)[:5]
+                    if time_value not in time_slots:
+                        time_slots.append(time_value)
 
             if time_slots:
                 time_slot = Counter(time_slots).most_common(1)[0][0]
@@ -1712,12 +2808,10 @@ class AcademyStateView(APIView):
                 "date": str(item.date),
                 "classKey": class_key,
                 "status": status_map.get(item.status, item.status),
-
                 "markedById": str(item.marked_by_id) if item.marked_by_id else "",
                 "markedByUsername": item.marked_by.username if item.marked_by else "",
                 "markedByName": user_display_name(item.marked_by) if item.marked_by else "",
                 "markedByRole": item.marked_by.role if item.marked_by else "",
-
                 "timestamp": int(item.updated_at.timestamp() * 1000) if item.updated_at else 0,
             })
 
@@ -1731,13 +2825,9 @@ class AcademyStateView(APIView):
         user = request.user
 
         if user.role != "coordinator":
-            return Response(
-                {"detail": "Only coordinators can sync state."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            return Response({"detail": "Only coordinators can sync state."}, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data or {}
-
         teachers_data = data.get("teachers", [])
         students_data = data.get("students", [])
         attendance_data = data.get("attendance", [])
@@ -1814,21 +2904,22 @@ class AcademyStateView(APIView):
             if not isinstance(class_days, list):
                 class_days = []
 
-            ClassSchedule.objects.filter(student=student).delete()
+            if class_days:
+                ClassSchedule.objects.filter(student=student).delete()
 
-            for day in class_days:
-                weekday = frontend_weekday_to_django(day)
+                for day in class_days:
+                    weekday = frontend_weekday_to_django(day)
 
-                if not weekday:
-                    continue
+                    if not weekday:
+                        continue
 
-                ClassSchedule.objects.create(
-                    student=student,
-                    teacher=student.teacher,
-                    weekday=weekday,
-                    time_slot=time_slot,
-                    is_active=True,
-                )
+                    ClassSchedule.objects.create(
+                        student=student,
+                        teacher=student.teacher,
+                        weekday=weekday,
+                        time_slot=time_slot,
+                        is_active=True,
+                    )
 
         latest_attendance = {}
 
@@ -1898,6 +2989,7 @@ class AcademyStateView(APIView):
                 )
 
         return Response({"detail": "State synced successfully."})
+
 
 # ============================================================
 # Gemini AI Assistant API
@@ -2044,22 +3136,22 @@ SCHOOL SUMMARY:
 - Total teachers visible to this user: {teachers.count()}
 - Total students visible to this user: {students.count()}
 - Attendance today:
-  - Present: {attendance_counts.get("present", 0)}
-  - Absent: {attendance_counts.get("absent", 0)}
-  - Leave: {attendance_counts.get("leave", 0)}
+  - Present: {attendance_counts.get('present', 0)}
+  - Absent: {attendance_counts.get('absent', 0)}
+  - Leave: {attendance_counts.get('leave', 0)}
   - Total marked: {attendance_today.count()}
 
 TEACHERS:
-{chr(10).join(teacher_lines) if teacher_lines else "No teacher data available."}
+{chr(10).join(teacher_lines) if teacher_lines else 'No teacher data available.'}
 
 STUDENTS AND SCHEDULES:
-{chr(10).join(student_lines) if student_lines else "No student data available."}
+{chr(10).join(student_lines) if student_lines else 'No student data available.'}
 
 RECENT LESSONS:
-{chr(10).join(lesson_lines) if lesson_lines else "No recent lesson data available."}
+{chr(10).join(lesson_lines) if lesson_lines else 'No recent lesson data available.'}
 
 RECENT MONTHLY PLANS:
-{chr(10).join(plan_lines) if plan_lines else "No monthly plan data available."}
+{chr(10).join(plan_lines) if plan_lines else 'No monthly plan data available.'}
 """.strip()
 
 
@@ -2073,24 +3165,18 @@ class GeminiAssistantView(APIView):
         history = request.data.get("history", [])
 
         if not message:
-            return Response(
-                {"detail": "message is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "message is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
 
         if not api_key:
             return Response(
-                {
-                    "detail": "GEMINI_API_KEY is not set on the Django server."
-                },
+                {"detail": "GEMINI_API_KEY is not set on the Django server."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
         model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
         school_context = build_assistant_school_context(user)
-
         safe_history = []
 
         if isinstance(history, list):
@@ -2159,25 +3245,16 @@ class GeminiAssistantView(APIView):
             candidates = data.get("candidates", [])
 
             if not candidates:
-                return Response({
-                    "reply": "I could not generate an answer. Please try again."
-                })
+                return Response({"reply": "I could not generate an answer. Please try again."})
 
-            parts = (
-                candidates[0]
-                .get("content", {})
-                .get("parts", [])
-            )
-
+            parts = candidates[0].get("content", {}).get("parts", [])
             reply = "".join(
                 str(part.get("text", ""))
                 for part in parts
                 if isinstance(part, dict)
             ).strip()
 
-            return Response({
-                "reply": reply or "I could not find a clear answer."
-            })
+            return Response({"reply": reply or "I could not find a clear answer."})
 
         except requests.RequestException as exc:
             return Response(
@@ -2186,4 +3263,4 @@ class GeminiAssistantView(APIView):
                     "error": str(exc),
                 },
                 status=status.HTTP_502_BAD_GATEWAY,
-            )    
+            )

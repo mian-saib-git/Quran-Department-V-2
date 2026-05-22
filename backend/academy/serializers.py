@@ -1,5 +1,13 @@
 from rest_framework import serializers
-from .models import TeacherProfile, StudentProfile, ClassSchedule, Attendance, Lesson
+from .models import (
+    TeacherProfile,
+    StudentProfile,
+    ClassSchedule,
+    Attendance,
+    Lesson,
+    DailyLessonReport,
+    DailyLessonSubjectEntry,
+)
 
 
 class TeacherProfileSerializer(serializers.ModelSerializer):
@@ -141,6 +149,56 @@ class LessonSerializer(serializers.ModelSerializer):
             "remarks",
             "lesson_data",
             "created_by_username",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_student_name(self, obj):
+        return obj.student.user.get_full_name() or obj.student.user.username
+
+    def get_teacher_name(self, obj):
+        return obj.teacher.user.get_full_name() or obj.teacher.user.username
+    
+
+
+class DailyLessonSubjectEntrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DailyLessonSubjectEntry
+        fields = [
+            "id",
+            "subject",
+            "topic_summary",
+            "progress_status",
+            "remarks",
+            "lesson_data",
+            "sort_order",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class DailyLessonReportSerializer(serializers.ModelSerializer):
+    student_id = serializers.IntegerField(source="student.id", read_only=True)
+    student_name = serializers.SerializerMethodField()
+    teacher_id = serializers.IntegerField(source="teacher.id", read_only=True)
+    teacher_name = serializers.SerializerMethodField()
+    created_by_username = serializers.CharField(source="created_by.username", read_only=True)
+    subject_entries = DailyLessonSubjectEntrySerializer(many=True, read_only=True)
+
+    class Meta:
+        model = DailyLessonReport
+        fields = [
+            "id",
+            "student_id",
+            "student_name",
+            "teacher_id",
+            "teacher_name",
+            "date",
+            "notes",
+            "subject_entries",
+            "created_by_username",
+            "edit_permission_until",
+            "edit_permission_note",
             "created_at",
             "updated_at",
         ]

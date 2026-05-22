@@ -3,20 +3,20 @@ from django.db import models
 
 
 class SubjectName(models.TextChoices):
-    QAIDA = 'Qaida Nooraniyya', 'Qaida Nooraniyya'
-    NAZIRA = 'Nazira Quran', 'Nazira Quran'
-    MEMORIZATION = 'Quran Memorization', 'Quran Memorization'
-    TAJWEED = 'Tajweed', 'Tajweed'
-    DUAS = 'Duas & Sunnah', 'Duas & Sunnah'
-    ARABIC = 'Arabic Basics', 'Arabic Basics'
-    OTHER = 'Other', 'Other'
+    QAIDA = "Qaida Nooraniyya", "Qaida Nooraniyya"
+    NAZIRA = "Nazira Quran", "Nazira Quran"
+    MEMORIZATION = "Quran Memorization", "Quran Memorization"
+    TAJWEED = "Tajweed", "Tajweed"
+    DUAS = "Duas & Sunnah", "Duas & Sunnah"
+    ARABIC = "Arabic Basics", "Arabic Basics"
+    OTHER = "Other", "Other"
 
 
 class TeacherProfile(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name='teacher_profile'
+        related_name="teacher_profile",
     )
     father_name = models.CharField(max_length=120, blank=True)
     phone = models.CharField(max_length=40, blank=True)
@@ -33,12 +33,12 @@ class StudentProfile(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name='student_profile'
+        related_name="student_profile",
     )
     teacher = models.ForeignKey(
         TeacherProfile,
         on_delete=models.PROTECT,
-        related_name='students'
+        related_name="students",
     )
     phone = models.CharField(max_length=40, blank=True)
     notes = models.TextField(blank=True)
@@ -51,7 +51,7 @@ class StudentSubject(models.Model):
     student = models.ForeignKey(
         StudentProfile,
         on_delete=models.CASCADE,
-        related_name='assigned_subjects'
+        related_name="assigned_subjects",
     )
     subject = models.CharField(max_length=120, choices=SubjectName.choices)
     custom_subject_name = models.CharField(max_length=120, blank=True)
@@ -63,13 +63,13 @@ class StudentSubject(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=['student', 'subject', 'custom_subject_name'],
-                name='unique_subject_per_student'
+                fields=["student", "subject", "custom_subject_name"],
+                name="unique_subject_per_student",
             )
         ]
         indexes = [
-            models.Index(fields=['student', 'is_active']),
-            models.Index(fields=['subject', 'is_active']),
+            models.Index(fields=["student", "is_active"]),
+            models.Index(fields=["subject", "is_active"]),
         ]
 
     @property
@@ -79,28 +79,28 @@ class StudentSubject(models.Model):
         return self.subject
 
     def __str__(self):
-        return f'{self.student} - {self.display_name}'
+        return f"{self.student} - {self.display_name}"
 
 
 class ClassSchedule(models.Model):
     class WeekDay(models.TextChoices):
-        MONDAY = 'monday', 'Monday'
-        TUESDAY = 'tuesday', 'Tuesday'
-        WEDNESDAY = 'wednesday', 'Wednesday'
-        THURSDAY = 'thursday', 'Thursday'
-        FRIDAY = 'friday', 'Friday'
-        SATURDAY = 'saturday', 'Saturday'
-        SUNDAY = 'sunday', 'Sunday'
+        MONDAY = "monday", "Monday"
+        TUESDAY = "tuesday", "Tuesday"
+        WEDNESDAY = "wednesday", "Wednesday"
+        THURSDAY = "thursday", "Thursday"
+        FRIDAY = "friday", "Friday"
+        SATURDAY = "saturday", "Saturday"
+        SUNDAY = "sunday", "Sunday"
 
     student = models.ForeignKey(
         StudentProfile,
         on_delete=models.CASCADE,
-        related_name='schedules'
+        related_name="schedules",
     )
     teacher = models.ForeignKey(
         TeacherProfile,
         on_delete=models.PROTECT,
-        related_name='schedules'
+        related_name="schedules",
     )
     weekday = models.CharField(max_length=20, choices=WeekDay.choices)
     time_slot = models.TimeField()
@@ -108,23 +108,23 @@ class ClassSchedule(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=['teacher', 'weekday', 'time_slot']),
-            models.Index(fields=['student', 'weekday', 'time_slot']),
+            models.Index(fields=["teacher", "weekday", "time_slot"]),
+            models.Index(fields=["student", "weekday", "time_slot"]),
         ]
 
     def __str__(self):
-        return f'{self.student} with {self.teacher} on {self.weekday} at {self.time_slot}'
+        return f"{self.student} with {self.teacher} on {self.weekday} at {self.time_slot}"
 
 
 class Attendance(models.Model):
     class EntityType(models.TextChoices):
-        TEACHER = 'teacher', 'Teacher'
-        STUDENT = 'student', 'Student'
+        TEACHER = "teacher", "Teacher"
+        STUDENT = "student", "Student"
 
     class Status(models.TextChoices):
-        PRESENT = 'present', 'Present'
-        ABSENT = 'absent', 'Absent'
-        LEAVE = 'leave', 'Leave'
+        PRESENT = "present", "Present"
+        ABSENT = "absent", "Absent"
+        LEAVE = "leave", "Leave"
 
     entity_type = models.CharField(max_length=20, choices=EntityType.choices)
     teacher = models.ForeignKey(
@@ -132,21 +132,21 @@ class Attendance(models.Model):
         null=True,
         blank=True,
         on_delete=models.CASCADE,
-        related_name='attendance_records'
+        related_name="attendance_records",
     )
     student = models.ForeignKey(
         StudentProfile,
         null=True,
         blank=True,
         on_delete=models.CASCADE,
-        related_name='attendance_records'
+        related_name="attendance_records",
     )
     date = models.DateField()
     status = models.CharField(max_length=20, choices=Status.choices)
     marked_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
-        related_name='marked_attendance'
+        related_name="marked_attendance",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -154,50 +154,50 @@ class Attendance(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=['entity_type', 'teacher', 'date'],
-                name='unique_teacher_attendance_per_day'
+                fields=["entity_type", "teacher", "date"],
+                name="unique_teacher_attendance_per_day",
             ),
             models.UniqueConstraint(
-                fields=['entity_type', 'student', 'date'],
-                name='unique_student_attendance_per_day'
+                fields=["entity_type", "student", "date"],
+                name="unique_student_attendance_per_day",
             ),
         ]
         indexes = [
-            models.Index(fields=['date', 'entity_type']),
-            models.Index(fields=['teacher', 'date']),
-            models.Index(fields=['student', 'date']),
+            models.Index(fields=["date", "entity_type"]),
+            models.Index(fields=["teacher", "date"]),
+            models.Index(fields=["student", "date"]),
         ]
 
     def clean(self):
         from django.core.exceptions import ValidationError
 
         if self.entity_type == self.EntityType.TEACHER and not self.teacher:
-            raise ValidationError('Teacher attendance requires a teacher.')
+            raise ValidationError("Teacher attendance requires a teacher.")
 
         if self.entity_type == self.EntityType.STUDENT and not self.student:
-            raise ValidationError('Student attendance requires a student.')
+            raise ValidationError("Student attendance requires a student.")
 
     def __str__(self):
         target = self.teacher if self.entity_type == self.EntityType.TEACHER else self.student
-        return f'{target} {self.date} {self.status}'
+        return f"{target} {self.date} {self.status}"
 
 
 class Lesson(models.Model):
     class ProgressStatus(models.TextChoices):
-        EXCELLENT = 'excellent', 'Excellent'
-        GOOD = 'good', 'Good'
-        SATISFACTORY = 'satisfactory', 'Satisfactory'
-        NEEDS_IMPROVEMENT = 'needs_improvement', 'Needs Improvement'
+        EXCELLENT = "excellent", "Excellent"
+        GOOD = "good", "Good"
+        SATISFACTORY = "satisfactory", "Satisfactory"
+        NEEDS_IMPROVEMENT = "needs_improvement", "Needs Improvement"
 
     student = models.ForeignKey(
         StudentProfile,
         on_delete=models.CASCADE,
-        related_name='lessons'
+        related_name="lessons",
     )
     teacher = models.ForeignKey(
         TeacherProfile,
         on_delete=models.PROTECT,
-        related_name='lessons'
+        related_name="lessons",
     )
 
     date = models.DateField()
@@ -211,7 +211,7 @@ class Lesson(models.Model):
     progress_status = models.CharField(
         max_length=30,
         choices=ProgressStatus.choices,
-        blank=True
+        blank=True,
     )
     remarks = models.TextField(blank=True)
 
@@ -220,7 +220,7 @@ class Lesson(models.Model):
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
-        related_name='created_lessons'
+        related_name="created_lessons",
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -228,32 +228,270 @@ class Lesson(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=['student', 'date']),
-            models.Index(fields=['teacher', 'date']),
-            models.Index(fields=['subject', 'date']),
+            models.Index(fields=["student", "date"]),
+            models.Index(fields=["teacher", "date"]),
+            models.Index(fields=["subject", "date"]),
         ]
 
     def __str__(self):
-        label = self.topic_summary or self.title or self.subject or 'Lesson'
-        return f'{self.student} - {label} on {self.date}'
+        label = self.topic_summary or self.title or self.subject or "Lesson"
+        return f"{self.student} - {label} on {self.date}"
+
+
+class DailyLessonReport(models.Model):
+    student = models.ForeignKey(
+        StudentProfile,
+        on_delete=models.CASCADE,
+        related_name="daily_lesson_reports",
+    )
+    teacher = models.ForeignKey(
+        TeacherProfile,
+        on_delete=models.PROTECT,
+        related_name="daily_lesson_reports",
+    )
+
+    date = models.DateField()
+
+    notes = models.TextField(blank=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_daily_lesson_reports",
+    )
+
+    edit_permission_granted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="granted_daily_lesson_edit_permissions",
+    )
+    edit_permission_until = models.DateTimeField(null=True, blank=True)
+    edit_permission_note = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "teacher", "date"],
+                name="unique_daily_lesson_report_per_student_teacher_date",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["student", "date"]),
+            models.Index(fields=["teacher", "date"]),
+            models.Index(fields=["date"]),
+        ]
+
+    def __str__(self):
+        return f"{self.student} - daily lesson report - {self.date}"
+
+
+class DailyLessonSubjectEntry(models.Model):
+    class ProgressStatus(models.TextChoices):
+        EXCELLENT = "excellent", "Excellent"
+        GOOD = "good", "Good"
+        SATISFACTORY = "satisfactory", "Satisfactory"
+        NEEDS_IMPROVEMENT = "needs_improvement", "Needs Improvement"
+
+    report = models.ForeignKey(
+        DailyLessonReport,
+        on_delete=models.CASCADE,
+        related_name="subject_entries",
+    )
+
+    subject = models.CharField(max_length=120)
+    topic_summary = models.CharField(max_length=500)
+
+    progress_status = models.CharField(
+        max_length=30,
+        choices=ProgressStatus.choices,
+        blank=True,
+    )
+
+    remarks = models.TextField(blank=True)
+    lesson_data = models.JSONField(default=dict, blank=True)
+
+    sort_order = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["subject"]),
+            models.Index(fields=["progress_status"]),
+            models.Index(fields=["sort_order"]),
+        ]
+        ordering = ["sort_order", "id"]
+
+    def __str__(self):
+        return f"{self.report} - {self.subject}"
+
+
+class LessonAccessPermission(models.Model):
+    class AccessType(models.TextChoices):
+        ADD = "add", "Allow Add"
+        EDIT = "edit", "Allow Edit"
+
+    teacher = models.ForeignKey(
+        TeacherProfile,
+        on_delete=models.CASCADE,
+        related_name="lesson_access_permissions",
+    )
+    student = models.ForeignKey(
+        StudentProfile,
+        on_delete=models.CASCADE,
+        related_name="lesson_access_permissions",
+    )
+
+    lesson_date = models.DateField()
+
+    # For add permission, subject can be blank.
+    # For edit permission, subject should be filled so the teacher can only edit that approved subject.
+    subject = models.CharField(max_length=120, blank=True, default="")
+
+    access_type = models.CharField(
+        max_length=20,
+        choices=AccessType.choices,
+    )
+
+    is_active = models.BooleanField(default=True)
+    reason = models.TextField(blank=True, default="")
+
+    granted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="granted_lesson_access_permissions",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-lesson_date", "-updated_at", "-id"]
+        indexes = [
+            models.Index(fields=["teacher", "student", "lesson_date", "access_type"]),
+            models.Index(fields=["student", "lesson_date", "subject"]),
+            models.Index(fields=["lesson_date", "is_active"]),
+            models.Index(fields=["access_type", "is_active"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["teacher", "student", "lesson_date", "subject", "access_type"],
+                condition=models.Q(is_active=True),
+                name="unique_active_lesson_access_permission",
+            )
+        ]
+
+    def __str__(self):
+        subject_label = self.subject or "Any subject"
+        return f"{self.teacher} - {self.student} - {self.lesson_date} - {subject_label} - {self.access_type}"
+
+
+class LessonAccessRequest(models.Model):
+    class RequestType(models.TextChoices):
+        ADD = "add", "Add Lesson"
+        EDIT = "edit", "Edit Lesson"
+
+    class RequestStatus(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    teacher = models.ForeignKey(
+        TeacherProfile,
+        on_delete=models.CASCADE,
+        related_name="lesson_access_requests",
+    )
+    student = models.ForeignKey(
+        StudentProfile,
+        on_delete=models.CASCADE,
+        related_name="lesson_access_requests",
+    )
+
+    lesson_date = models.DateField()
+
+    # Required for edit request.
+    # Optional for add request.
+    subject = models.CharField(max_length=120, blank=True, default="")
+
+    request_type = models.CharField(
+        max_length=20,
+        choices=RequestType.choices,
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=RequestStatus.choices,
+        default=RequestStatus.PENDING,
+    )
+
+    reason = models.TextField(blank=True, default="")
+    coordinator_note = models.TextField(blank=True, default="")
+
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_lesson_access_requests",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    permission = models.ForeignKey(
+        LessonAccessPermission,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="requests",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["teacher", "status"]),
+            models.Index(fields=["student", "lesson_date"]),
+            models.Index(fields=["request_type", "status"]),
+            models.Index(fields=["lesson_date", "status"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["teacher", "student", "lesson_date", "subject", "request_type"],
+                condition=models.Q(status="pending"),
+                name="unique_pending_lesson_access_request",
+            )
+        ]
+
+    def __str__(self):
+        subject_label = self.subject or "Any subject"
+        return f"{self.teacher} requested {self.request_type} for {self.student} on {self.lesson_date} - {subject_label}"
 
 
 class MonthlyLessonSummary(models.Model):
     class SummarySource(models.TextChoices):
-        TEACHER = 'teacher', 'Teacher'
-        AI = 'ai', 'AI'
-        SYSTEM = 'system', 'System'
+        TEACHER = "teacher", "Teacher"
+        AI = "ai", "AI"
+        SYSTEM = "system", "System"
 
     student = models.ForeignKey(
         StudentProfile,
         on_delete=models.CASCADE,
-        related_name='monthly_lesson_summaries'
+        related_name="monthly_lesson_summaries",
     )
 
     teacher = models.ForeignKey(
         TeacherProfile,
         on_delete=models.PROTECT,
-        related_name='monthly_lesson_summaries'
+        related_name="monthly_lesson_summaries",
     )
 
     month = models.PositiveSmallIntegerField()
@@ -269,7 +507,7 @@ class MonthlyLessonSummary(models.Model):
     source = models.CharField(
         max_length=20,
         choices=SummarySource.choices,
-        default=SummarySource.TEACHER
+        default=SummarySource.TEACHER,
     )
 
     generated_from_lessons_count = models.PositiveIntegerField(default=0)
@@ -277,7 +515,7 @@ class MonthlyLessonSummary(models.Model):
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
-        related_name='created_monthly_lesson_summaries'
+        related_name="created_monthly_lesson_summaries",
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -286,38 +524,38 @@ class MonthlyLessonSummary(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=['student', 'teacher', 'month', 'year', 'subject'],
-                name='unique_monthly_summary_per_student_subject'
+                fields=["student", "teacher", "month", "year", "subject"],
+                name="unique_monthly_summary_per_student_subject",
             )
         ]
         indexes = [
-            models.Index(fields=['student', 'year', 'month']),
-            models.Index(fields=['teacher', 'year', 'month']),
-            models.Index(fields=['subject', 'year', 'month']),
-            models.Index(fields=['source']),
+            models.Index(fields=["student", "year", "month"]),
+            models.Index(fields=["teacher", "year", "month"]),
+            models.Index(fields=["subject", "year", "month"]),
+            models.Index(fields=["source"]),
         ]
 
     def __str__(self):
-        subject_label = self.subject or 'All Subjects'
-        return f'{self.student} - {subject_label} summary - {self.month}/{self.year}'
+        subject_label = self.subject or "All Subjects"
+        return f"{self.student} - {subject_label} summary - {self.month}/{self.year}"
 
 
 class MonthlyLessonPlan(models.Model):
     class PlanStatus(models.TextChoices):
-        PLANNED = 'planned', 'Planned'
-        IN_PROGRESS = 'in_progress', 'In Progress'
-        COMPLETED = 'completed', 'Completed'
+        PLANNED = "planned", "Planned"
+        IN_PROGRESS = "in_progress", "In Progress"
+        COMPLETED = "completed", "Completed"
 
     student = models.ForeignKey(
         StudentProfile,
         on_delete=models.CASCADE,
-        related_name='monthly_lesson_plans'
+        related_name="monthly_lesson_plans",
     )
 
     teacher = models.ForeignKey(
         TeacherProfile,
         on_delete=models.PROTECT,
-        related_name='monthly_lesson_plans'
+        related_name="monthly_lesson_plans",
     )
 
     month = models.PositiveSmallIntegerField()
@@ -332,13 +570,13 @@ class MonthlyLessonPlan(models.Model):
     status = models.CharField(
         max_length=30,
         choices=PlanStatus.choices,
-        default=PlanStatus.PLANNED
+        default=PlanStatus.PLANNED,
     )
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
-        related_name='created_monthly_lesson_plans'
+        related_name="created_monthly_lesson_plans",
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -347,16 +585,16 @@ class MonthlyLessonPlan(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=['student', 'teacher', 'month', 'year', 'subject'],
-                name='unique_monthly_plan_per_student_subject'
+                fields=["student", "teacher", "month", "year", "subject"],
+                name="unique_monthly_plan_per_student_subject",
             )
         ]
         indexes = [
-            models.Index(fields=['student', 'year', 'month']),
-            models.Index(fields=['teacher', 'year', 'month']),
-            models.Index(fields=['subject', 'year', 'month']),
-            models.Index(fields=['status']),
+            models.Index(fields=["student", "year", "month"]),
+            models.Index(fields=["teacher", "year", "month"]),
+            models.Index(fields=["subject", "year", "month"]),
+            models.Index(fields=["status"]),
         ]
 
     def __str__(self):
-        return f'{self.student} - {self.subject} plan - {self.month}/{self.year}'
+        return f"{self.student} - {self.subject} plan - {self.month}/{self.year}"

@@ -48,3 +48,8 @@ components.zip
 *.njsproj
 *.sln
 *.sw?
+# Production build
+build/
+
+# Vercel
+.vercel
