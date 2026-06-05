@@ -9,10 +9,12 @@ import {
   History,
   LayoutDashboard,
   Loader2,
+  Menu,
   LogOut,
   Moon,
   Search,
   Sun,
+  X,
   XCircle,
   AlertCircle,
 } from "lucide-react";
@@ -22,6 +24,7 @@ import {
   logoutFromDjango,
   type DashboardResponse,
 } from "../services/djangoApiService";
+import { useAcademyWS } from "../hooks/useAcademyWS";
 
 type Props = {
   onLogout: () => void;
@@ -456,6 +459,7 @@ function paginateItems<T>(items: T[], page: number, pageSize = PAGE_SIZE) {
 export function StudentPortal({ onLogout }: Props) {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState("");
@@ -496,7 +500,8 @@ export function StudentPortal({ onLogout }: Props) {
   useEffect(() => {
     void loadDashboard();
 
-    const timer = window.setInterval(() => void loadDashboard(true), 15000);
+    const refreshMs = window.matchMedia("(max-width: 767px)").matches ? 60000 : 15000;
+    const timer = window.setInterval(() => void loadDashboard(true), refreshMs);
     const clockTimer = window.setInterval(() => setClockNow(new Date()), 1000);
 
     return () => {
@@ -512,6 +517,24 @@ export function StudentPortal({ onLogout }: Props) {
   useEffect(() => {
     setAttendancePage(1);
   }, [attendanceView, attendanceDateFilter, attendanceMonthFilter, attendanceYearFilter]);
+
+  useAcademyWS((event) => {
+    const type = String(event?.type || "");
+
+    if (
+      type === "connected" ||
+      type === "academy.update" ||
+      type === "academy_update" ||
+      type === "attendance_marked" ||
+      type === "lesson_saved" ||
+      type === "permission_granted" ||
+      type === "permission_disabled" ||
+      type === "request_reviewed" ||
+      type === "lesson_request_created"
+    ) {
+      void loadDashboard(true);
+    }
+  });
 
 
   const student = dashboard?.student;
@@ -699,16 +722,8 @@ const lessons = (dashboard as any)?.lessons || [];
 
   const displayedUpNextSchedules = upNextSchedules.length > 0 ? upNextSchedules : nextClass ? [nextClass] : [];
   const todayClassSummary = useMemo(() => {
-    if (todaySchedules.length === 0) {
-      return {
-        title: "No Class",
-        detail: nextClass
-          ? `Next class ${formatLocalClassDate(getScheduleTiming(nextClass, clockNow).start)}`
-          : "No class scheduled",
-      };
-    }
+    const liveClass = liveNowSchedules[0];
 
-    const liveClass = todaySchedules.find((schedule: any) => getScheduleTiming(schedule, clockNow).isLive);
     if (liveClass) {
       const timing = getScheduleTiming(liveClass, clockNow);
       return {
@@ -730,11 +745,18 @@ const lessons = (dashboard as any)?.lessons || [];
       };
     }
 
+    if (nextClass) {
+      return {
+        title: "No Class",
+        detail: `Next class ${formatLocalClassDate(getScheduleTiming(nextClass, clockNow).start)}`,
+      };
+    }
+
     return {
-      title: "Completed",
-      detail: "Today’s class is done",
+      title: "No Class",
+      detail: "No class scheduled",
     };
-  }, [todaySchedules, nextClass, clockNow]);
+  }, [liveNowSchedules, todaySchedules, nextClass, clockNow]);
 
 
   const filteredSchedules = sortedSchedules;
@@ -794,8 +816,25 @@ const lessons = (dashboard as any)?.lessons || [];
 
   return (
     <div className={`sp-root h-screen flex overflow-hidden ${studentTheme === "dark" ? "sp-dark" : ""}`}>
-      <aside className="sp-sidebar hidden lg:flex flex-col">
-        <div className="sp-sidebar-logo">
+      {mobileSidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close sidebar"
+          onClick={() => setMobileSidebarOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-950/45 backdrop-blur-[2px] lg:hidden"
+        />
+      )}
+
+      <aside className={`sp-sidebar sp-mobile-drawer flex flex-col ${mobileSidebarOpen ? "open" : ""}`}>
+        <div className="sp-sidebar-logo relative">
+          <button
+            type="button"
+            onClick={() => setMobileSidebarOpen(false)}
+            className="sp-drawer-close lg:hidden"
+            aria-label="Close menu"
+          >
+            <X size={18} />
+          </button>
           <div className="sp-logo-icon">
             <img src="/ivs-logo.png" alt="Iqra Virtual School" className="sp-sidebar-logo-img" />
           </div>
@@ -814,7 +853,7 @@ const lessons = (dashboard as any)?.lessons || [];
           {NAV_ITEMS.map(({ tab, icon, label }) => (
             <button
               key={tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => { setActiveTab(tab); setMobileSidebarOpen(false); }}
               className={`sp-nav-btn w-full ${activeTab === tab ? "active" : ""}`}
             >
               {icon}
@@ -843,17 +882,14 @@ const lessons = (dashboard as any)?.lessons || [];
       <main className="flex-1 min-w-0 flex flex-col h-screen overflow-hidden">
         <header className="sp-topbar flex items-center justify-between px-6 py-3">
           <div className="flex items-center gap-4 min-w-0">
-            <div className="lg:hidden flex items-center gap-2 overflow-x-auto">
-              {NAV_ITEMS.map(({ tab, label }) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`sp-mob-tab ${activeTab === tab ? "active" : ""}`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <button
+              type="button"
+              onClick={() => setMobileSidebarOpen(true)}
+              className="lg:hidden inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white/90 text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.08)] active:scale-95"
+              aria-label="Open menu"
+            >
+              <Menu size={21} />
+            </button>
 
             <div className="hidden lg:block min-w-0">
               <h1 className="text-lg font-black text-slate-900">
@@ -1042,7 +1078,7 @@ const lessons = (dashboard as any)?.lessons || [];
                   </button>
                 </div>
 
-                {todaySchedules.length === 0 ? (
+                {(todaySchedules.length === 0 && liveNowSchedules.length === 0) ? (
                   <EmptyState
                     icon={<CalendarDays size={28} />}
                     title="No classes today"
@@ -1050,7 +1086,7 @@ const lessons = (dashboard as any)?.lessons || [];
                   />
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {todaySchedules.map((schedule: any) => {
+                    {(liveNowSchedules.length > 0 ? liveNowSchedules : todaySchedules).map((schedule: any) => {
                       const timing = getScheduleTiming(schedule, clockNow);
                       const isLive = timing.isLive;
                       const isUpcoming = timing.isUpcoming && timing.diffMinutes <= 60;
@@ -1256,7 +1292,7 @@ const lessons = (dashboard as any)?.lessons || [];
                 <div className="space-y-4">
                   <SectionTitle
                     title="Live Now"
-                    time={liveNowSchedules[0] ? formatLocalClassTime(getScheduleTiming(liveNowSchedules[0], clockNow).start) : currentTime}
+                    time={liveNowSchedules[0] ? `${formatTime(liveNowSchedules[0].time_slot)} · ${getScheduleTiming(liveNowSchedules[0], clockNow).duration} min` : currentTime}
                     live
                   />
 
@@ -2638,7 +2674,10 @@ function ScheduleCard({
           </p>
         </div>
 
-        <span className="sp-time-pill shrink-0">{formatLocalClassTime(timing.start)}</span>
+        <span className="sp-time-pill shrink-0">
+          {formatTime(schedule.time_slot)}
+          {timing.duration ? ` · ${timing.duration} min` : ""}
+        </span>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">

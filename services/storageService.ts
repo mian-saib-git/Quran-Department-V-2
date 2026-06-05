@@ -1,7 +1,7 @@
 import { AppState, AttendanceStatus, ClassType, EntityType, Student, Teacher } from "../types";
 import { loadSession } from "./sessionService";
 
-const CACHE_KEY = "quran_academy_cache_v2";
+const CACHE_KEY = "quran_academy_cache_v4";
 
 const DJANGO_API_BASE =
   (import.meta as any).env?.VITE_DJANGO_API_BASE_URL || "http://127.0.0.1:8000";
@@ -218,33 +218,25 @@ const fetchAcademyState = async (): Promise<AppState> => {
 export const loadState = async (): Promise<AppState> => {
   const cached = readCache();
 
-if (cached) {
+  // When logged in, always prefer the server state.
+  // This prevents old local cache from showing stale attendance after refresh.
   if (hasAuthToken()) {
-    fetchAcademyState()
-      .then((fresh) => {
-        saveCache(fresh);
-        window.dispatchEvent(new CustomEvent("ivs-state-updated", { detail: fresh }));
-      })
-      .catch((err) => {
-        const message = String(err?.message || "");
+    try {
+      const fresh = await fetchAcademyState();
+      saveCache(fresh);
+      return fresh;
+    } catch (err) {
+      const message = String((err as any)?.message || "");
 
-        if (!message.includes("401")) {
-          console.warn("Background state refresh failed:", err);
-        }
-      });
+      if (!message.includes("401")) {
+        console.warn("Academy state not available yet:", err);
+      }
+
+      return cached || EMPTY_STATE;
+    }
   }
 
-  return cached;
-}
-
-  try {
-    const fresh = await fetchAcademyState();
-    saveCache(fresh);
-    return fresh;
-  } catch (err) {
-    console.warn("Academy state not available yet:", err);
-    return EMPTY_STATE;
-  }
+  return cached || EMPTY_STATE;
 };
 
 export const saveState = async (state: AppState): Promise<void> => {

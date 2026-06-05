@@ -80,6 +80,7 @@ export type DashboardSchedule = {
   teacher: DashboardTeacher;
   weekday: string;
   time_slot: string;
+  duration_minutes: number;
   is_active: boolean;
 
   // Optional fields returned by newer backend versions.
@@ -107,6 +108,8 @@ export type DashboardAttendance = {
   student_name: string | null;
   date: string;
   status: "present" | "absent" | "leave";
+  classKey?: string;
+  class_key?: string;
 
   marked_by: string;
   marked_by_id?: number;
@@ -151,7 +154,7 @@ export async function getLessonAccessRequests(params?: {
 }): Promise<{ count: number; results: LessonAccessRequestPayload[] }> {
   const query = new URLSearchParams();
 
-  if (params?.status && params.status !== "all") query.set("status", params.status);
+  if (params?.status) query.set("status", params.status);
   if (params?.student_id) query.set("student_id", String(params.student_id));
   if (params?.teacher_id) query.set("teacher_id", String(params.teacher_id));
   if (params?.request_type) query.set("request_type", normalizeLessonAccessType(params.request_type));
@@ -188,7 +191,18 @@ export async function reviewLessonAccessRequest(
 ): Promise<LessonAccessRequestPayload> {
   return request<LessonAccessRequestPayload>(`/api/academy/lesson-access-requests/${requestId}/`, {
     method: "PATCH",
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      ...input,
+      class_key: input.classKey || "",
+    }),
+  });
+}
+
+export async function deleteLessonAccessRequest(
+  requestId: number
+): Promise<{ detail: string }> {
+  return request<{ detail: string }>(`/api/academy/lesson-access-requests/${requestId}/`, {
+    method: "DELETE",
   });
 }
 
@@ -925,7 +939,10 @@ export async function markAttendanceInDjango(
 ): Promise<AttendanceApiResponse> {
   return request<AttendanceApiResponse>("/api/academy/attendance/", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      ...input,
+      class_key: input.classKey || "",
+    }),
   });
 }
 
@@ -1031,6 +1048,7 @@ export type CreateAccountInput = {
 
   teacher_id?: number | null;
   time_slot?: string | null;
+  duration_minutes?: number;
   class_days?: string[];
   assigned_subjects?: AssignedSubject[];
 };

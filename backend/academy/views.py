@@ -199,6 +199,7 @@ def schedule_payload(schedule):
         "teacher": teacher_payload(schedule.teacher),
         "weekday": schedule.weekday,
         "time_slot": str(schedule.time_slot),
+        "duration_minutes": schedule.duration_minutes,
         "is_active": schedule.is_active,
     }
 
@@ -214,6 +215,8 @@ def attendance_payload(attendance):
         "student_id": attendance.student_id,
         "student_name": str(attendance.student) if attendance.student else None,
         "date": str(attendance.date),
+        "classKey": attendance.class_key or "",
+        "class_key": attendance.class_key or "",
         "status": attendance.status,
         "marked_by": marked_by.username,
         "marked_by_id": marked_by.id,
@@ -612,7 +615,7 @@ class DashboardView(APIView):
                         "student__teacher__user",
                     ).filter(
                         is_active=True,
-                    ).order_by("weekday", "time_slot", "id")[:500]
+                    ).order_by("weekday", "time_slot", "id")[:150]
                 ],
 
                 "lessons": [
@@ -679,9 +682,9 @@ class DashboardView(APIView):
                 "student__user",
                 "marked_by",
             ).filter(
-                entity_type=Attendance.EntityType.STUDENT,
-                student__teacher=teacher,
-            ).order_by("-date", "-updated_at", "-id")[:500]
+                Q(entity_type=Attendance.EntityType.STUDENT, student__teacher=teacher)
+                | Q(entity_type=Attendance.EntityType.TEACHER, teacher=teacher)
+            ).order_by("-date", "-updated_at", "-id")[:300]
 
             lessons = Lesson.objects.select_related(
                 "teacher__user",
@@ -689,7 +692,7 @@ class DashboardView(APIView):
                 "created_by",
             ).filter(
                 teacher=teacher,
-            ).order_by("-date", "-updated_at", "-id")[:300]
+            ).order_by("-date", "-updated_at", "-id")[:100]
 
             monthly_plans = MonthlyLessonPlan.objects.select_related(
                 "teacher__user",
@@ -758,7 +761,7 @@ class DashboardView(APIView):
             ).filter(
                 entity_type=Attendance.EntityType.STUDENT,
                 student=student,
-            ).order_by("-date", "-updated_at", "-id")[:300]
+            ).order_by("-date", "-updated_at", "-id")[:100]
 
             daily_reports = DailyLessonReport.objects.select_related(
                 "teacher__user",
@@ -766,7 +769,7 @@ class DashboardView(APIView):
                 "created_by",
             ).prefetch_related("subject_entries").filter(
                 student=student,
-            ).order_by("-date", "-updated_at", "-id")[:300]
+            ).order_by("-date", "-updated_at", "-id")[:100]
 
             monthly_plans = MonthlyLessonPlan.objects.select_related(
                 "teacher__user",
@@ -1452,6 +1455,29 @@ class LessonAccessRequestView(APIView):
 class LessonAccessRequestDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def delete(self, request, pk):
+        user = request.user
+
+        if user.role != "coordinator":
+            return Response(
+                {"detail": "Only coordinators can delete lesson permission requests."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            item = LessonAccessRequest.objects.get(id=pk)
+        except LessonAccessRequest.DoesNotExist:
+            return Response({"detail": "Request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if item.status == "pending":
+            return Response(
+                {"detail": "Pending requests cannot be cleared. Please approve or reject first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        item.delete()
+        return Response({"detail": "Request cleared permanently."}, status=status.HTTP_200_OK)
+
     def patch(self, request, pk):
         user = request.user
 
@@ -1655,16 +1681,22 @@ class DailyLessonReportListCreateView(APIView):
                         },
                         status=status.HTTP_403_FORBIDDEN,
                     )
-            elif not teacher_can_add_lesson_now(student, teacher, parsed_lesson_date):
-                return Response(
-                    {
-                        "detail": (
-                            "Lesson add window expired or has not started yet. "
-                            "Please ask coordinator to enable add permission."
-                        )
-                    },
-                    status=status.HTTP_403_FORBIDDEN,
-                )
+            else:
+                if parsed_lesson_date > date.today():
+                    return Response(
+                        {"detail": "Future dates are not allowed."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                elif not teacher_can_add_lesson_now(student, teacher, parsed_lesson_date):
+                    return Response(
+                        {
+                            "detail": (
+                                "Lesson add window expired or has not started yet. "
+                                "Please ask coordinator to enable add permission."
+                            )
+                        },
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
 
         else:
             teacher_id = request.data.get("teacher_id") or student.teacher_id
@@ -1731,9 +1763,15 @@ class DailyLessonReportListCreateView(APIView):
                 },
             )
 
-            report.subject_entries.all().delete()
+            submitted_subject_names = {item["subject"] for item in cleaned_entries}
+            if user.role == "coordinator":
+                report.subject_entries.all().delete()
+            else:
+                report.subject_entries.filter(subject__in=submitted_subject_names).delete()
 
             DailyLessonSubjectEntry.objects.bulk_create([
+
+            
                 DailyLessonSubjectEntry(
                     report=report,
                     subject=item["subject"],
@@ -1752,6 +1790,44 @@ class DailyLessonReportListCreateView(APIView):
             "created_by",
             "edit_permission_granted_by",
         ).prefetch_related("subject_entries").get(id=report.id)
+
+        # FIX: Auto-disable teacher lesson permissions after save.
+        # Add request approved -> teacher saves new lesson -> disable add permission.
+        # Edit request approved -> teacher saves edited lesson -> disable edit permission.
+        # Coordinator still receives the lesson saved notification, but no manual disable is needed.
+        if user.role == "teacher":
+            try:
+                teacher_obj = user.teacher_profile
+                submitted_subjects = {
+                    str(item.get("subject", "")).strip()
+                    for item in cleaned_entries
+                    if str(item.get("subject", "")).strip()
+                }
+
+                permission_type = "add" if created else "edit"
+
+                for subj in submitted_subjects:
+                    updated_count = LessonAccessPermission.objects.filter(
+                        student=student,
+                        teacher=teacher_obj,
+                        lesson_date=parsed_lesson_date,
+                        access_type=permission_type,
+                        is_active=True,
+                    ).filter(
+                        Q(subject=subj) | Q(subject="")
+                    ).update(is_active=False)
+
+                    logger.info(
+                        "Auto-disabled %s lesson permission after save: student=%s teacher=%s date=%s subject=%s count=%s",
+                        permission_type,
+                        student.id,
+                        teacher_obj.id,
+                        parsed_lesson_date,
+                        subj,
+                        updated_count,
+                    )
+            except Exception as e:
+                logger.warning("Auto-disable permission failed: %s", e)
 
         try:
             notify_lesson_saved(report, created)
@@ -1836,6 +1912,11 @@ class AttendanceListCreateView(APIView):
         student_id = request.data.get("student_id")
         date_value = request.data.get("date") or timezone.localdate().isoformat()
         status_value = str(request.data.get("status", "")).strip().lower()
+        class_key_value = str(
+            request.data.get("class_key")
+            or request.data.get("classKey")
+            or ""
+        ).strip()[:5]
 
         if entity_type not in ["teacher", "student"]:
             return Response({"detail": "entity_type must be teacher or student."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1859,6 +1940,7 @@ class AttendanceListCreateView(APIView):
                 entity_type=Attendance.EntityType.TEACHER,
                 teacher=teacher,
                 date=date_value,
+                class_key=class_key_value,
             ).delete()
 
             attendance = Attendance.objects.create(
@@ -1866,6 +1948,7 @@ class AttendanceListCreateView(APIView):
                 teacher=teacher,
                 student=None,
                 date=date_value,
+                class_key=class_key_value,
                 status=status_value,
                 marked_by=user,
             )
@@ -2535,9 +2618,12 @@ def frontend_student_payload(student):
         "name": student.user.get_full_name() or student.user.username,
         "teacherId": str(student.teacher_id),
         "timeSlot": str(schedule.time_slot)[:5] if schedule else "16:00",
+        "durationMinutes": schedule.duration_minutes if schedule else 30,
         "classType": f"{len(class_days)} Day",
         "classDays": class_days,
         "loginId": student.user.username,
+        "durationMinutes": int(schedule.duration_minutes) if schedule else 30,
+        "duration_minutes": int(schedule.duration_minutes) if schedule else 30,
     }
 
 
@@ -2545,11 +2631,11 @@ def frontend_attendance_payload(record):
     if record.entity_type == Attendance.EntityType.TEACHER:
         entity_id = str(record.teacher_id)
         entity_type = "Teacher"
-        class_key = ""
     else:
         entity_id = str(record.student_id)
         entity_type = "Student"
-        class_key = ""
+
+    class_key = record.class_key or ""
 
     status_map = {
         Attendance.Status.PRESENT: "Present",
@@ -2563,6 +2649,7 @@ def frontend_attendance_payload(record):
         "entityType": entity_type,
         "date": str(record.date),
         "classKey": class_key,
+        "class_key": class_key,
         "status": status_map.get(record.status, "Present"),
         "markedById": str(record.marked_by_id) if record.marked_by_id else "",
         "markedByUsername": record.marked_by.username if record.marked_by else "",
@@ -2900,6 +2987,12 @@ class AcademyStateView(APIView):
 
             time_slot = parse_frontend_time(student_item.get("timeSlot"))
             class_days = student_item.get("classDays", [])
+            duration_minutes = safe_int(
+                student_item.get("durationMinutes") or student_item.get("duration_minutes"),
+                30,
+            )
+            if duration_minutes not in [30, 60]:
+                duration_minutes = 30
 
             if not isinstance(class_days, list):
                 class_days = []
@@ -2918,6 +3011,7 @@ class AcademyStateView(APIView):
                         teacher=student.teacher,
                         weekday=weekday,
                         time_slot=time_slot,
+                        duration_minutes=duration_minutes,
                         is_active=True,
                     )
 
@@ -3125,11 +3219,11 @@ CURRENT USER:
 - Today: {today_name}, {today}
 
 IMPORTANT RULES:
-- Answer only using the school data below.
+- Answer ONLY the question asked. Do not add unrelated information.
+- Do not mention today's schedule unless the user specifically asks about schedule or classes.
 - If the answer is not available in the data, say you do not have that information.
 - Be helpful, clear, and concise.
 - For lists, use clean bullet points.
-- For schedules, include teacher, student, day, and time when available.
 - Never invent students, teachers, attendance, lessons, or schedules.
 
 SCHOOL SUMMARY:

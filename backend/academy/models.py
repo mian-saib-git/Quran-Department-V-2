@@ -104,6 +104,7 @@ class ClassSchedule(models.Model):
     )
     weekday = models.CharField(max_length=20, choices=WeekDay.choices)
     time_slot = models.TimeField()
+    duration_minutes = models.PositiveIntegerField(default=30)
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -142,6 +143,7 @@ class Attendance(models.Model):
         related_name="attendance_records",
     )
     date = models.DateField()
+    class_key = models.CharField(max_length=5, blank=True, default="", db_index=True)
     status = models.CharField(max_length=20, choices=Status.choices)
     marked_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -154,8 +156,8 @@ class Attendance(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["entity_type", "teacher", "date"],
-                name="unique_teacher_attendance_per_day",
+                fields=["entity_type", "teacher", "date", "class_key"],
+                name="unique_teacher_attendance_per_class",
             ),
             models.UniqueConstraint(
                 fields=["entity_type", "student", "date"],
@@ -164,7 +166,7 @@ class Attendance(models.Model):
         ]
         indexes = [
             models.Index(fields=["date", "entity_type"]),
-            models.Index(fields=["teacher", "date"]),
+            models.Index(fields=["teacher", "date", "class_key"]),
             models.Index(fields=["student", "date"]),
         ]
 

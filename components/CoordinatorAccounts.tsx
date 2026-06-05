@@ -35,6 +35,7 @@ import {
 } from "../services/djangoApiService";
 
 import { loadSession } from "../services/sessionService";
+import { useAcademyWS } from "../hooks/useAcademyWS";
 
 
 type Mode = "coordinator" | "teacher" | "student";
@@ -67,6 +68,7 @@ type FormState = {
 
   teacher_id: string;
   time_slot: string;
+  duration_minutes: number;
   class_days: string[];
 };
 
@@ -88,6 +90,7 @@ const emptyForm = (role: Mode): FormState => ({
 
   teacher_id: "",
   time_slot: "",
+  duration_minutes: 30,
   class_days: [],
 });
 
@@ -96,8 +99,39 @@ function displayName(first: string, last: string, username: string) {
   return name || username;
 }
 
-function copyText(value: string) {
-  navigator.clipboard?.writeText(value).catch(() => {});
+async function copyText(value: string): Promise<boolean> {
+  const text = String(value || "").trim();
+
+  if (!text) return false;
+
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall back below
+  }
+
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "0";
+
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    const success = document.execCommand("copy");
+    document.body.removeChild(textarea);
+
+    return success;
+  } catch {
+    return false;
+  }
 }
 
 function formatTime12(time24?: string) {
@@ -575,6 +609,20 @@ export default function CoordinatorAccounts() {
     void load();
   }, []);
 
+  useAcademyWS((event) => {
+    const type = String(event?.type || "");
+    const name = String((event as any)?.event || "");
+
+    if (
+      type === "academy_update" ||
+      name === "account_created" ||
+      name === "account_updated" ||
+      name === "account_deleted"
+    ) {
+      void load();
+    }
+  });
+
   useEffect(() => {
     if (!isSuperAdmin && activeMode === "coordinator") {
       setActiveMode("teacher");
@@ -651,8 +699,15 @@ export default function CoordinatorAccounts() {
     });
   }, [data.students, search]);
 
-  const handleCopyUsername = (username: string) => {
-    copyText(username);
+  const handleCopyUsername = async (username: string) => {
+    const copied = await copyText(username);
+
+    if (!copied) {
+      setMessage("Could not copy username. Please copy it manually.");
+      window.setTimeout(() => setMessage(""), 2500);
+      return;
+    }
+
     setCopiedUsername(username);
 
     window.setTimeout(() => {
@@ -734,6 +789,11 @@ export default function CoordinatorAccounts() {
       notes: student.student_profile?.notes || "",
       teacher_id: String(student.student_profile?.teacher_id || ""),
       time_slot: getStudentTime(student),
+      duration_minutes: Number(
+        student.student_profile?.duration_minutes ||
+        student.student_profile?.durationMinutes ||
+        30
+      ),
       class_days: getStudentDays(student),
     });
     setModalMode("edit-student");
@@ -945,6 +1005,7 @@ export default function CoordinatorAccounts() {
       if (form.role === "student") {
         input.teacher_id = Number(form.teacher_id);
         input.time_slot = form.time_slot || null;
+        input.duration_minutes = Number(form.duration_minutes || 30);
         input.class_days = form.class_days;
       }
 
@@ -1751,7 +1812,7 @@ export default function CoordinatorAccounts() {
                       </select>
                     </Field>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <Field label="Class Time">
                         <select
                           required
@@ -1765,6 +1826,18 @@ export default function CoordinatorAccounts() {
                               {formatTime12(time)}
                             </option>
                           ))}
+                        </select>
+                      </Field>
+
+                      <Field label="Class Duration">
+                        <select
+                          required
+                          value={form.duration_minutes}
+                          onChange={(e) => setForm({ ...form, duration_minutes: Number(e.target.value) })}
+                          className="input-premium"
+                        >
+                          <option value={30}>30 minutes</option>
+                          <option value={60}>1 hour</option>
                         </select>
                       </Field>
 

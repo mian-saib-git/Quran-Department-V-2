@@ -134,6 +134,7 @@ def schedule_payload_for_student(student):
             "weekday": item.weekday,
             "weekday_display": item.get_weekday_display(),
             "time_slot": item.time_slot.strftime("%H:%M"),
+            "duration_minutes": getattr(item, "duration_minutes", 30) or 30,
             "is_active": item.is_active,
         })
 
@@ -152,16 +153,26 @@ def schedule_payload_for_student(student):
             seen_days.add(day)
 
     time_slot = schedules[0]["time_slot"] if schedules else ""
+    duration_minutes = schedules[0]["duration_minutes"] if schedules else 30
 
     return {
         "schedules": schedules,
         "class_days": class_days,
         "time_slot": time_slot,
+        "duration_minutes": duration_minutes,
     }
 
-def sync_student_schedules(student, teacher, time_slot, class_days):
+def sync_student_schedules(student, teacher, time_slot, class_days, duration_minutes=30):
     if not time_slot or not class_days:
         return
+
+    try:
+        duration_minutes = int(duration_minutes or 30)
+    except (TypeError, ValueError):
+        duration_minutes = 30
+
+    if duration_minutes not in [30, 60]:
+        duration_minutes = 30
 
     ClassSchedule.objects.filter(student=student).delete()
 
@@ -187,6 +198,7 @@ def sync_student_schedules(student, teacher, time_slot, class_days):
             teacher=teacher,
             weekday=weekday,
             time_slot=time_slot,
+            duration_minutes=duration_minutes,
             is_active=True,
         )
 
@@ -229,6 +241,7 @@ def student_account_payload(student):
             "schedules": schedule_data["schedules"],
             "class_days": schedule_data["class_days"],
             "time_slot": schedule_data["time_slot"],
+            "duration_minutes": schedule_data["duration_minutes"],
         },
     }
 
@@ -329,6 +342,7 @@ class CreateAccountSerializer(serializers.Serializer):
     teacher_id = serializers.IntegerField(required=False, allow_null=True)
 
     time_slot = serializers.TimeField(required=False, allow_null=True)
+    duration_minutes = serializers.IntegerField(required=False, min_value=30, max_value=60)
     class_days = serializers.ListField(
         child=serializers.CharField(),
         required=False,
@@ -420,6 +434,7 @@ class CreateAccountSerializer(serializers.Serializer):
             teacher=teacher,
             time_slot=validated_data.get("time_slot"),
             class_days=validated_data.get("class_days", []),
+            duration_minutes=validated_data.get("duration_minutes", 30),
         )
 
         return account_payload_for_user(student.user)
@@ -443,6 +458,7 @@ class UpdateAccountSerializer(serializers.Serializer):
     teacher_id = serializers.IntegerField(required=False, allow_null=True)
 
     time_slot = serializers.TimeField(required=False, allow_null=True)
+    duration_minutes = serializers.IntegerField(required=False, min_value=30, max_value=60)
     class_days = serializers.ListField(
         child=serializers.CharField(),
         required=False,
@@ -533,12 +549,18 @@ class UpdateAccountSerializer(serializers.Serializer):
             if "assigned_subjects" in validated_data:
                 sync_student_subjects(student, validated_data.get("assigned_subjects", []))
 
-            if "time_slot" in validated_data or "class_days" in validated_data:
+            if "time_slot" in validated_data or "class_days" in validated_data or "duration_minutes" in validated_data:
                 existing_schedule = student.schedules.filter(is_active=True).order_by("time_slot", "id").first()
 
                 time_slot = validated_data.get("time_slot")
                 if not time_slot and existing_schedule:
                     time_slot = existing_schedule.time_slot
+
+                duration_minutes = validated_data.get("duration_minutes", None)
+                if duration_minutes is None and existing_schedule:
+                    duration_minutes = getattr(existing_schedule, "duration_minutes", 30) or 30
+                if duration_minutes is None:
+                    duration_minutes = 30
 
                 class_days = validated_data.get("class_days", None)
                 if class_days is None:
@@ -552,6 +574,7 @@ class UpdateAccountSerializer(serializers.Serializer):
                     teacher=teacher,
                     time_slot=time_slot,
                     class_days=class_days,
+                    duration_minutes=duration_minutes,
                 )
 
         return account_payload_for_user(user)

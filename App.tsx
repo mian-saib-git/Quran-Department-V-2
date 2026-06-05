@@ -1,5 +1,5 @@
-import { connectAcademyWS, disconnectAcademyWS } from "././hooks/useAcademyWS";
-import React, { useState, useEffect, useMemo, lazy, Suspense,  useRef } from "react";
+import { connectAcademyWS, disconnectAcademyWS, useAcademyWS } from "././hooks/useAcademyWS";
+import React, { useState, useEffect, useMemo, lazy, Suspense, useRef, startTransition, useCallback } from "react";
 import Lottie from "lottie-react";
 import { loadSession, saveSession, clearSession, type Session } from "./services/sessionService";
 import {
@@ -110,6 +110,30 @@ const getNextTimeSlot = (currentSlot: string): string => {
   if (index === -1 || index === TIME_SLOTS.length - 1) return TIME_SLOTS[0];
   return TIME_SLOTS[index + 1];
 };
+
+const timeSlotToMinutes = (timeSlot: string): number => {
+  const [h, m] = String(timeSlot || "00:00").slice(0, 5).split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
+  return h * 60 + m;
+};
+
+const studentDurationMinutes = (student: Student): number => {
+  const raw = (student as any).durationMinutes ?? (student as any).duration_minutes ?? 30;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : 30;
+};
+
+const isStudentLiveNow = (student: Student, nowSlot: string): boolean => {
+  const nowMinutes = timeSlotToMinutes(nowSlot);
+  const startMinutes = timeSlotToMinutes(student.timeSlot);
+  const duration = studentDurationMinutes(student);
+  return nowMinutes >= startMinutes && nowMinutes < startMinutes + duration;
+};
+
+const minutesUntilStudentClass = (student: Student, nowSlot: string): number => {
+  return timeSlotToMinutes(student.timeSlot) - timeSlotToMinutes(nowSlot);
+};
+
 
 const getTodayDateString = (): string => new Date().toISOString().split("T")[0];
 
@@ -265,7 +289,7 @@ function TopbarClock() {
         />
       </div>
 
-      {/* text */}
+      {/* text - always visible */}
       <div className="leading-tight">
         <div className="text-[13px] font-extrabold text-slate-900">{timeText}</div>
         <div className="text-[11px] font-semibold text-slate-500">{dayText}</div>
@@ -424,6 +448,25 @@ export default function App() {
   // ✅ Session state MUST be defined first
   const [session, setSession] = useState<Session | null>(() => loadSession());
   const [appState, setAppState] = useState<AppState>(INITIAL_STATE);
+
+  // WebSocket listener - auto-refresh state when accounts are created/updated
+  useAcademyWS(React.useCallback((data: Record<string, unknown>) => {
+    const type = String(data.type || "");
+    const event = String((data as any).event || "");
+    if (
+      type === "academy_update" ||
+      event === "account_created" ||
+      event === "account_updated" ||
+      event === "account_deleted"
+    ) {
+      // Reload state after short delay to ensure DB commit
+      setTimeout(() => {
+        loadState().then(loaded => {
+          setAppState(patchState(loaded));
+        }).catch(console.error);
+      }, 800);
+    }
+  }, []));
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
 
 const [themeMode, setThemeMode] = useState<"light" | "dark">(() => {
@@ -736,6 +779,12 @@ const [studentDaysDraft, setStudentDaysDraft] = useState<string[]>(
 );
 // Search + mobile
 const [searchTerm, setSearchTerm] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  // Debounce search to avoid re-rendering 895 students on every keystroke
+  useEffect(() => {
+    const t = setTimeout(() => setSearchTerm(searchInput), 200);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 const [sidebarEdgeHover, setSidebarEdgeHover] = useState(false);
 const [insightsOpen, setInsightsOpen] = useState(false);
@@ -847,6 +896,7 @@ useEffect(() => {
           loginId: (s as any).loginId || "",
           classDays: Array.isArray(s.classDays) ? s.classDays : [],
           timeSlot: s.timeSlot || "",
+          durationMinutes: Number((s as any).durationMinutes || (s as any).duration_minutes || 30),
         };
       }),
       attendance: Array.isArray(loaded.attendance) ? loaded.attendance : [],
@@ -951,13 +1001,20 @@ useEffect(() => {
   }, [viewAtt, viewStudents, todayStr, currentDayName]);
 
   const currentClasses = useMemo(
-    () => viewStudents.filter(s => s.timeSlot === currentSlot && (s.classDays || []).includes(currentDayName)),
+    () => viewStudents.filter(s => (s.classDays || []).includes(currentDayName) && isStudentLiveNow(s, currentSlot)),
     [viewStudents, currentSlot, currentDayName]
   );
 
   const nextClasses = useMemo(
-    () => viewStudents.filter(s => s.timeSlot === nextSlot && (s.classDays || []).includes(currentDayName)),
-    [viewStudents, nextSlot, currentDayName]
+    () => viewStudents
+      .filter(s => {
+        if (!(s.classDays || []).includes(currentDayName)) return false;
+        if (isStudentLiveNow(s, currentSlot)) return false;
+        const diff = minutesUntilStudentClass(s, currentSlot);
+        return diff > 0 && diff <= 60;
+      })
+      .sort((a, b) => timeSlotToMinutes(a.timeSlot) - timeSlotToMinutes(b.timeSlot)),
+    [viewStudents, currentSlot, currentDayName]
   );
 
   const handleUpdateSuperAdminProfile = async (e: React.FormEvent) => {
@@ -2089,7 +2146,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
     {/* ─────────────────────────────────────
         NAVIGATION
     ───────────────────────────────────── */}
-    <nav className="flex-1 px-3 pt-3 overflow-y-auto scrollbar-none">
+    <nav className="flex-1 px-3 pt-3 overflow-y-auto" style={{scrollbarWidth:'none',msOverflowStyle:'none'}}>
 
       {/* Collapsed: stacked bare icons */}
       <div className="hidden md:flex md:group-hover:hidden flex-col items-center gap-2.5 py-1">
@@ -2271,18 +2328,17 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
         >
           <Menu size={20} />
         </button>
-
-        <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-[0_18px_34px_-18px_rgba(37,99,235,0.70)] shrink-0">
-          <ActiveTopIcon size={21} />
-        </div>
-
-        <div className="min-w-0">
-          <h2 className="text-lg md:text-xl font-extrabold text-slate-950 truncate">
-            {activeMeta.label}
-          </h2>
-
-          <div className="text-xs font-semibold text-slate-500 mt-0.5 truncate">
-            {roleLabel} Panel
+        <div className="hidden md:flex items-center gap-3">
+          <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-[0_18px_34px_-18px_rgba(37,99,235,0.70)] shrink-0">
+            <ActiveTopIcon size={21} />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-lg md:text-xl font-extrabold text-slate-950 truncate">
+              {activeMeta.label}
+            </h2>
+            <div className="text-xs font-semibold text-slate-500 mt-0.5 truncate">
+              {roleLabel} Panel
+            </div>
           </div>
         </div>
       </div>
@@ -2341,7 +2397,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
   </div>
 </header>
 
-        <div className="flex-1 overflow-y-auto p-4 md:p-8">
+        <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-16 md:pb-8">
           
               {activeTab === "dashboard" && (
   <div className="w-full max-w-none mx-auto space-y-6">
@@ -2940,13 +2996,13 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
       {/* MODALS */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-md">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 sm:p-4 backdrop-blur-md">
 <div
   className={`ui-glass-strong ui-card ui-gradient-border w-full max-w-5xl ui-glow ${
     modalMode === "settings"
       ? "p-0 overflow-hidden"
       : "p-6 max-h-[88vh] overflow-y-auto"
-  }`}
+  } w-full sm:w-auto sm:max-w-2xl rounded-t-[28px] sm:rounded-[28px]`}
 >
 {modalMode !== "settings" && (
   <div className="flex justify-between items-center mb-6">
@@ -3250,17 +3306,17 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
                 key={day}
                 type="button"
                 onClick={() => {
-                  setStudentDaysDraft((prev) => {
-                    const next = new Set(prev);
-
-                    if (next.has(day)) {
-                      next.delete(day);
-                    } else {
-                      next.add(day);
-                    }
-
-                    const arr = Array.from(next);
-                    return arr.length ? arr : ["Monday"];
+                  startTransition(() => {
+                    setStudentDaysDraft((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(day)) {
+                        next.delete(day);
+                      } else {
+                        next.add(day);
+                      }
+                      const arr = Array.from(next);
+                      return arr.length ? arr : ["Monday"];
+                    });
                   });
                 }}
                 className={`rounded-2xl px-3 py-2 border text-xs font-extrabold transition ${
@@ -3315,7 +3371,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
 {/* SETTINGS */}
 {modalMode === "settings" && (
-  <div className="rounded-[28px] border border-slate-200 bg-white text-slate-950 shadow-[0_24px_70px_rgba(15,23,42,0.12)] animate-settings-pop">
+  <div className="rounded-t-[28px] sm:rounded-[28px] border border-slate-200 bg-white text-slate-950 shadow-[0_24px_70px_rgba(15,23,42,0.12)] animate-settings-pop max-h-[92vh] overflow-y-auto">
     <div className="border-b border-slate-200 px-6 py-5">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>

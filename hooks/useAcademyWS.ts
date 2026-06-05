@@ -3,6 +3,9 @@ import { useEffect } from "react";
 const SESSION_KEY = "quran_academy_session_v2";
 
 let ws: WebSocket | null = null;
+let reconnectTimer: number | null = null;
+let closeTimer: number | null = null;
+
 const listeners = new Set<(data: Record<string, unknown>) => void>();
 
 function getToken(): string {
@@ -16,8 +19,23 @@ function getToken(): string {
   }
 }
 
+function getWsBaseUrl(): string {
+  const configured = ((import.meta as any).env?.VITE_WS_BASE_URL || "").replace(/\/$/, "");
+  if (configured) return configured;
+
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}`;
+}
+
 export function connectAcademyWS() {
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  if (closeTimer) {
+    window.clearTimeout(closeTimer);
+    closeTimer = null;
+  }
+
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
 
   const token = getToken();
   if (!token) {
@@ -25,11 +43,8 @@ export function connectAcademyWS() {
     return;
   }
 
-  const base = (
-    (import.meta as any).env?.VITE_WS_BASE_URL || "ws://127.0.0.1:8000"
-  ).replace(/\/$/, "");
-
-  ws = new WebSocket(`${base}/ws/academy/?token=${token}`);
+  const base = getWsBaseUrl();
+  ws = new WebSocket(`${base}/ws/academy/?token=${encodeURIComponent(token)}`);
 
   ws.onopen = () => {
     console.log("WS: Connected successfully");
@@ -41,39 +56,68 @@ export function connectAcademyWS() {
       console.log("WS received:", data);
       listeners.forEach((fn) => fn(data));
     } catch {
-      // ignore
+      // ignore invalid messages
     }
   };
 
   ws.onclose = (e) => {
     console.warn("WS: Closed with code", e.code);
     ws = null;
-    if (e.code !== 4001) {
-      setTimeout(() => {
-        if (getToken()) connectAcademyWS();
+
+    if (reconnectTimer) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+
+    if (listeners.size > 0 && e.code !== 4001) {
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        if (listeners.size > 0 && getToken()) {
+          connectAcademyWS();
+        }
       }, 3000);
     }
   };
 
   ws.onerror = (e) => {
     console.error("WS: Error", e);
-    ws?.close();
+    // Do not manually close here. Let browser/onclose handle cleanup.
   };
 }
 
-export function disconnectAcademyWS() {
-  if (ws) {
-    ws.onclose = null;
-    ws.close();
-    ws = null;
+export function disconnectAcademyWS(force = false) {
+  if (!ws) return;
+
+  if (!force) {
+    if (closeTimer) window.clearTimeout(closeTimer);
+
+    closeTimer = window.setTimeout(() => {
+      closeTimer = null;
+
+      if (listeners.size === 0 && ws) {
+        ws.close(1000, "No listeners");
+        ws = null;
+      }
+    }, 1500);
+
+    return;
   }
+
+  ws.close(1000, "Manual disconnect");
+  ws = null;
 }
 
 export function useAcademyWS(callback: (data: Record<string, unknown>) => void) {
   useEffect(() => {
     listeners.add(callback);
+    connectAcademyWS();
+
     return () => {
       listeners.delete(callback);
+
+      if (listeners.size === 0) {
+        disconnectAcademyWS(false);
+      }
     };
   }, [callback]);
 }

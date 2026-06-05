@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   ListChecks,
   Loader2,
+  Menu,
   LogOut,
   Moon,
   Plus,
@@ -64,6 +65,7 @@ type ScheduleRow = {
   id: number;
   weekday: string;
   time_slot: string;
+  duration_minutes: number;
   is_active: boolean;
   student: DashboardStudent;
   teacher: any;
@@ -344,7 +346,7 @@ const DAY_INDEX: Record<string, number> = {
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
-function today() { return new Date().toISOString().slice(0, 10); }
+function today() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
 
 function toDateInputValue(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -382,13 +384,36 @@ function timeToMinutes(value: string) {
   return h * 60 + m;
 }
 
+const PAKISTAN_TIME_ZONE = "Asia/Karachi";
+
+function getPakistanNowParts() {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: PAKISTAN_TIME_ZONE,
+    weekday: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(new Date());
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || "";
+
+  return {
+    weekday: get("weekday"),
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+  };
+}
+
 function getMinutesNow() {
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
+  const now = getPakistanNowParts();
+  const hour = Number.isFinite(now.hour) ? now.hour : 0;
+  const minute = Number.isFinite(now.minute) ? now.minute : 0;
+  return hour * 60 + minute;
 }
 
 function getTodayWeekday() {
-  return new Date().toLocaleDateString("en-US", { weekday: "long" });
+  return getPakistanNowParts().weekday;
 }
 
 function getCurrentDate() {
@@ -561,12 +586,13 @@ function permissionDate(p: LessonPermission) { return p.lesson_date || p.date ||
 function permissionMatches(permission: LessonPermission, studentId: string | number, lessonDate: string, accessType: "add" | "edit", subject = "") {
   const at = permission.access_type === "write" ? "add" : permission.access_type;
   const ps = String((permission as any).subject || "").trim();
+  const subj = String(subject || "").trim();
   return (
     permission.is_active &&
     String(permission.student_id) === String(studentId) &&
     String(permissionDate(permission)) === String(lessonDate) &&
     at === accessType &&
-    (accessType === "add" || !ps || ps === String(subject || "").trim())
+    (accessType === "add" || ps === subj)
   );
 }
 
@@ -828,6 +854,7 @@ const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [lessonRequests, setLessonRequests] = useState<LessonAccessRequestPayload[]>([]);
   const [requestingPermission, setRequestingPermission] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState("");
@@ -856,7 +883,19 @@ const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
 
 // ── WebSocket real-time updates ──
 useAcademyWS((data) => {
-  const type = data.type;
+  const type = String(data.type || "");
+  const eventName = String((data as any).event || "");
+
+  if (
+    type === "academy_update" ||
+    eventName === "account_created" ||
+    eventName === "account_updated" ||
+    eventName === "account_deleted" ||
+    eventName === "schedule_updated"
+  ) {
+    // Small delay to ensure DB transaction is committed before reloading
+    setTimeout(() => void loadDashboard(true), 500);
+  }
 
   if (type === "permission_granted" || type === "permission_disabled") {
     getLessonPermissions({ is_active: true }).then(res => {
@@ -954,7 +993,8 @@ const loadDashboard = async (silent = false) => {
 
   useEffect(() => {
     void loadDashboard();
-    const dashboardTimer = window.setInterval(() => void loadDashboard(true), 12000);
+    const refreshMs = window.matchMedia("(max-width: 767px)").matches ? 60000 : 12000;
+    const dashboardTimer = window.setInterval(() => void loadDashboard(true), refreshMs);
     const clockTimer = window.setInterval(() => setClockNow(new Date()), 1000);
     return () => { window.clearInterval(dashboardTimer); window.clearInterval(clockTimer); };
   }, []);
@@ -1015,10 +1055,14 @@ const matchingScheduleForSelectedDate = useMemo(() => {
   // Check if today's class is still in the future (not started yet)
   const classIsUpcomingToday = useMemo(() => {
     if (!matchingScheduleForSelectedDate) return false;
+    // Only block if the selected date is TODAY and class hasn't started yet
+    // Never block past dates
+    const todayStr = today();
+    if (lessonDate !== todayStr) return false;
     const classStart = getThisWeekClassStart(matchingScheduleForSelectedDate);
     if (!classStart) return false;
     return classStart.getTime() > Date.now();
-  }, [matchingScheduleForSelectedDate]);
+  }, [matchingScheduleForSelectedDate, lessonDate]);
 
   const canAddLesson = isDateValid && !classIsUpcomingToday && (canAddNormalWindow || Boolean(addPermission));
 
@@ -1278,7 +1322,22 @@ const handleSaveLesson = async (event: React.FormEvent) => {
 
     try {
       setEditSaving(true);
-      const subject_entries = editSubjectEntries.map((entry, index) => ({
+      // FIX: Only submit entries that have active edit permission
+      // Locked entries (no permission) must not be sent to avoid overwriting with default data
+      const permittedEntries = editSubjectEntries.filter(entry => {
+        const editPerm = getEditPermissionForLesson(
+          editingGroup.studentId,
+          editingGroup.date,
+          entry.subject
+        );
+        return Boolean(editPerm);
+      });
+      if (permittedEntries.length === 0) {
+        setEditMessage("No subjects have edit permission. Request edit permission first.");
+        setEditSaving(false);
+        return;
+      }
+      const subject_entries = permittedEntries.map((entry, index) => ({
         subject: entry.subject,
         topic_summary: getTopicSummary(entry),
         progress_status: entry.progressStatus || undefined,
@@ -1351,7 +1410,8 @@ const handleSaveLesson = async (event: React.FormEvent) => {
     const now = getMinutesNow();
     return todaySchedules.filter(row => {
       const start = timeToMinutes(row.time_slot);
-      return now >= start && now <= start + CLASS_DURATION_MINUTES;
+      const duration = Number(row.duration_minutes) || CLASS_DURATION_MINUTES;
+      return now >= start && now < start + duration;
     });
   }, [todaySchedules, currentTime]);
 
@@ -1587,6 +1647,11 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
     { tab: "history", icon: <History size={18} />, label: "Lesson History" },
   ];
 
+  const handleTabChange = (tab: Tab) => {
+    setActiveTab(tab);
+    setMobileSidebarOpen(false);
+  };
+
   if (loading) {
     return (
       <div className="tp-root min-h-screen grid place-items-center">
@@ -1602,8 +1667,25 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
   return (
     <div className={`tp-root h-screen flex overflow-hidden ${themeMode === "dark" ? "tp-dark" : ""}`}>
       {/* ── Sidebar ── */}
-      <aside className="tp-sidebar hidden lg:flex flex-col">
-        <div className="tp-sidebar-logo">
+      {mobileSidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close sidebar"
+          onClick={() => setMobileSidebarOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-950/45 backdrop-blur-[2px] lg:hidden"
+        />
+      )}
+
+      <aside className={`tp-sidebar tp-mobile-drawer flex flex-col ${mobileSidebarOpen ? "open" : ""}`}>
+        <div className="tp-sidebar-logo relative">
+          <button
+            type="button"
+            onClick={() => setMobileSidebarOpen(false)}
+            className="tp-drawer-close lg:hidden"
+            aria-label="Close menu"
+          >
+            <X size={18} />
+          </button>
           <div className="tp-logo-icon">
             <img src="/ivs-logo.png" alt="Iqra Virtual School" className="tp-sidebar-logo-img" />
           </div>
@@ -1615,7 +1697,7 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
 
         <nav className="flex-1 px-3 py-4 space-y-1">
           {NAV_ITEMS.map(({ tab, icon, label }) => (
-            <button key={tab} onClick={() => setActiveTab(tab)} className={`tp-nav-btn w-full ${activeTab === tab ? "active" : ""}`}>
+            <button key={tab} onClick={() => handleTabChange(tab)} className={`tp-nav-btn w-full ${activeTab === tab ? "active" : ""}`}>
               {icon}
               <span>{label}</span>
               {activeTab === tab && <ChevronRight size={14} className="ml-auto opacity-60" />}
@@ -1641,11 +1723,14 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
       <main className="flex-1 min-w-0 flex flex-col h-screen overflow-hidden">
         <header className="tp-topbar flex items-center justify-between px-6 py-3">
           <div className="flex items-center gap-4 min-w-0">
-            <div className="lg:hidden flex items-center gap-2 overflow-x-auto">
-              {NAV_ITEMS.map(({ tab, label }) => (
-                <button key={tab} onClick={() => setActiveTab(tab)} className={`tp-mob-tab ${activeTab === tab ? "active" : ""}`}>{label}</button>
-              ))}
-            </div>
+            <button
+              type="button"
+              onClick={() => setMobileSidebarOpen(true)}
+              className="lg:hidden inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white/90 text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.08)] active:scale-95"
+              aria-label="Open menu"
+            >
+              <Menu size={21} />
+            </button>
             <div className="hidden lg:block">
               <h1 className="text-lg font-bold text-slate-800">
                 {activeTab === "overview" && "Dashboard"}
@@ -1671,7 +1756,7 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
                 <span className="tp-clock-hand tp-clock-second" style={{ transform: `translateX(-50%) rotate(${clockAngles.second}deg)` }} />
                 <span className="tp-clock-center" />
               </div>
-              <div className="hidden sm:block">
+              <div>
                 <div className="text-sm font-black text-slate-900">{currentTime}</div>
                 <div className="text-[11px] font-bold text-slate-400">{getCurrentDate()}</div>
               </div>
@@ -1748,7 +1833,8 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
                     const isLive = liveNowSchedules.some(item => item.id === row.id);
                     const minsLeft = minutesUntilClass(row.time_slot);
                     const isUpcoming = minsLeft > 0 && minsLeft <= 60;
-                    const isPast = minsLeft < -CLASS_DURATION_MINUTES;
+                    const duration = (row as any).duration_minutes || CLASS_DURATION_MINUTES;
+                    const isPast = minsLeft < -duration;
                     return (
                       <div key={row.id} className={`tp-today-class-card ${isLive ? "live" : ""} ${isPast ? "past" : ""}`}>
                         <div className="flex items-start justify-between gap-3">
@@ -1850,7 +1936,7 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
                 </div>
 
                 {/* Student + Date row */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div className="grid grid-cols-1 gap-4 mb-4">
                   <div className="tp-field">
                     <label className="tp-label">Student</label>
                     <select value={studentId} onChange={e => handleStudentChange(e.target.value)} className="tp-select">
@@ -2003,11 +2089,13 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
 {/* Subject area (table-like layout matching screenshots) */}
               {studentId && isDateValid && canAddLesson && !isDateBeforeEnrollment && !dailyReports.find(r => String(r.student_id) === String(studentId) && String(r.date) === String(lessonDate)) && (
                 <div className="tp-card p-0 overflow-hidden">
-                  {/* Table header */}
-                  <div className="tp-subjects-table-header">
+                  {/* Table header - hidden on mobile */}
+                  <div className="tp-subjects-table-header hidden sm:grid">
                     <div className="tp-subjects-col-subject">Subject</div>
                     <div className="tp-subjects-col-topics">Topics Covered</div>
                   </div>
+                  {/* Mobile header */}
+                  <div className="sm:hidden bg-[#1a2540] px-4 py-3 text-xs font-black text-white">Subjects & Topics</div>
 
 {/* Subject entries */}
                 <div className="divide-y divide-slate-100">
@@ -2446,7 +2534,19 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
                     return (
                       <div key={entry.id} className="tp-subjects-row">
                         <div className="tp-subjects-col-subject">
-                          <div className="text-sm font-black text-slate-800">{entry.subject}</div>
+                          <div className="flex items-center gap-2">
+                            <div className="text-sm font-black text-slate-800">{entry.subject}</div>
+                            {!canEdit && !pendingReq && editSubjectEntries.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => setEditSubjectEntries(prev => prev.filter((_, i) => i !== index))}
+                                className="tp-remove-btn"
+                                title="Remove this subject"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )}
+                          </div>
                           <div className="mt-2">
                             {canEdit
                               ? <span className="tp-live-badge">Edit Allowed</span>
@@ -2471,7 +2571,7 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
                               index={index}
                               totalEntries={editSubjectEntries.length}
                               onChange={updated => setEditSubjectEntries(prev => prev.map((e, i) => i === index ? updated : e))}
-                              onRemove={() => {}}
+                              onRemove={() => { if (editSubjectEntries.length > 1) { setEditSubjectEntries(prev => prev.filter((_, i) => i !== index)); } }}
                             />
                           ) : (
                             <div className="tp-compact-card">
@@ -2531,7 +2631,56 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
         </div>
       </main>
 
-      <style>{styles}</style>
+      <style>{styles + `
+@media (max-width: 1023px) {
+  .tp-mobile-drawer {
+    position: fixed !important;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 50;
+    width: min(86vw, 320px);
+    transform: translateX(-110%);
+    transition: transform .28s ease;
+    display: flex !important;
+    flex-direction: column !important;
+    border-radius: 0 30px 30px 0;
+    height: 100dvh;
+    height: 100vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .tp-mobile-drawer.open {
+    transform: translateX(0);
+  }
+
+  .tp-drawer-close {
+    position: absolute;
+    right: 12px;
+    top: 12px;
+    height: 36px;
+    width: 36px;
+    border-radius: 14px;
+    background: rgba(255,255,255,.92);
+    border: 1px solid #e2e8f0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #334155;
+    box-shadow: 0 10px 24px rgba(15,23,42,.10);
+  }
+}
+
+@media (min-width: 1024px) {
+  .tp-mobile-drawer {
+    position: relative !important;
+    transform: none !important;
+    display: flex !important;
+  }
+}
+
+`}</style>
     </div>
   );
 }
@@ -2616,12 +2765,13 @@ function Pagination({ page, totalPages, onPrev, onNext }: { page: number; totalP
 
 const styles = `
 .tp-root { background: #f8f9fc; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
-.tp-page-scroll { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+.tp-page-scroll { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; padding-bottom: 24px; }
 .tp-page-scroll::-webkit-scrollbar { width: 10px; }
 .tp-page-scroll::-webkit-scrollbar-track { background: transparent; }
 .tp-page-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; border: 3px solid #f8f9fc; }
 .tp-page-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-.tp-sidebar { width: 276px; min-height: 100vh; background: radial-gradient(circle at 20% 0%, rgba(99,102,241,.12), transparent 30%), linear-gradient(180deg,#fff 0%,#f8fbff 52%,#f3f7fc 100%); border-right: 1px solid #e4ecf7; flex-shrink: 0; overflow: hidden; padding: 18px 14px; box-shadow: 24px 0 70px rgba(15,23,42,.09), inset -1px 0 0 rgba(255,255,255,.85); }
+.tp-sidebar { width: 276px; min-height: 100vh; background: radial-gradient(circle at 20% 0%, rgba(99,102,241,.12), transparent 30%), linear-gradient(180deg,#fff 0%,#f8fbff 52%,#f3f7fc 100%); border-right: 1px solid #e4ecf7; flex-shrink: 0; overflow-y: auto; overflow-x: hidden; padding: 18px 14px; box-shadow: 24px 0 70px rgba(15,23,42,.09), inset -1px 0 0 rgba(255,255,255,.85); }
+.tp-sidebar-bottom { flex-shrink: 0; padding-bottom: max(16px, env(safe-area-inset-bottom, 16px)); }
 .tp-sidebar-logo { display: flex; align-items: center; gap: 13px; padding: 12px; border-radius: 26px; background: linear-gradient(135deg,rgba(255,255,255,.98),rgba(248,250,252,.94)); border: 1px solid #e2ebf6; box-shadow: 0 22px 52px rgba(15,23,42,.10), inset 0 1px 0 rgba(255,255,255,.95); }
 .tp-logo-icon { width: 58px; height: 58px; border-radius: 22px; background: radial-gradient(circle at center,#fff 0%,#fff 50%,#eef4ff 100%); border: 1px solid #dce7f5; display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0; box-shadow: 0 14px 30px rgba(15,23,42,.09), inset 0 2px 8px rgba(255,255,255,.95); }
 .tp-sidebar-logo-img { width: 50px; height: 50px; object-fit: contain; display: block; border-radius: 999px; }
@@ -2741,14 +2891,85 @@ const styles = `
 .tp-summary-preview { background: #f0f4fa; border: 1px solid #dbe5ff; border-radius: 10px; padding: 10px 14px; }
 
 @media (max-width: 768px) {
-  .tp-subjects-table-header { grid-template-columns: 1fr; }
-  .tp-subjects-col-topics { display: none; }
-  .tp-subjects-row { grid-template-columns: 1fr; }
+  /* Subjects table — fully stacked on mobile */
+  .tp-subjects-table-header { grid-template-columns: 1fr; padding: 10px 14px; }
+  .tp-subjects-col-topics { display: block; }
+  .tp-subjects-row { grid-template-columns: 1fr; padding: 14px; gap: 10px; }
+  .tp-subjects-col-subject { width: 100%; }
+
+  /* Cards */
+  .tp-card { padding: 14px; border-radius: 14px; }
+  .tp-hero-panel { padding: 14px; border-radius: 20px; }
+  .tp-hero-stat { min-height: 76px; padding: 12px 14px; border-radius: 14px; }
+  .tp-hero-number { font-size: 20px; }
+  .tp-daily-card { padding: 14px; border-radius: 14px; }
+  .tp-today-class-card { padding: 14px; border-radius: 14px; }
+  .tp-total-class-card { padding: 14px; border-radius: 14px; }
+  .tp-history-subject-card { padding: 10px; border-radius: 10px; }
+
+  /* Filters */
   .tp-filter-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .tp-filter-shell { padding: 12px; border-radius: 14px; }
+
+  /* Form */
+  .tp-save-btn { padding: 12px 18px; font-size: 13px; border-radius: 12px; width: 100%; justify-content: center; }
+  .tp-form-hero { padding-bottom: 14px; }
+  .tp-permission-panel { flex-direction: column; align-items: flex-start; gap: 10px; padding: 12px; }
+
+  /* Subject entry card */
+  .tp-compact-row { flex-direction: column; gap: 8px; }
+  .tp-compact-field { min-width: 0; width: 100%; }
+  .tp-compact-field--sm { flex: 1; min-width: 0; width: 100%; }
+  .tp-compact-card { border-radius: 10px; }
+  .tp-compact-header { padding: 10px 12px; min-height: 40px; }
+  .tp-compact-body { padding: 10px 12px; }
+  .tp-compact-select { font-size: 14px; padding: 10px 12px; border-radius: 10px; }
+  .tp-checklist-compact { max-height: 180px; }
+
+  /* Sidebar */
+  .tp-sidebar-bottom { padding-bottom: 32px !important; margin-bottom: 8px; }
+  .tp-logout-btn { margin-bottom: 8px; }
+
+  /* Scroll */
+  .tp-page-scroll { padding-bottom: 32px; }
+
+  /* Subject label */
+  .tp-subjects-col-subject { font-size: 13px; color: #1e293b; font-weight: 900; }
+
+  /* Insight bar */
+  .tp-insight-bar { padding: 12px 14px; border-radius: 16px; flex-wrap: wrap; gap: 8px; }
+
+  /* Attendance table */
+  .tp-att-stat { padding: 12px 14px; min-height: 80px; border-radius: 16px; }
 }
+
 @media (max-width: 640px) {
   .tp-filter-grid { grid-template-columns: 1fr; }
   .tp-form-hero { align-items: flex-start; flex-direction: column; }
+  .tp-hero-panel { padding: 12px; }
+  .tp-card { padding: 12px; border-radius: 12px; }
+  .tp-topbar { padding-left: 12px !important; padding-right: 12px !important; }
+  .tp-clock-card { padding: 6px 10px 6px 6px; min-height: 52px; }
+  .tp-att-stat { padding: 12px; min-height: 80px; border-radius: 14px; }
+  .tp-summary-card { padding: 14px; border-radius: 16px; }
+  .tp-compact-select { font-size: 14px; padding: 10px 12px; }
+  .tp-input-el { font-size: 14px; padding: 10px 12px; border-radius: 10px; }
+  .tp-select { font-size: 14px; padding: 10px 12px; border-radius: 10px; }
+  .tp-field { gap: 5px; }
+  .tp-label { font-size: 11px; letter-spacing: .04em; }
+  .tp-today-class-card { padding: 12px; }
+  .tp-total-class-card { padding: 12px; }
+  .tp-daily-card { padding: 12px; }
+  .tp-save-btn { font-size: 14px; padding: 13px 20px; }
+  .tp-sidebar-bottom { padding-bottom: 40px !important; }
+  .tp-logout-btn { padding: 13px 16px; font-size: 14px; margin-bottom: 12px; }
+  .tp-page-scroll { padding-bottom: 40px; }
+
+  /* Hero grid — 2x2 on small phones */
+  .tp-hero-panel .grid { grid-template-columns: repeat(2, 1fr) !important; }
+  .tp-hero-stat { min-height: 72px; padding: 10px 12px; }
+  .tp-hero-number { font-size: 18px; }
+  .tp-hero-label { font-size: 11px; }
 }
 
 /* ── Dark mode ── */
@@ -2790,11 +3011,12 @@ const styles = `
 .tp-compact-summary { font-size: 13px; font-weight: 700; color: #1e293b; }
 .tp-compact-placeholder { font-size: 13px; font-weight: 500; color: #94a3b8; font-style: italic; }
 .tp-compact-body { padding: 12px 14px; border-top: 1px solid #eef2f7; display: flex; flex-direction: column; gap: 10px; background: #fff; }
-.tp-compact-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.tp-compact-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; width: 100%; }
+.tp-compact-field { min-width: 0; }
 .tp-compact-field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 120px; }
 .tp-compact-field--sm { flex: 0 0 80px; min-width: 70px; }
 .tp-compact-label { font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .05em; }
-.tp-compact-select { padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; font-weight: 600; color: #1e293b; background: #f8fafc; outline: none; width: 100%; transition: border-color .15s; }
+.tp-compact-select { padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; font-weight: 600; color: #1e293b; background: #f8fafc; outline: none; width: 100%; max-width: 100%; transition: border-color .15s; box-sizing: border-box; }
 .tp-compact-select:focus { border-color: #a5b4fc; box-shadow: 0 0 0 2px rgba(99,102,241,.10); background: #fff; }
 .tp-compact-search { width: 100%; padding: 7px 10px 7px 30px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; font-weight: 500; color: #1e293b; background: #f8fafc; outline: none; }
 .tp-checklist-compact { max-height: 180px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; padding: 6px; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin; }

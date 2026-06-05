@@ -270,9 +270,9 @@ function TeacherAttendanceModal({
       />
 
       {/* Centered modal */}
-      <div className="absolute inset-0 flex items-center justify-center p-4">
+      <div className="absolute inset-0 flex items-end sm:items-center justify-center sm:p-4">
         <div
-          className="w-full max-w-5xl rounded-[28px] border border-slate-200/70 bg-white/90 backdrop-blur-xl shadow-[0_30px_90px_rgba(0,0,0,0.25)] overflow-hidden"
+          className="w-full sm:max-w-5xl rounded-t-[28px] sm:rounded-[28px] border border-slate-200/70 bg-white/90 backdrop-blur-xl shadow-[0_30px_90px_rgba(0,0,0,0.25)] overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
@@ -300,7 +300,7 @@ function TeacherAttendanceModal({
           </div>
 
           {/* Body (scroll INSIDE modal only) */}
-          <div className="p-5 max-h-[70vh] overflow-auto overscroll-contain">
+          <div className="p-4 sm:p-5 max-h-[65vh] sm:max-h-[70vh] overflow-auto overscroll-contain">
             {sessions.length === 0 ? (
               <div className="rounded-3xl border border-slate-200/70 bg-white/80 p-6 text-center text-slate-600">
                 No sessions found for this teacher on this day.
@@ -585,7 +585,7 @@ const pagedStudents = getPagedItems(filteredStudents, page, PAGE_SIZE);
   }, [openTeacherId, teacherCards]);
 
 return (
-  <div className="w-full max-w-none ui-glass ui-card ui-gradient-border ui-card-hover p-6 anim-fade-up">
+  <div className="w-full max-w-none ui-glass ui-card ui-gradient-border ui-card-hover p-3 sm:p-6 anim-fade-up">
       {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
         <div className="min-w-0">
@@ -602,71 +602,61 @@ return (
           </div>
         </div>
 
-        {/* Controls */}
-        <div className="flex flex-wrap gap-2 items-center justify-start lg:justify-end">
+        {/* Controls - mobile friendly grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full lg:w-auto mt-3 lg:mt-0">
           <div className="relative">
             <CalendarDays size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
-  id="attendance-date"
-  name="attendance_date"
-  type="date"
-  value={date}
+              id="attendance-date"
+              name="attendance_date"
+              type="date"
+              value={date}
               onChange={(e) => setDate(e.target.value)}
-              className="pl-9 pr-3 py-2 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-indigo-400/50"
+              className="w-full pl-9 pr-3 py-2.5 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-indigo-400/50"
             />
           </div>
-
-         <select
-  id="attendance-teacher"
-  name="attendance_teacher"
-  value={teacherId}
+          <select
+            id="attendance-teacher"
+            name="attendance_teacher"
+            value={teacherId}
             onChange={(e) => setTeacherId(e.target.value)}
-            className="px-3 py-2 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-indigo-400/50"
-            title="Filter by teacher"
+            className="w-full px-3 py-2.5 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-indigo-400/50"
           >
             <option value="all">All Teachers</option>
-            {appState.teachers
-              .slice()
-              .sort((a, b) => a.name.localeCompare(b.name))
-              .map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
+            {appState.teachers.slice().sort((a, b) => a.name.localeCompare(b.name)).map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
           </select>
-
-          <div className="relative">
+          <div className="relative sm:col-span-2">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-           <input
-  id="attendance-search"
-  name="attendance_search"
-  value={search}
-  onChange={(e) => setSearch(e.target.value)}
-              placeholder={entityFilter === "teachers" ? "Search teacher or student..." : "Search student..."}
-              className="pl-9 pr-3 py-2 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-indigo-400/50"
+            <input
+              id="attendance-search"
+              name="attendance_search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search teacher or student..."
+              className="w-full pl-9 pr-3 py-2.5 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-indigo-400/50"
             />
           </div>
-
-          {/* Only Teachers / Students (no combined) */}
-          <Segmented
-            value={entityFilter}
-            onChange={(v) => setEntityFilter(v as any)}
-            options={[
-              { value: "teachers", label: "Teachers" },
-              { value: "students", label: "Students" },
-            ]}
-          />
+          <div className="sm:col-span-2">
+            <Segmented
+              value={entityFilter}
+              onChange={(v) => setEntityFilter(v as any)}
+              options={[
+                { value: "teachers", label: "Teachers" },
+                { value: "students", label: "Students" },
+              ]}
+            />
+          </div>
         </div>
       </div>
-
-      {/* Secondary controls */}
-      <div className="mt-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 rounded-3xl bg-white/60 border border-slate-200/70 p-4 shadow-[0_12px_28px_rgba(15,23,42,0.06)]">
+      {/* Secondary controls - mobile friendly */}
+      <div className="mt-4 flex flex-col gap-2 rounded-3xl bg-white/60 border border-slate-200/70 p-3 sm:p-4 shadow-[0_12px_28px_rgba(15,23,42,0.06)]">
         <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex items-center gap-2 px-3 py-2 rounded-2xl bg-white/75 border border-slate-200/70 text-xs font-extrabold text-slate-700">
-            <Filter size={16} className="text-slate-500" />
+            <Filter size={14} className="text-slate-500" />
             Day: <span className="text-slate-900">{day || "—"}</span>
           </div>
-
           <button
             type="button"
             onClick={() => setOnlyScheduled((v) => !v)}
@@ -675,11 +665,11 @@ return (
                 ? "bg-indigo-50 text-indigo-700 border-indigo-100"
                 : "bg-white/80 text-slate-700 border-slate-200/70 hover:bg-white"
             }`}
-            title="Toggle scheduled-only list"
           >
-            {onlyScheduled ? "Scheduled only: ON" : "Scheduled only: OFF"}
+            {onlyScheduled ? "Scheduled: ON" : "Scheduled: OFF"}
           </button>
-
+        </div>
+        <div className="overflow-x-auto">
           <Segmented
             value={statusFilter}
             onChange={(v) => setStatusFilter(v as any)}
@@ -692,10 +682,8 @@ return (
             ]}
           />
         </div>
-
-        {/* Bulk buttons removed on purpose */}
         <div className="text-xs text-slate-500">
-          Tip: Click a teacher card to open a clean popup with all class times.
+          Tip: Click a card to mark attendance.
         </div>
       </div>
 

@@ -14,6 +14,7 @@ from .serializers import (
     account_payload_for_user,
 )
 from academy.models import TeacherProfile, StudentProfile, StudentSubject, ClassSchedule
+from academy.ws_notify import notify_global
 
 
 def auth_payload(user):
@@ -331,6 +332,25 @@ class CoordinatorAccountListCreateView(APIView):
 
         account = serializer.save()
 
+        from academy.ws_notify import notify_role
+        notify_global("academy_update", {
+            "event": "account_created",
+            "message": "Account created",
+            "account_id": account.get("id") if isinstance(account, dict) else None,
+            "role": account.get("role") if isinstance(account, dict) else requested_role,
+        })
+        # Notify teacher role so their dashboard refreshes
+        # Using threading to add slight delay ensuring DB commit is complete
+        import threading
+        def _notify():
+            import time
+            time.sleep(0.8)
+            notify_role("teacher", "academy_update", {
+                "event": "account_created",
+                "role": account.get("role") if isinstance(account, dict) else requested_role,
+            })
+        threading.Thread(target=_notify, daemon=True).start()
+
         return Response(account, status=status.HTTP_201_CREATED)
 
 
@@ -382,6 +402,13 @@ class CoordinatorAccountDetailView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         account = serializer.save()
+
+        notify_global("academy_update", {
+            "event": "account_updated",
+            "message": "Account updated",
+            "account_id": account.get("id") if isinstance(account, dict) else user.id,
+            "role": account.get("role") if isinstance(account, dict) else user.role,
+        })
 
         return Response(account)
 

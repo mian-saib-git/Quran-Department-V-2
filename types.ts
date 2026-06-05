@@ -42,6 +42,7 @@ export interface Student {
   name: string;
   teacherId: string;
   timeSlot: string; // "HH:mm"
+  durationMinutes?: number;
   classType: ClassType;
   classDays: string[];
 

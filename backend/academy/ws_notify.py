@@ -120,3 +120,39 @@ def notify_attendance_marked(attendance):
         notify_user(attendance.student.user_id, "attendance_marked", payload)
     if attendance.teacher_id:
         notify_user(attendance.teacher.user_id, "attendance_marked", payload)
+
+def notify_account_created(user, student_profile=None, teacher_profile=None):
+    payload = {
+        "type": "academy_update",
+        "event": "account_created",
+        "user_id": user.id,
+        "role": user.role,
+        "username": user.username,
+        "student_id": student_profile.id if student_profile else None,
+        "teacher_id": teacher_profile.id if teacher_profile else None,
+    }
+    notify_role("coordinator", "academy_update", payload)
+    notify_role("teacher", "academy_update", payload)
+
+
+def notify_account_updated(user):
+    payload = {
+        "type": "academy_update",
+        "event": "account_updated",
+        "user_id": user.id,
+        "role": user.role,
+        "username": user.username,
+    }
+    notify_role("coordinator", "academy_update", payload)
+    notify_role("teacher", "academy_update", payload)
+
+
+def notify_account_deleted(user_id, role):
+    payload = {
+        "type": "academy_update",
+        "event": "account_deleted",
+        "user_id": user_id,
+        "role": role,
+    }
+    notify_role("coordinator", "academy_update", payload)
+    notify_role("teacher", "academy_update", payload)

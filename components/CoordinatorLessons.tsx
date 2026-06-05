@@ -23,6 +23,7 @@ import {
   getLessons,
   grantLessonPermission,
   reviewLessonAccessRequest,
+  deleteLessonAccessRequest,
   type DailyLessonReportPayload,
   type LessonAccessPermissionPayload,
   type LessonAccessRequestPayload,
@@ -53,6 +54,28 @@ type RequestTab = "pending" | "reviewed";
 
 const PAGE_SIZE = 24;
 const RECENT_THRESHOLD_MS = 30 * 60 * 1000;
+const DISMISSED_ACTIVITY_KEY = "ivs_dismissed_lesson_activity_ids_v1";
+const CLEARED_REVIEWED_KEY = "ivs_cleared_reviewed_request_ids_v1";
+
+function loadNumberSet(key: string): Set<number> {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.map((item) => Number(item)).filter((item) => Number.isFinite(item)));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveNumberSet(key: string, value: Set<number>) {
+  try {
+    localStorage.setItem(key, JSON.stringify(Array.from(value)));
+  } catch {
+    // ignore storage errors
+  }
+}
 
 // ─── Pure helpers ─────────────────────────────────────────────
 
@@ -198,7 +221,12 @@ const [lessons, setLessons] = useState<LessonPayload[]>([]);
   const [page, setPage] = useState(1);
 
   const [locallyGrantedKeys, setLocallyGrantedKeys] = useState<Set<string>>(new Set());
-  const [dismissedActivityIds, setDismissedActivityIds] = useState<Set<number>>(new Set());
+  const [dismissedActivityIds, setDismissedActivityIds] = useState<Set<number>>(
+    () => loadNumberSet(DISMISSED_ACTIVITY_KEY)
+  );
+  const [clearedReviewedRequestIds, setClearedReviewedRequestIds] = useState<Set<number>>(
+    () => loadNumberSet(CLEARED_REVIEWED_KEY)
+  );
 
 // ── WebSocket real-time updates ──
 useAcademyWS((data) => {
@@ -248,6 +276,15 @@ const [lessonsRes, dailyRes, permissionsRes, requestsRes] = await Promise.all([
   };
 
   useEffect(() => { void load(); }, []);
+
+  useEffect(() => {
+    saveNumberSet(DISMISSED_ACTIVITY_KEY, dismissedActivityIds);
+  }, [dismissedActivityIds]);
+
+  useEffect(() => {
+    saveNumberSet(CLEARED_REVIEWED_KEY, clearedReviewedRequestIds);
+  }, [clearedReviewedRequestIds]);
+
   useEffect(() => { setPage(1); }, [search, selectedMonth, selectedTeacher]);
 
   // ── Merge server requests with optimistic local updates ───
@@ -320,12 +357,13 @@ const [lessonsRes, dailyRes, permissionsRes, requestsRes] = await Promise.all([
     () =>
       mergedRequests
         .filter((r) => r.status !== "pending")
+        .filter((r) => !clearedReviewedRequestIds.has(Number(r.id)))
         .sort((a, b) =>
           String(b.updated_at || b.created_at || "").localeCompare(
             String(a.updated_at || a.created_at || "")
           )
         ),
-    [mergedRequests]
+    [mergedRequests, clearedReviewedRequestIds]
   );
 
   // ── Permission map ────────────────────────────────────────
@@ -581,8 +619,58 @@ const handleDisablePermission = async (
     }
   };
 
-  const handleDismissActivity = (lessonId: number) =>
-    setDismissedActivityIds((prev) => new Set([...prev, lessonId]));
+  const handleClearReviewedRequests = async () => {
+    if (reviewedRequests.length === 0) return;
+
+    try {
+      setSavingKey("clear-reviewed");
+      setMessage("");
+
+      await Promise.all(
+        reviewedRequests.map((req) => deleteLessonAccessRequest(Number(req.id)))
+      );
+
+      setAllRequests((prev) =>
+        prev.filter((req) => !reviewedRequests.some((r) => Number(r.id) === Number(req.id)))
+      );
+
+      setMessage("Reviewed requests cleared permanently.");
+      window.setTimeout(() => setMessage(""), 3000);
+
+      await load(true);
+    } catch (error: any) {
+      setMessage(error?.message || "Could not clear reviewed requests.");
+    } finally {
+      setSavingKey("");
+    }
+  };
+
+  const handleDismissActivity = (lesson: LessonPayload) => {
+    setDismissedActivityIds((prev) => {
+      const next = new Set(prev);
+
+      // Dismiss the whole daily activity notification, not just one subject row.
+      allLessons.forEach((item) => {
+        if (
+          String(item.student_id) === String(lesson.student_id) &&
+          String(item.date) === String(lesson.date)
+        ) {
+          next.add(Number(item.id));
+        }
+      });
+
+      next.add(Number(lesson.id));
+      return next;
+    });
+  };
+
+  const handleDismissAllCurrentActivities = () => {
+    setDismissedActivityIds((prev) => {
+      const next = new Set(prev);
+      recentActivityLessons.forEach((lesson) => next.add(Number(lesson.id)));
+      return next;
+    });
+  };
 
   // ── Render ────────────────────────────────────────────────
 
@@ -647,7 +735,7 @@ const handleDisablePermission = async (
               <Bell size={18} className="text-violet-600" />
               <h3 className="text-base font-extrabold text-violet-900">Recent Teacher Activity</h3>
               <span className="rounded-full border border-violet-200 bg-violet-100 px-2.5 py-0.5 text-xs font-extrabold text-violet-700">
-                {recentActivityLessons.length}
+                Latest
               </span>
             </div>
             <p className="hidden sm:block text-xs text-violet-600 font-semibold">
@@ -655,7 +743,7 @@ const handleDisablePermission = async (
             </p>
           </div>
 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 p-5">
-            {recentActivityLessons.map((lesson) => {
+            {recentActivityLessons.slice(0, 1).map((lesson) => {
               const { isNew, isEdited } = isRecentlyActedOn(lesson);
 const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLesson(lesson, "edit");
               const hasEdit = Boolean(editPerm) || editLocal;
@@ -715,7 +803,7 @@ const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLess
                         Disable Permission
                       </button>
                     )}
-                    <button type="button" onClick={() => handleDismissActivity(lesson.id)}
+                    <button type="button" onClick={handleDismissAllCurrentActivities}
                       className="ml-auto inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-extrabold text-slate-500 hover:bg-slate-50">
                       <XCircle size={13} /> Dismiss
                     </button>
@@ -775,6 +863,17 @@ const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLess
             >
               Reviewed ({reviewedRequests.length})
             </button>
+
+            {requestTab === "reviewed" && reviewedRequests.length > 0 && (
+              <button
+                type="button"
+                onClick={handleClearReviewedRequests}
+                disabled={savingKey === "clear-reviewed"}
+                className="ml-auto rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-black text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+              >
+                {savingKey === "clear-reviewed" ? "Clearing..." : "Clear reviewed"}
+              </button>
+            )}
           </div>
         </div>
 
