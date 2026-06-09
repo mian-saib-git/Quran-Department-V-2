@@ -415,7 +415,7 @@ class CoordinatorAccountDetailView(APIView):
     def delete(self, request, user_id):
         if request.user.role != User.Role.COORDINATOR:
             return Response(
-                {"detail": "Only coordinators can disable accounts."},
+                {"detail": "Only coordinators can delete accounts."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -427,22 +427,92 @@ class CoordinatorAccountDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if user.role == User.Role.COORDINATOR and not request.user.is_superuser:
-            return Response(
-                {"detail": "Only superadmin can disable coordinator accounts."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
         if user.id == request.user.id:
             return Response(
-                {"detail": "You cannot disable your own account."},
+                {"detail": "You cannot delete your own account."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        user.is_active = False
-        user.save()
+        if user.is_superuser:
+            return Response(
+                {"detail": "Super admin account cannot be deleted from here."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if user.role == User.Role.COORDINATOR and not request.user.is_superuser:
+            return Response(
+                {"detail": "Only superadmin can delete coordinator accounts."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        from django.db import transaction
+        from academy.models import (
+            Attendance,
+            ClassSchedule,
+            DailyLessonReport,
+            Lesson,
+            LessonAccessPermission,
+            LessonAccessRequest,
+            MonthlyLessonPlan,
+            MonthlyLessonSummary,
+            StudentProfile,
+            StudentSubject,
+            TeacherProfile,
+        )
+
+        deleted_role = user.role
+        deleted_username = user.username
+
+        with transaction.atomic():
+            if user.role == User.Role.STUDENT:
+                try:
+                    student = user.student_profile
+                except StudentProfile.DoesNotExist:
+                    student = None
+
+                if student:
+                    Attendance.objects.filter(student=student).delete()
+                    StudentSubject.objects.filter(student=student).delete()
+                    ClassSchedule.objects.filter(student=student).delete()
+                    LessonAccessPermission.objects.filter(student=student).delete()
+                    LessonAccessRequest.objects.filter(student=student).delete()
+                    MonthlyLessonPlan.objects.filter(student=student).delete()
+                    MonthlyLessonSummary.objects.filter(student=student).delete()
+                    DailyLessonReport.objects.filter(student=student).delete()
+                    Lesson.objects.filter(student=student).delete()
+
+            elif user.role == User.Role.TEACHER:
+                try:
+                    teacher = user.teacher_profile
+                except TeacherProfile.DoesNotExist:
+                    teacher = None
+
+                if teacher:
+                    students = list(StudentProfile.objects.filter(teacher=teacher))
+
+                    for student in students:
+                        Attendance.objects.filter(student=student).delete()
+                        StudentSubject.objects.filter(student=student).delete()
+                        ClassSchedule.objects.filter(student=student).delete()
+                        LessonAccessPermission.objects.filter(student=student).delete()
+                        LessonAccessRequest.objects.filter(student=student).delete()
+                        MonthlyLessonPlan.objects.filter(student=student).delete()
+                        MonthlyLessonSummary.objects.filter(student=student).delete()
+                        DailyLessonReport.objects.filter(student=student).delete()
+                        Lesson.objects.filter(student=student).delete()
+                        student.user.delete()
+
+                    Attendance.objects.filter(teacher=teacher).delete()
+                    ClassSchedule.objects.filter(teacher=teacher).delete()
+                    LessonAccessPermission.objects.filter(teacher=teacher).delete()
+                    LessonAccessRequest.objects.filter(teacher=teacher).delete()
+                    MonthlyLessonPlan.objects.filter(teacher=teacher).delete()
+                    MonthlyLessonSummary.objects.filter(teacher=teacher).delete()
+                    DailyLessonReport.objects.filter(teacher=teacher).delete()
+                    Lesson.objects.filter(teacher=teacher).delete()
+
+            user.delete()
 
         return Response({
-            "detail": "Account disabled successfully.",
-            "account": account_payload_for_user(user),
+            "detail": f"{deleted_role.title()} account '{deleted_username}' deleted permanently."
         })

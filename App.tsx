@@ -462,7 +462,7 @@ export default function App() {
       // Reload state after short delay to ensure DB commit
       setTimeout(() => {
         loadState().then(loaded => {
-          setAppState(patchState(loaded));
+          setAppState(loaded);
         }).catch(console.error);
       }, 800);
     }
@@ -916,7 +916,7 @@ useEffect(() => {
 
       if (!mounted) return;
 
-      setAppState(patchState(loaded));
+      setAppState(loaded);
       setHydrated(true);
     } catch (err) {
       console.error("Failed to load state:", err);
@@ -929,7 +929,7 @@ useEffect(() => {
 
     if (!customEvent.detail) return;
 
-    setAppState(patchState(customEvent.detail));
+    setAppState(customEvent.detail);
     setHydrated(true);
   };
 

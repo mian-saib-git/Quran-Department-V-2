@@ -1039,35 +1039,45 @@ export default function CoordinatorAccounts() {
     }
   };
 
-  const disableAccount = async (userId: number) => {
-    if (!confirm("Disable this account? The user will not be able to log in.")) return;
+  const deleteAccount = async (userId: number) => {
+    if (
+      !confirm(
+        "Delete this account permanently? This will remove the account and related records from the system. This action cannot be undone."
+      )
+    ) {
+      return;
+    }
 
     const previousData = data;
 
     setData((prev) => ({
       ...prev,
-      coordinators: prev.coordinators.map((item) =>
-        item.id === userId ? { ...item, is_active: false } : item
-      ),
-      teachers: prev.teachers.map((item) =>
-        item.id === userId ? { ...item, is_active: false } : item
-      ),
-      students: prev.students.map((item) =>
-        item.id === userId ? { ...item, is_active: false } : item
-      ),
+      coordinators: prev.coordinators.filter((item) => item.id !== userId),
+      teachers: prev.teachers.filter((item) => item.id !== userId),
+      students: prev.students.filter((item) => item.id !== userId),
     }));
 
     window.dispatchEvent(
       new CustomEvent("ivs-toast", {
-        detail: "Account disabled",
+        detail: "Account deleted permanently",
       })
     );
 
     try {
       await disableCoordinatorAccount(userId);
+      await load();
     } catch (err: any) {
+      const message = String(err?.message || "");
+
+      if (message.includes("404") || message.toLowerCase().includes("not found")) {
+        await load();
+        setMessage("Account already deleted.");
+        return;
+      }
+
       setData(previousData);
-      setMessage(err?.message || "Could not disable account.");
+      setMessage(message || "Could not delete account.");
+      await load();
     }
   };
 
@@ -1278,7 +1288,7 @@ export default function CoordinatorAccounts() {
             copiedUsername={copiedUsername}
             onCopyUsername={handleCopyUsername}
             onEdit={openEditCoordinator}
-            onDisable={disableAccount}
+            onDisable={deleteAccount}
           />
         ) : activeMode === "teacher" ? (
           <TeacherTable
@@ -1286,7 +1296,7 @@ export default function CoordinatorAccounts() {
             copiedUsername={copiedUsername}
             onCopyUsername={handleCopyUsername}
             onEdit={openEditTeacher}
-            onDisable={disableAccount}
+            onDisable={deleteAccount}
           />
         ) : (
           <StudentTable
@@ -1294,7 +1304,7 @@ export default function CoordinatorAccounts() {
             copiedUsername={copiedUsername}
             onCopyUsername={handleCopyUsername}
             onEdit={openEditStudent}
-            onDisable={disableAccount}
+            onDisable={deleteAccount}
           />
         )}
 
