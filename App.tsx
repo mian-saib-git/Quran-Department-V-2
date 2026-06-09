@@ -32,7 +32,7 @@ const CoordinatorAccounts = lazy(() => import("./components/CoordinatorAccounts"
 const CoordinatorLessons = lazy(() => import("./components/CoordinatorLessons"));
 import { TeacherPortal } from "./components/TeacherPortal";
 import { StudentPortal } from "./components/StudentPortal";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from "recharts";
 
 
 
@@ -2568,220 +2568,352 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
         </div>
       </div>
     </div>
-
-{/* Timeline */}
-<div
-  ref={timelineCardRef}
-  className="relative overflow-hidden rounded-[26px] border border-slate-200/60 bg-white/70 p-4 shadow-[0_12px_32px_rgba(15,23,42,0.045)] dark:bg-slate-900/70 dark:border-slate-700/70"
->
-  <div className="flex items-center justify-between gap-3">
-    <div className="text-sm font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-      <BarChart3 size={17} className="text-emerald-600" />
-      Timeline Today
     </div>
 
-    <span className="text-xs font-semibold text-slate-600 bg-white/75 border border-slate-100 px-3 py-1.5 rounded-full dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300">
-      Now: {formatTime12(currentSlot)}
-    </span>
-  </div>
+{/* Timeline */}
+{(() => {
+  const todaySlots = Array.from(
+    new Set(
+      viewStudents
+        .filter((s) => (s.classDays || []).includes(currentDayName))
+        .map((s) => String(s.timeSlot || "").slice(0, 5))
+        .filter(Boolean)
+    )
+  ).sort((a, b) => timeSlotToMinutes(a) - timeSlotToMinutes(b));
 
-  <div
-    className="relative mt-4 w-full h-[245px] rounded-[22px] border border-slate-200/60 bg-white/65 p-3 dark:bg-slate-950/35 dark:border-slate-700"
-    onMouseLeave={() => {
-      setTimelinePopup((prev) => {
-        if (!prev || prev.pinned) return prev;
-        return null;
-      });
-    }}
-  >
-    {insightsOpen && (
-      <ResponsiveContainer width="100%" height={205}>
-        {(() => {
-          const start = Math.max(0, TIME_SLOTS.indexOf("16:00"));
-          const end = Math.min(TIME_SLOTS.length, start + 10);
-          const windowSlots = TIME_SLOTS.slice(start, end);
+  const chartData = todaySlots.map((slot) => {
+    const studentsInSlot = viewStudents.filter(
+      (s) =>
+        String(s.timeSlot || "").slice(0, 5) === slot &&
+        (s.classDays || []).includes(currentDayName)
+    );
 
-          const chartData = windowSlots.map((slot) => {
-            const studentsInSlot = viewStudents.filter(
-              (s) =>
-                s.timeSlot === slot &&
-                (s.classDays || []).includes(currentDayName)
-            );
+    return {
+      time: slot,
+      timeLabel: formatTime12(slot),
+      count: studentsInSlot.length,
+      studentNames: studentsInSlot.map((s) => s.name),
+      students: studentsInSlot,
+    };
+  });
 
-            return {
-              time: slot,
-              count: studentsInSlot.length,
-              studentNames: studentsInSlot.map((s) => s.name),
-            };
+  const totalTodayClasses = chartData.reduce((sum, item) => sum + item.count, 0);
+
+  const currentSlotCount =
+    chartData.find((item) => item.time === currentSlot)?.count || 0;
+
+  const peakSlot =
+    chartData.length > 0
+      ? chartData.reduce((best, item) => (item.count > best.count ? item : best), chartData[0])
+      : null;
+
+  return (
+    <div
+      ref={timelineCardRef}
+      className="relative overflow-hidden rounded-[32px] border border-slate-200/70 bg-white/80 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:bg-slate-900/75 dark:border-slate-700/70"
+    >
+      {/* Decorative glow */}
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.12),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(59,130,246,0.08),transparent_30%)]" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/60 to-transparent" />
+
+      {/* Header */}
+      <div className="relative z-10 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-[0_12px_25px_rgba(16,185,129,0.28)]">
+            <BarChart3 size={22} />
+          </div>
+
+          <div>
+            <div className="text-xl font-black tracking-tight text-slate-900 dark:text-white">
+              Timeline Today
+            </div>
+            <div className="mt-1 text-sm font-medium text-slate-500 dark:text-slate-400">
+              Real-time class distribution across the full day
+            </div>
+          </div>
+        </div>
+
+        <div className="inline-flex items-center gap-2 self-start rounded-2xl border border-slate-200/80 bg-white/85 px-4 py-3 shadow-sm dark:bg-slate-800/80 dark:border-slate-700">
+          <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+          <span className="text-sm font-black text-slate-700 dark:text-slate-200">
+            Now: {formatTime12(currentSlot)}
+          </span>
+        </div>
+      </div>
+
+      {/* Mini stat cards */}
+      <div className="relative z-10 mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="rounded-[22px] border border-slate-200/70 bg-white/75 px-4 py-3 shadow-sm dark:bg-slate-800/60 dark:border-slate-700">
+          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">
+            Total Classes Today
+          </div>
+          <div className="mt-1 text-2xl font-black text-slate-900 dark:text-white">
+            {totalTodayClasses}
+          </div>
+        </div>
+
+        <div className="rounded-[22px] border border-slate-200/70 bg-white/75 px-4 py-3 shadow-sm dark:bg-slate-800/60 dark:border-slate-700">
+          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">
+            Current Slot Load
+          </div>
+          <div className="mt-1 text-2xl font-black text-emerald-600 dark:text-emerald-400">
+            {currentSlotCount}
+          </div>
+        </div>
+
+        <div className="rounded-[22px] border border-slate-200/70 bg-white/75 px-4 py-3 shadow-sm dark:bg-slate-800/60 dark:border-slate-700">
+          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">
+            Peak Time
+          </div>
+          <div className="mt-1 text-lg font-black text-slate-900 dark:text-white">
+            {peakSlot ? `${peakSlot.timeLabel} • ${peakSlot.count} classes` : "No data"}
+          </div>
+        </div>
+      </div>
+
+      {/* Chart area */}
+      <div
+        className="relative z-10 mt-5 h-[340px] rounded-[28px] border border-slate-200/70 bg-white/70 p-4 shadow-inner dark:bg-slate-950/40 dark:border-slate-700"
+        onMouseLeave={() => {
+          setTimelinePopup((prev) => {
+            if (!prev || prev.pinned) return prev;
+            return null;
           });
-
-          const placePopup = (
-            slot: string,
-            event: any,
-            pinned: boolean
-          ) => {
-            const card = timelineCardRef.current;
-            if (!card) return;
-
-            const rect = card.getBoundingClientRect();
-
-            let x = event?.clientX ? event.clientX - rect.left + 16 : 260;
-            let y = event?.clientY ? event.clientY - rect.top - 30 : 70;
-
-            // Keep popup inside the timeline card
-            x = Math.max(16, Math.min(x, rect.width - 280));
-            y = Math.max(58, Math.min(y, rect.height - 230));
-
-            setTimelinePopup({
-              slot,
-              x,
-              y,
-              pinned,
-            });
-          };
-
-          return (
+        }}
+      >
+        {chartData.length === 0 ? (
+          <div className="flex h-full items-center justify-center rounded-[24px] border border-dashed border-slate-300/70 text-center dark:border-slate-700">
+            <div>
+              <div className="text-base font-black text-slate-700 dark:text-slate-200">
+                No classes found for today
+              </div>
+              <div className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                Once today’s schedules are available, the graph will appear here.
+              </div>
+            </div>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={chartData}
-              margin={{ top: 8, right: 10, left: -20, bottom: 0 }}
+              margin={{ top: 12, right: 10, left: -10, bottom: 10 }}
               accessibilityLayer={false}
             >
+              <defs>
+                <linearGradient id="timelineBarDefault" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#cbd5e1" />
+                  <stop offset="100%" stopColor="#94a3b8" />
+                </linearGradient>
+
+                <linearGradient id="timelineBarCurrent" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#22c55e" />
+                  <stop offset="100%" stopColor="#16a34a" />
+                </linearGradient>
+
+                <linearGradient id="timelineBarActive" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#10b981" />
+                  <stop offset="100%" stopColor="#0f766e" />
+                </linearGradient>
+
+                <linearGradient id="timelineBarEmpty" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#e2e8f0" />
+                  <stop offset="100%" stopColor="#cbd5e1" />
+                </linearGradient>
+              </defs>
+
+              <CartesianGrid
+                vertical={false}
+                strokeDasharray="4 6"
+                stroke="#e2e8f0"
+                opacity={0.65}
+              />
+
               <XAxis
-                dataKey="time"
-                tick={{ fontSize: 10, fill: "#64748b" }}
+                dataKey="timeLabel"
+                tick={{ fontSize: 11, fill: "#64748b", fontWeight: 600 }}
                 axisLine={false}
                 tickLine={false}
-                dy={8}
+                dy={10}
               />
 
               <YAxis
                 allowDecimals={false}
                 axisLine={false}
                 tickLine={false}
-                tick={{ fontSize: 10, fill: "#64748b" }}
+                tick={{ fontSize: 11, fill: "#64748b", fontWeight: 600 }}
               />
 
               <Bar
                 dataKey="count"
-                radius={[9, 9, 9, 9]}
+                radius={[14, 14, 14, 14]}
+                maxBarSize={32}
                 onMouseEnter={(data: any, _index: number, event: any) => {
-                  setTimelinePopup((prev) => {
-                    if (prev?.pinned) return prev;
-                    return prev;
+                  if (timelinePopup?.pinned) return;
+
+                  const card = timelineCardRef.current;
+                  if (!card) return;
+
+                  const rect = card.getBoundingClientRect();
+                  let x = event?.clientX ? event.clientX - rect.left + 18 : 260;
+                  let y = event?.clientY ? event.clientY - rect.top - 40 : 90;
+
+                  x = Math.max(16, Math.min(x, rect.width - 290));
+                  y = Math.max(70, Math.min(y, rect.height - 235));
+
+                  setTimelinePopup({
+                    slot: data.time,
+                    x,
+                    y,
+                    pinned: false,
                   });
-
-                  const current = timelinePopup;
-                  if (current?.pinned) return;
-
-                  placePopup(data.time, event, false);
                 }}
                 onMouseMove={(data: any, _index: number, event: any) => {
                   if (timelinePopup?.pinned) return;
-                  placePopup(data.time, event, false);
+
+                  const card = timelineCardRef.current;
+                  if (!card) return;
+
+                  const rect = card.getBoundingClientRect();
+                  let x = event?.clientX ? event.clientX - rect.left + 18 : 260;
+                  let y = event?.clientY ? event.clientY - rect.top - 40 : 90;
+
+                  x = Math.max(16, Math.min(x, rect.width - 290));
+                  y = Math.max(70, Math.min(y, rect.height - 235));
+
+                  setTimelinePopup({
+                    slot: data.time,
+                    x,
+                    y,
+                    pinned: false,
+                  });
                 }}
                 onClick={(data: any, _index: number, event: any) => {
-                  placePopup(data.time, event, true);
+                  const card = timelineCardRef.current;
+                  if (!card) return;
+
+                  const rect = card.getBoundingClientRect();
+                  let x = event?.clientX ? event.clientX - rect.left + 18 : 260;
+                  let y = event?.clientY ? event.clientY - rect.top - 40 : 90;
+
+                  x = Math.max(16, Math.min(x, rect.width - 290));
+                  y = Math.max(70, Math.min(y, rect.height - 235));
+
+                  setTimelinePopup({
+                    slot: data.time,
+                    x,
+                    y,
+                    pinned: true,
+                  });
                 }}
-                style={{
-                  cursor: "pointer",
-                  outline: "none",
-                }}
+                style={{ cursor: "pointer", outline: "none" }}
               >
                 {chartData.map((item, index) => (
                   <Cell
                     key={`cell-${index}`}
                     fill={
                       timelinePopup?.slot === item.time
-                        ? "#10b981"
+                        ? "url(#timelineBarActive)"
                         : item.time === currentSlot
-                        ? "#22c55e"
-                        : "#cbd5e1"
+                        ? "url(#timelineBarCurrent)"
+                        : item.count === 0
+                        ? "url(#timelineBarEmpty)"
+                        : "url(#timelineBarDefault)"
                     }
                   />
                 ))}
               </Bar>
             </BarChart>
-          );
-        })()}
-      </ResponsiveContainer>
-    )}
+          </ResponsiveContainer>
+        )}
 
-    {/* Floating hover / pinned popup */}
-    {timelinePopup && (
-      <div
-        className={`
-          absolute z-30 w-[260px] rounded-[20px]
-          border border-slate-200/80 bg-white/96
-          p-3 backdrop-blur-xl
-          shadow-[0_18px_45px_rgba(15,23,42,0.14)]
-          dark:bg-slate-900/96 dark:border-slate-700
-          ${timelinePopup.pinned ? "pointer-events-auto" : "pointer-events-none"}
-        `}
-        style={{
-          left: timelinePopup.x,
-          top: timelinePopup.y,
-        }}
-      >
-        <div className="mb-2 flex items-start justify-between gap-3">
-          <div>
-            <div className="text-xs font-black text-slate-900 dark:text-white">
-              {formatTime12(timelinePopup.slot)} Classes
+        {/* Floating popup */}
+        {timelinePopup && (
+          <div
+            className={`
+              absolute z-30 w-[280px] rounded-[22px]
+              border border-slate-200/80 bg-white/95
+              p-4 backdrop-blur-xl
+              shadow-[0_24px_60px_rgba(15,23,42,0.18)]
+              dark:bg-slate-900/95 dark:border-slate-700
+              ${timelinePopup.pinned ? "pointer-events-auto" : "pointer-events-none"}
+            `}
+            style={{
+              left: timelinePopup.x,
+              top: timelinePopup.y,
+            }}
+          >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-black text-slate-900 dark:text-white">
+                  {formatTime12(timelinePopup.slot)}
+                </div>
+                <div className="mt-1 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                  {viewStudents.filter(
+                    (s) =>
+                      String(s.timeSlot || "").slice(0, 5) === timelinePopup.slot &&
+                      (s.classDays || []).includes(currentDayName)
+                  ).length} classes in this slot
+                </div>
+              </div>
+
+              {timelinePopup.pinned && (
+                <button
+                  type="button"
+                  onClick={() => setTimelinePopup(null)}
+                  className="rounded-full border border-slate-200 px-2.5 py-1 text-[10px] font-black text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
+                >
+                  Clear
+                </button>
+              )}
             </div>
 
-            <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
-              {timelinePopup.pinned
-                ? "Pinned. Scroll this list."
-                : "Click this bar to pin"}
+            <div
+              className={`
+                space-y-2 pr-1 custom-scrollbar
+                ${timelinePopup.pinned ? "max-h-[165px] overflow-y-auto" : "max-h-[145px] overflow-hidden"}
+              `}
+            >
+              {viewStudents
+                .filter(
+                  (s) =>
+                    String(s.timeSlot || "").slice(0, 5) === timelinePopup.slot &&
+                    (s.classDays || []).includes(currentDayName)
+                )
+                .map((s, idx) => (
+                  <div
+                    key={s.id}
+                    className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50/90 px-3 py-2.5 dark:bg-slate-950/70 dark:border-slate-700"
+                  >
+                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-[11px] font-black text-white shadow-sm">
+                      {idx + 1}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-[12px] font-bold text-slate-800 dark:text-slate-100">
+                        {s.name}
+                      </div>
+                      <div className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                        {formatTime12(String(s.timeSlot || "").slice(0, 5))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+              {viewStudents.filter(
+                (s) =>
+                  String(s.timeSlot || "").slice(0, 5) === timelinePopup.slot &&
+                  (s.classDays || []).includes(currentDayName)
+              ).length === 0 && (
+                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-3 text-[11px] font-semibold text-slate-400 italic dark:bg-slate-950/70 dark:border-slate-700">
+                  No classes in this slot.
+                </div>
+              )}
             </div>
           </div>
-
-          {timelinePopup.pinned && (
-            <button
-              type="button"
-              onClick={() => setTimelinePopup(null)}
-              className="rounded-full px-2 py-1 text-[10px] font-black text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-
-        <div
-          className={`
-            space-y-1.5 pr-1 custom-scrollbar
-            ${timelinePopup.pinned ? "max-h-[155px] overflow-y-auto" : "max-h-[135px] overflow-hidden"}
-          `}
-        >
-          {viewStudents
-            .filter(
-              (s) =>
-                s.timeSlot === timelinePopup.slot &&
-                (s.classDays || []).includes(currentDayName)
-            )
-            .map((s) => (
-              <div
-                key={s.id}
-                className="rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-2 text-[11px] font-bold text-slate-700 dark:bg-slate-950/70 dark:border-slate-700 dark:text-slate-200"
-              >
-                {s.name}
-              </div>
-            ))}
-
-          {viewStudents.filter(
-            (s) =>
-              s.timeSlot === timelinePopup.slot &&
-              (s.classDays || []).includes(currentDayName)
-          ).length === 0 && (
-            <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-3 text-[11px] font-semibold text-slate-400 italic dark:bg-slate-950/70 dark:border-slate-700">
-              No classes in this slot.
-            </div>
-          )}
-        </div>
+        )}
       </div>
-    )}
-  </div>
-</div>
-  </div>
+    </div>
+  );
+})()}
 </details>
 
     {/* ✅ Main content: Classes first (this is what admins care about) */}

@@ -775,6 +775,7 @@ export default function CoordinatorAccounts() {
 
   const openEditStudent = (student: CoordinatorStudentAccount) => {
     setShowPassword(false);
+    const profile: any = student.student_profile || {};
     setForm({
       ...emptyForm("student"),
       userId: student.id,
@@ -790,9 +791,7 @@ export default function CoordinatorAccounts() {
       teacher_id: String(student.student_profile?.teacher_id || ""),
       time_slot: getStudentTime(student),
       duration_minutes: Number(
-        student.student_profile?.duration_minutes ||
-        student.student_profile?.durationMinutes ||
-        30
+        profile.duration_minutes || profile.durationMinutes || 30
       ),
       class_days: getStudentDays(student),
     });
