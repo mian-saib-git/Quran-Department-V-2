@@ -30,6 +30,7 @@ const AttendanceEditor = lazy(() =>
 
 const CoordinatorAccounts = lazy(() => import("./components/CoordinatorAccounts"));
 const CoordinatorLessons = lazy(() => import("./components/CoordinatorLessons"));
+const DepartmentSettings = lazy(() => import("./components/DepartmentSettings"));
 import { TeacherPortal } from "./components/TeacherPortal";
 import { StudentPortal } from "./components/StudentPortal";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from "recharts";
@@ -56,7 +57,8 @@ type TabId =
   | "reports"
   | "scheduling"
   | "accounts"
-  | "lessons";
+  | "lessons"
+  | "department-settings";
 
 const NAV_META: Record<TabId, { label: string; icon: any }> = {
   dashboard: {
@@ -66,6 +68,10 @@ const NAV_META: Record<TabId, { label: string; icon: any }> = {
   accounts: {
     label: "Accounts & Enrollment",
     icon: ShieldCheck,
+  },
+  "department-settings": {
+    label: "Department Settings",
+    icon: Settings,
   },
   lessons: {
     label: "Lessons Control",
@@ -631,6 +637,16 @@ useEffect(() => {
   const ActiveTopIcon = activeMeta.icon;
 
   const isSuperAdmin = Boolean((session as any)?.user?.is_superuser);
+
+  const coordinatorNavItems = useMemo<TabId[]>(() => {
+    const items: TabId[] = ["dashboard", "accounts", "lessons", "scheduling", "attendance", "reports"];
+
+    if (isSuperAdmin) {
+      items.splice(2, 0, "department-settings");
+    }
+
+    return items;
+  }, [isSuperAdmin]);
   const roleLabel = isSuperAdmin ? "Super Admin" : "Coordinator";
   const roleIconSrc = isSuperAdmin ? "/superadmin-icon.png" : "/coordinator-icon.png";
 
@@ -2150,7 +2166,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
       {/* Collapsed: stacked bare icons */}
       <div className="hidden md:flex md:group-hover:hidden flex-col items-center gap-2.5 py-1">
-        {(["dashboard","accounts","lessons","scheduling","attendance","reports"] as TabId[]).map((id) => {
+        {coordinatorNavItems.map((id) => {
           const item = NAV_META[id];
           const Icon = item.icon;
           const active = activeTab === id;
@@ -2166,7 +2182,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
       {/* Expanded: icon + label — grid-cols-[52px_1fr] keeps icon & text close */}
       <div className="flex md:hidden md:group-hover:flex flex-col gap-1">
-        {(["dashboard","accounts","lessons","scheduling","attendance","reports"] as TabId[]).map((id) => {
+        {coordinatorNavItems.map((id) => {
           const item = NAV_META[id];
           const Icon = item.icon;
           const active = activeTab === id;
@@ -3083,6 +3099,13 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 {activeTab === "accounts" && (
   <Suspense fallback={<TabLoading />}>
     <CoordinatorAccounts />
+  </Suspense>
+)}
+
+{/* DEPARTMENT SETTINGS */}
+{activeTab === "department-settings" && (
+  <Suspense fallback={<TabLoading />}>
+    <DepartmentSettings />
   </Suspense>
 )}
 

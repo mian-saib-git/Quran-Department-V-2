@@ -655,6 +655,84 @@ export async function getCurrentDjangoUser(): Promise<Session["user"]> {
   return request<Session["user"]>("/api/auth/me/");
 }
 
+
+// ============================================================
+// Platform / SaaS Department Feature Management
+// ============================================================
+
+export type PlatformInstitution = {
+  id: number;
+  name: string;
+  slug: string;
+  is_active?: boolean;
+};
+
+export type PlatformDepartment = {
+  id: number;
+  name: string;
+  code: string;
+  department_type: string;
+  is_active: boolean;
+  institution: PlatformInstitution;
+};
+
+export type PlatformFeature = {
+  id: number;
+  key: string;
+  name: string;
+  description: string;
+  is_active: boolean;
+  sort_order: number;
+  is_enabled?: boolean;
+};
+
+export type PlatformDepartmentsResponse = {
+  institutions: PlatformInstitution[];
+  departments: PlatformDepartment[];
+};
+
+export type PlatformFeaturesResponse = {
+  features: PlatformFeature[];
+};
+
+export type DepartmentFeaturesResponse = {
+  department: PlatformDepartment;
+  features: PlatformFeature[];
+};
+
+export async function getPlatformDepartments(): Promise<PlatformDepartmentsResponse> {
+  return request<PlatformDepartmentsResponse>("/api/auth/platform/departments/");
+}
+
+export async function getPlatformFeatures(): Promise<PlatformFeaturesResponse> {
+  return request<PlatformFeaturesResponse>("/api/auth/platform/features/");
+}
+
+export async function getDepartmentFeatures(
+  departmentId: number
+): Promise<DepartmentFeaturesResponse> {
+  return request<DepartmentFeaturesResponse>(
+    `/api/auth/platform/departments/${departmentId}/features/`
+  );
+}
+
+export async function updateDepartmentFeature(
+  departmentId: number,
+  featureKey: string,
+  isEnabled: boolean
+): Promise<{ department: PlatformDepartment; feature: PlatformFeature }> {
+  return request<{ department: PlatformDepartment; feature: PlatformFeature }>(
+    `/api/auth/platform/departments/${departmentId}/features/`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        feature_key: featureKey,
+        is_enabled: isEnabled,
+      }),
+    }
+  );
+}
+
 export function logoutFromDjango() {
   clearSession();
 }
