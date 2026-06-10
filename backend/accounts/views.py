@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import User
+from .models import User, DepartmentFeature, UserDepartmentRole
 from .serializers import (
     CreateAccountSerializer,
     UpdateAccountSerializer,
@@ -115,6 +115,74 @@ class MeView(APIView):
 
     def get(self, request):
         return Response(auth_payload(request.user))
+
+
+
+class AuthContextView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        institution = user.institution
+        department = user.department
+
+        roles_qs = (
+            UserDepartmentRole.objects.filter(user=user, is_active=True)
+            .select_related("institution", "department")
+            .order_by("institution__name", "department__name", "role")
+        )
+
+        roles = [
+            {
+                "id": item.id,
+                "role": item.role,
+                "institution": {
+                    "id": item.institution_id,
+                    "name": item.institution.name,
+                    "slug": item.institution.slug,
+                },
+                "department": {
+                    "id": item.department_id,
+                    "name": item.department.name,
+                    "code": item.department.code,
+                    "department_type": item.department.department_type,
+                } if item.department else None,
+            }
+            for item in roles_qs
+        ]
+
+        features = {}
+
+        if department:
+            feature_settings = (
+                DepartmentFeature.objects.filter(department=department)
+                .select_related("feature")
+                .order_by("feature__sort_order", "feature__name")
+            )
+
+            features = {
+                item.feature.key: item.is_enabled
+                for item in feature_settings
+                if item.feature.is_active
+            }
+
+        return Response({
+            "user": auth_payload(user),
+            "institution": {
+                "id": institution.id,
+                "name": institution.name,
+                "slug": institution.slug,
+            } if institution else None,
+            "department": {
+                "id": department.id,
+                "name": department.name,
+                "code": department.code,
+                "department_type": department.department_type,
+            } if department else None,
+            "features": features,
+            "roles": roles,
+        })
 
 
 class CoordinatorAccountListCreateView(APIView):
