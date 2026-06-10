@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import User, DepartmentFeature, UserDepartmentRole
+from .models import User, Institution, Department, Feature, DepartmentFeature, UserDepartmentRole
 from .serializers import (
     CreateAccountSerializer,
     UpdateAccountSerializer,
@@ -584,3 +584,198 @@ class CoordinatorAccountDetailView(APIView):
         return Response({
             "detail": f"{deleted_role.title()} account '{deleted_username}' deleted permanently."
         })
+
+
+
+def is_platform_manager(user):
+    return bool(
+        user.is_superuser
+        or getattr(user, "role", "") == User.Role.PLATFORM_ADMIN
+        or getattr(user, "role", "") == User.Role.INSTITUTION_ADMIN
+    )
+
+
+def feature_payload(feature, department_feature=None):
+    return {
+        "id": feature.id,
+        "key": feature.key,
+        "name": feature.name,
+        "description": feature.description,
+        "is_active": feature.is_active,
+        "sort_order": feature.sort_order,
+        "is_enabled": department_feature.is_enabled if department_feature else False,
+    }
+
+
+def department_payload(department):
+    return {
+        "id": department.id,
+        "name": department.name,
+        "code": department.code,
+        "department_type": department.department_type,
+        "is_active": department.is_active,
+        "institution": {
+            "id": department.institution_id,
+            "name": department.institution.name,
+            "slug": department.institution.slug,
+        },
+    }
+
+
+class PlatformDepartmentListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not is_platform_manager(request.user):
+            return Response(
+                {"detail": "Only platform or institution admins can view departments."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        departments = (
+            Department.objects.select_related("institution")
+            .order_by("institution__name", "name", "id")
+        )
+
+        if request.user.role == User.Role.INSTITUTION_ADMIN and request.user.institution_id:
+            departments = departments.filter(institution=request.user.institution)
+
+        return Response({
+            "institutions": [
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "slug": item.slug,
+                    "is_active": item.is_active,
+                }
+                for item in Institution.objects.order_by("name", "id")
+            ],
+            "departments": [department_payload(item) for item in departments],
+        })
+
+
+class PlatformFeatureListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not is_platform_manager(request.user):
+            return Response(
+                {"detail": "Only platform or institution admins can view features."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        features = Feature.objects.filter(is_active=True).order_by("sort_order", "name", "id")
+
+        return Response({
+            "features": [
+                {
+                    "id": item.id,
+                    "key": item.key,
+                    "name": item.name,
+                    "description": item.description,
+                    "is_active": item.is_active,
+                    "sort_order": item.sort_order,
+                }
+                for item in features
+            ]
+        })
+
+
+class PlatformDepartmentFeatureView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_department(self, request, department_id):
+        try:
+            department = Department.objects.select_related("institution").get(id=department_id)
+        except Department.DoesNotExist:
+            return None
+
+        if request.user.role == User.Role.INSTITUTION_ADMIN:
+            if request.user.institution_id != department.institution_id:
+                return None
+
+        return department
+
+    def get(self, request, department_id):
+        if not is_platform_manager(request.user):
+            return Response(
+                {"detail": "Only platform or institution admins can view department features."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        department = self.get_department(request, department_id)
+
+        if not department:
+            return Response(
+                {"detail": "Department not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        features = list(Feature.objects.filter(is_active=True).order_by("sort_order", "name", "id"))
+
+        settings_by_feature_id = {
+            item.feature_id: item
+            for item in DepartmentFeature.objects.filter(department=department)
+        }
+
+        return Response({
+            "department": department_payload(department),
+            "features": [
+                feature_payload(feature, settings_by_feature_id.get(feature.id))
+                for feature in features
+            ],
+        })
+
+    def patch(self, request, department_id):
+        if not is_platform_manager(request.user):
+            return Response(
+                {"detail": "Only platform or institution admins can update department features."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        department = self.get_department(request, department_id)
+
+        if not department:
+            return Response(
+                {"detail": "Department not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        feature_key = str(request.data.get("feature_key", "")).strip()
+        is_enabled = request.data.get("is_enabled", None)
+
+        if not feature_key:
+            return Response(
+                {"detail": "feature_key is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not isinstance(is_enabled, bool):
+            return Response(
+                {"detail": "is_enabled must be true or false."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            feature = Feature.objects.get(key=feature_key, is_active=True)
+        except Feature.DoesNotExist:
+            return Response(
+                {"detail": "Feature not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        setting, _created = DepartmentFeature.objects.get_or_create(
+            department=department,
+            feature=feature,
+            defaults={"is_enabled": is_enabled},
+        )
+
+        if setting.is_enabled != is_enabled:
+            setting.is_enabled = is_enabled
+            setting.save(update_fields=["is_enabled"])
+
+        return Response({
+            "department": department_payload(department),
+            "feature": feature_payload(feature, setting),
+        })
+
