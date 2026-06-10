@@ -30,7 +30,7 @@ const AttendanceEditor = lazy(() =>
 
 const CoordinatorAccounts = lazy(() => import("./components/CoordinatorAccounts"));
 const CoordinatorLessons = lazy(() => import("./components/CoordinatorLessons"));
-const DepartmentSettings = lazy(() => import("./components/DepartmentSettings"));
+const PlatformAdmin = lazy(() => import("./components/PlatformAdmin"));
 import { TeacherPortal } from "./components/TeacherPortal";
 import { StudentPortal } from "./components/StudentPortal";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from "recharts";
@@ -58,7 +58,7 @@ type TabId =
   | "scheduling"
   | "accounts"
   | "lessons"
-  | "department-settings";
+  | "platform-admin";
 
 const NAV_META: Record<TabId, { label: string; icon: any }> = {
   dashboard: {
@@ -69,8 +69,8 @@ const NAV_META: Record<TabId, { label: string; icon: any }> = {
     label: "Accounts & Enrollment",
     icon: ShieldCheck,
   },
-  "department-settings": {
-    label: "Department Settings",
+  "platform-admin": {
+    label: "Platform Admin",
     icon: Settings,
   },
   lessons: {
@@ -639,13 +639,13 @@ useEffect(() => {
   const isSuperAdmin = Boolean((session as any)?.user?.is_superuser);
 
   const coordinatorNavItems = useMemo<TabId[]>(() => {
-    const items: TabId[] = ["dashboard", "accounts", "lessons", "scheduling", "attendance", "reports"];
+    const departmentItems: TabId[] = ["dashboard", "accounts", "lessons", "scheduling", "attendance", "reports"];
 
     if (isSuperAdmin) {
-      items.splice(2, 0, "department-settings");
+      return ["platform-admin", ...departmentItems];
     }
 
-    return items;
+    return departmentItems;
   }, [isSuperAdmin]);
   const roleLabel = isSuperAdmin ? "Super Admin" : "Coordinator";
   const roleIconSrc = isSuperAdmin ? "/superadmin-icon.png" : "/coordinator-icon.png";
@@ -3102,10 +3102,10 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
   </Suspense>
 )}
 
-{/* DEPARTMENT SETTINGS */}
-{activeTab === "department-settings" && (
+{/* PLATFORM ADMIN */}
+{activeTab === "platform-admin" && (
   <Suspense fallback={<TabLoading />}>
-    <DepartmentSettings />
+    <PlatformAdmin />
   </Suspense>
 )}
 
