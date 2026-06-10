@@ -13,6 +13,21 @@ class SubjectName(models.TextChoices):
 
 
 class TeacherProfile(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -30,6 +45,21 @@ class TeacherProfile(models.Model):
 
 
 class StudentProfile(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -48,6 +78,21 @@ class StudentProfile(models.Model):
 
 
 class StudentSubject(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
     student = models.ForeignKey(
         StudentProfile,
         on_delete=models.CASCADE,
@@ -83,6 +128,21 @@ class StudentSubject(models.Model):
 
 
 class ClassSchedule(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
     class WeekDay(models.TextChoices):
         MONDAY = "monday", "Monday"
         TUESDAY = "tuesday", "Tuesday"
@@ -118,6 +178,21 @@ class ClassSchedule(models.Model):
 
 
 class Attendance(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
     class EntityType(models.TextChoices):
         TEACHER = "teacher", "Teacher"
         STUDENT = "student", "Student"
@@ -185,6 +260,21 @@ class Attendance(models.Model):
 
 
 class Lesson(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
     class ProgressStatus(models.TextChoices):
         EXCELLENT = "excellent", "Excellent"
         GOOD = "good", "Good"
@@ -241,6 +331,21 @@ class Lesson(models.Model):
 
 
 class DailyLessonReport(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
     student = models.ForeignKey(
         StudentProfile,
         on_delete=models.CASCADE,
@@ -293,6 +398,21 @@ class DailyLessonReport(models.Model):
 
 
 class DailyLessonSubjectEntry(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
     class ProgressStatus(models.TextChoices):
         EXCELLENT = "excellent", "Excellent"
         GOOD = "good", "Good"
@@ -335,6 +455,21 @@ class DailyLessonSubjectEntry(models.Model):
 
 
 class LessonAccessPermission(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
     class AccessType(models.TextChoices):
         ADD = "add", "Allow Add"
         EDIT = "edit", "Allow Edit"
@@ -397,6 +532,21 @@ class LessonAccessPermission(models.Model):
 
 
 class LessonAccessRequest(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
     class RequestType(models.TextChoices):
         ADD = "add", "Add Lesson"
         EDIT = "edit", "Edit Lesson"
@@ -479,6 +629,21 @@ class LessonAccessRequest(models.Model):
 
 
 class MonthlyLessonSummary(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
     class SummarySource(models.TextChoices):
         TEACHER = "teacher", "Teacher"
         AI = "ai", "AI"
@@ -543,6 +708,21 @@ class MonthlyLessonSummary(models.Model):
 
 
 class MonthlyLessonPlan(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
     class PlanStatus(models.TextChoices):
         PLANNED = "planned", "Planned"
         IN_PROGRESS = "in_progress", "In Progress"
