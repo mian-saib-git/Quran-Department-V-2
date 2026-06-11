@@ -128,6 +128,20 @@ class AuthContextView(APIView):
         institution = user.institution
         department = user.department
 
+        # Superadmin may not belong to one department directly.
+        # Since the current department portal is Quran, use Quran as the default
+        # feature context when no user department is assigned.
+        if department is None and user.is_superuser:
+            department = (
+                Department.objects.filter(department_type="quran", is_active=True)
+                .select_related("institution")
+                .order_by("id")
+                .first()
+            )
+
+            if department:
+                institution = department.institution
+
         roles_qs = (
             UserDepartmentRole.objects.filter(user=user, is_active=True)
             .select_related("institution", "department")
