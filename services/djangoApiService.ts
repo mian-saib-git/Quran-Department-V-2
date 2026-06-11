@@ -700,6 +700,65 @@ export type DepartmentFeaturesResponse = {
   features: PlatformFeature[];
 };
 
+
+export type PlatformInstitutionInput = {
+  name: string;
+  website?: string;
+  logo_url?: string;
+  notes?: string;
+  is_active?: boolean;
+};
+
+export type PlatformDepartmentInput = {
+  institution_id: number;
+  name: string;
+  department_type: "quran" | "tuition" | "general";
+  notes?: string;
+  is_active?: boolean;
+};
+
+export async function getPlatformInstitutions(): Promise<{ institutions: PlatformInstitution[] }> {
+  return request<{ institutions: PlatformInstitution[] }>("/api/auth/platform/institutions/");
+}
+
+export async function createPlatformInstitution(
+  input: PlatformInstitutionInput
+): Promise<PlatformInstitution> {
+  return request<PlatformInstitution>("/api/auth/platform/institutions/", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updatePlatformInstitution(
+  institutionId: number,
+  input: Partial<PlatformInstitutionInput>
+): Promise<PlatformInstitution> {
+  return request<PlatformInstitution>(`/api/auth/platform/institutions/${institutionId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function createPlatformDepartment(
+  input: PlatformDepartmentInput
+): Promise<PlatformDepartment> {
+  return request<PlatformDepartment>("/api/auth/platform/departments/create/", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updatePlatformDepartment(
+  departmentId: number,
+  input: Partial<PlatformDepartmentInput>
+): Promise<PlatformDepartment> {
+  return request<PlatformDepartment>(`/api/auth/platform/departments/${departmentId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function getPlatformDepartments(): Promise<PlatformDepartmentsResponse> {
   return request<PlatformDepartmentsResponse>("/api/auth/platform/departments/");
 }
