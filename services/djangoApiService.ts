@@ -656,6 +656,33 @@ export async function getCurrentDjangoUser(): Promise<Session["user"]> {
 }
 
 
+export type AuthContextResponse = {
+  user: Session["user"];
+  institution: PlatformInstitution | null;
+  department: PlatformDepartment | null;
+  features: Record<string, boolean>;
+  roles: Array<{
+    id: number;
+    role: string;
+    institution: {
+      id: number;
+      name: string;
+      slug: string;
+    };
+    department: {
+      id: number;
+      name: string;
+      code: string;
+      department_type: string;
+    } | null;
+  }>;
+};
+
+export async function getAuthContext(): Promise<AuthContextResponse> {
+  return request<AuthContextResponse>("/api/auth/context/");
+}
+
+
 // ============================================================
 // Platform / SaaS Department Feature Management
 // ============================================================

@@ -7,6 +7,7 @@ import {
   markAttendanceInDjango,
   deleteAttendanceInDjango,
   updateCoordinatorAccount,
+  getAuthContext,
 } from "./services/djangoApiService";
 
 import {
@@ -474,6 +475,7 @@ export default function App() {
     }
   }, []));
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
+  const [enabledFeatures, setEnabledFeatures] = useState<Record<string, boolean>>({});
 
 const [themeMode, setThemeMode] = useState<"light" | "dark">(() => {
   try {
@@ -638,15 +640,43 @@ useEffect(() => {
 
   const isSuperAdmin = Boolean((session as any)?.user?.is_superuser);
 
+  const hasFeature = useCallback((...keys: string[]) => {
+    if (keys.length === 0) return true;
+
+    return keys.some((key) => enabledFeatures[key] !== false);
+  }, [enabledFeatures]);
+
   const coordinatorNavItems = useMemo<TabId[]>(() => {
-    const departmentItems: TabId[] = ["dashboard", "accounts", "lessons", "scheduling", "attendance", "reports"];
+    const departmentItems: TabId[] = [];
+
+    if (hasFeature("live_classes", "up_next_classes")) {
+      departmentItems.push("dashboard");
+    }
+
+    departmentItems.push("accounts");
+
+    if (hasFeature("lesson_reports")) {
+      departmentItems.push("lessons");
+    }
+
+    if (hasFeature("live_classes")) {
+      departmentItems.push("scheduling");
+    }
+
+    if (hasFeature("student_attendance", "teacher_attendance")) {
+      departmentItems.push("attendance");
+    }
+
+    if (hasFeature("pdf_reports", "monthly_summaries", "lesson_reports")) {
+      departmentItems.push("reports");
+    }
 
     if (isSuperAdmin) {
       return ["platform-admin", ...departmentItems];
     }
 
     return departmentItems;
-  }, [isSuperAdmin]);
+  }, [hasFeature, isSuperAdmin]);
   const roleLabel = isSuperAdmin ? "Super Admin" : "Coordinator";
   const roleIconSrc = isSuperAdmin ? "/superadmin-icon.png" : "/coordinator-icon.png";
 
@@ -871,6 +901,12 @@ useEffect(() => {
     window.removeEventListener("hashchange", apply);
   };
 }, []);
+
+useEffect(() => {
+  if (!coordinatorNavItems.includes(activeTab)) {
+    navigateToTab(coordinatorNavItems[0] || "dashboard");
+  }
+}, [activeTab, coordinatorNavItems]);
 
 useEffect(() => {
   if (!session) return;
@@ -2415,7 +2451,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
         <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-16 md:pb-8">
           
-              {activeTab === "dashboard" && (
+              {activeTab === "dashboard" && hasFeature("live_classes", "up_next_classes") && (
   <div className="w-full max-w-none mx-auto space-y-6">
     {/* ✅ KPI Row */}
 {/* ✅ Pretty background banner like your reference */}
@@ -3061,7 +3097,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
 
           {/* SCHEDULING */}
-{activeTab === "scheduling" && (
+{activeTab === "scheduling" && hasFeature("live_classes") && (
   <SchedulingTab
     appState={viewAppState}
     onCellClick={(teacherId, timeSlot, students) => {
@@ -3076,7 +3112,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
 
 {/* ATTENDANCE */}
-{activeTab === "attendance" && (
+{activeTab === "attendance" && hasFeature("student_attendance", "teacher_attendance") && (
   <div className="w-full max-w-none mx-auto space-y-6">
     <div className="bg-white/85 backdrop-blur-xl p-6 rounded-[28px] shadow-[0_18px_55px_rgba(15,23,42,0.08)] border border-slate-200/80">
       <h3 className="font-bold text-lg text-slate-950">Attendance</h3>
@@ -3111,7 +3147,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
 
 {/* LESSONS CONTROL */}
-{activeTab === "lessons" && (
+{activeTab === "lessons" && hasFeature("lesson_reports") && (
   <div className="w-full max-w-none mx-auto">
     <Suspense fallback={<TabLoading />}>
       <CoordinatorLessons />
@@ -3120,7 +3156,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 )}
 
 {/* REPORTS */}
-{activeTab === "reports" && (
+{activeTab === "reports" && hasFeature("pdf_reports", "monthly_summaries", "lesson_reports") && (
   <div className="w-full max-w-none mx-auto">
     <Suspense fallback={<TabLoading />}>
       <ReportsTab
