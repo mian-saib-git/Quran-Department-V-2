@@ -10,6 +10,10 @@ from .views import (
     PlatformDepartmentListView,
     PlatformFeatureListView,
     PlatformDepartmentFeatureView,
+    PlatformInstitutionListCreateView,
+    PlatformInstitutionDetailView,
+    PlatformDepartmentListCreateView,
+    PlatformDepartmentDetailView,
 )
 
 urlpatterns = [
@@ -18,6 +22,10 @@ urlpatterns = [
     path("me/", MeView.as_view(), name="auth_me"),
     path("context/", AuthContextView.as_view(), name="auth_context"),
 
+    path("platform/institutions/", PlatformInstitutionListCreateView.as_view(), name="platform_institutions"),
+    path("platform/institutions/<int:institution_id>/", PlatformInstitutionDetailView.as_view(), name="platform_institution_detail"),
+    path("platform/departments/create/", PlatformDepartmentListCreateView.as_view(), name="platform_department_create"),
+    path("platform/departments/<int:department_id>/", PlatformDepartmentDetailView.as_view(), name="platform_department_detail"),
     path("platform/departments/", PlatformDepartmentListView.as_view(), name="platform_departments"),
     path("platform/features/", PlatformFeatureListView.as_view(), name="platform_features"),
     path("platform/departments/<int:department_id>/features/", PlatformDepartmentFeatureView.as_view(), name="platform_department_features"),

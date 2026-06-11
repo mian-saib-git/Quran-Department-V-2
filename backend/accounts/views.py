@@ -1,6 +1,7 @@
 from django.contrib.auth import authenticate
 from django.core.paginator import Paginator
 from django.db.models import Q, Prefetch
+from django.utils.text import slugify
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
@@ -622,6 +623,265 @@ def department_payload(department):
     }
 
 
+def institution_payload(institution):
+    return {
+        "id": institution.id,
+        "name": institution.name,
+        "slug": institution.slug,
+        "is_active": institution.is_active,
+        "logo_url": institution.logo_url,
+        "website": institution.website,
+        "notes": institution.notes,
+    }
+
+
+def make_unique_slug(model, base_value, existing_id=None, field_name="slug"):
+    base_slug = slugify(base_value or "") or "item"
+    slug = base_slug
+    counter = 2
+
+    while True:
+        qs = model.objects.filter(**{field_name: slug})
+        if existing_id:
+            qs = qs.exclude(id=existing_id)
+
+        if not qs.exists():
+            return slug
+
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+
+
+class PlatformInstitutionListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not is_platform_manager(request.user):
+            return Response(
+                {"detail": "Only platform or institution admins can view institutions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        institutions = Institution.objects.order_by("name", "id")
+
+        if request.user.role == User.Role.INSTITUTION_ADMIN and request.user.institution_id:
+            institutions = institutions.filter(id=request.user.institution_id)
+
+        return Response({
+            "institutions": [institution_payload(item) for item in institutions]
+        })
+
+    def post(self, request):
+        if not request.user.is_superuser and request.user.role != User.Role.PLATFORM_ADMIN:
+            return Response(
+                {"detail": "Only platform super admin can create institutions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        name = str(request.data.get("name", "")).strip()
+        website = str(request.data.get("website", "")).strip()
+        logo_url = str(request.data.get("logo_url", "")).strip()
+        notes = str(request.data.get("notes", "")).strip()
+        is_active = request.data.get("is_active", True)
+
+        if not name:
+            return Response(
+                {"detail": "Institution name is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not isinstance(is_active, bool):
+            is_active = True
+
+        institution = Institution.objects.create(
+            name=name,
+            slug=make_unique_slug(Institution, name),
+            website=website,
+            logo_url=logo_url,
+            notes=notes,
+            is_active=is_active,
+        )
+
+        return Response(institution_payload(institution), status=status.HTTP_201_CREATED)
+
+
+class PlatformInstitutionDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self, request, institution_id):
+        try:
+            institution = Institution.objects.get(id=institution_id)
+        except Institution.DoesNotExist:
+            return None
+
+        if request.user.role == User.Role.INSTITUTION_ADMIN:
+            if request.user.institution_id != institution.id:
+                return None
+
+        return institution
+
+    def patch(self, request, institution_id):
+        if not is_platform_manager(request.user):
+            return Response(
+                {"detail": "Only platform or institution admins can update institutions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        institution = self.get_object(request, institution_id)
+
+        if not institution:
+            return Response(
+                {"detail": "Institution not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if "name" in request.data:
+            name = str(request.data.get("name", "")).strip()
+            if not name:
+                return Response(
+                    {"detail": "Institution name cannot be blank."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            institution.name = name
+
+        for field in ["website", "logo_url", "notes"]:
+            if field in request.data:
+                setattr(institution, field, str(request.data.get(field, "") or "").strip())
+
+        if "is_active" in request.data and isinstance(request.data.get("is_active"), bool):
+            institution.is_active = request.data.get("is_active")
+
+        institution.save()
+
+        return Response(institution_payload(institution))
+
+
+class PlatformDepartmentListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not is_platform_manager(request.user):
+            return Response(
+                {"detail": "Only platform or institution admins can create departments."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        institution_id = request.data.get("institution_id") or request.data.get("institution")
+        name = str(request.data.get("name", "")).strip()
+        department_type = str(request.data.get("department_type", "general") or "general").strip().lower()
+        notes = str(request.data.get("notes", "") or "").strip()
+        is_active = request.data.get("is_active", True)
+
+        if not name:
+            return Response(
+                {"detail": "Department name is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            institution = Institution.objects.get(id=institution_id)
+        except Exception:
+            return Response(
+                {"detail": "Valid institution_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if request.user.role == User.Role.INSTITUTION_ADMIN and request.user.institution_id != institution.id:
+            return Response(
+                {"detail": "You can only create departments inside your own institution."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        valid_types = [choice[0] for choice in Department.DepartmentType.choices]
+        if department_type not in valid_types:
+            department_type = Department.DepartmentType.GENERAL
+
+        if not isinstance(is_active, bool):
+            is_active = True
+
+        code = make_unique_slug(
+            Department,
+            name,
+            field_name="code",
+        )
+
+        while Department.objects.filter(institution=institution, code=code).exists():
+            code = make_unique_slug(Department, f"{name}-{Department.objects.count() + 1}", field_name="code")
+
+        department = Department.objects.create(
+            institution=institution,
+            name=name,
+            code=code,
+            department_type=department_type,
+            notes=notes,
+            is_active=is_active,
+        )
+
+        for feature in Feature.objects.filter(is_active=True):
+            DepartmentFeature.objects.get_or_create(
+                department=department,
+                feature=feature,
+                defaults={"is_enabled": True},
+            )
+
+        return Response(department_payload(department), status=status.HTTP_201_CREATED)
+
+
+class PlatformDepartmentDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self, request, department_id):
+        try:
+            department = Department.objects.select_related("institution").get(id=department_id)
+        except Department.DoesNotExist:
+            return None
+
+        if request.user.role == User.Role.INSTITUTION_ADMIN and request.user.institution_id != department.institution_id:
+            return None
+
+        return department
+
+    def patch(self, request, department_id):
+        if not is_platform_manager(request.user):
+            return Response(
+                {"detail": "Only platform or institution admins can update departments."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        department = self.get_object(request, department_id)
+
+        if not department:
+            return Response(
+                {"detail": "Department not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if "name" in request.data:
+            name = str(request.data.get("name", "")).strip()
+            if not name:
+                return Response(
+                    {"detail": "Department name cannot be blank."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            department.name = name
+
+        if "department_type" in request.data:
+            department_type = str(request.data.get("department_type", "") or "").strip().lower()
+            valid_types = [choice[0] for choice in Department.DepartmentType.choices]
+            if department_type in valid_types:
+                department.department_type = department_type
+
+        if "notes" in request.data:
+            department.notes = str(request.data.get("notes", "") or "").strip()
+
+        if "is_active" in request.data and isinstance(request.data.get("is_active"), bool):
+            department.is_active = request.data.get("is_active")
+
+        department.save()
+
+        return Response(department_payload(department))
+
+
 class PlatformDepartmentListView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -642,12 +902,7 @@ class PlatformDepartmentListView(APIView):
 
         return Response({
             "institutions": [
-                {
-                    "id": item.id,
-                    "name": item.name,
-                    "slug": item.slug,
-                    "is_active": item.is_active,
-                }
+                institution_payload(item)
                 for item in Institution.objects.order_by("name", "id")
             ],
             "departments": [department_payload(item) for item in departments],
