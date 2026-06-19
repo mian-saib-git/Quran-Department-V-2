@@ -476,6 +476,31 @@ export default function App() {
   }, []));
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
   const [enabledFeatures, setEnabledFeatures] = useState<Record<string, boolean>>({});
+  const [featureContextLoaded, setFeatureContextLoaded] = useState(false);
+  // Fetch feature flags from the backend whenever the session changes.
+  // Populates enabledFeatures so hasFeature() correctly hides/shows tabs.
+  useEffect(() => {
+    if (!session) {
+      setEnabledFeatures({});
+      setFeatureContextLoaded(false);
+      return;
+    }
+
+    setFeatureContextLoaded(false);
+
+    getAuthContext()
+      .then((ctx) => {
+        console.log("AUTH CONTEXT:", ctx.department, ctx.features);
+        setEnabledFeatures(ctx.features ?? {});
+        setFeatureContextLoaded(true);
+      })
+      .catch((err) => {
+        console.warn("Could not load feature flags:", err);
+        setEnabledFeatures({});
+        setFeatureContextLoaded(true);
+      });
+  }, [session?.access]);
+
 
 const [themeMode, setThemeMode] = useState<"light" | "dark">(() => {
   try {
@@ -640,34 +665,39 @@ useEffect(() => {
 
   const isSuperAdmin = Boolean((session as any)?.user?.is_superuser);
 
+  const featuresLoaded = featureContextLoaded;
+
   const hasFeature = useCallback((...keys: string[]) => {
     if (keys.length === 0) return true;
 
-    return keys.some((key) => enabledFeatures[key] !== false);
-  }, [enabledFeatures]);
+    if (!featuresLoaded) return false;
+    return keys.some((key) => enabledFeatures[key] === true);
+  }, [enabledFeatures, featuresLoaded]);
 
   const coordinatorNavItems = useMemo<TabId[]>(() => {
     const departmentItems: TabId[] = [];
 
-    if (hasFeature("live_classes", "up_next_classes")) {
+    if (hasFeature("tab_daily_classes")) {
       departmentItems.push("dashboard");
     }
 
-    departmentItems.push("accounts");
+    if (hasFeature("tab_accounts_enrollment")) {
+      departmentItems.push("accounts");
+    }
 
-    if (hasFeature("lesson_reports")) {
+    if (hasFeature("tab_lessons_control")) {
       departmentItems.push("lessons");
     }
 
-    if (hasFeature("live_classes")) {
+    if (hasFeature("tab_scheduling")) {
       departmentItems.push("scheduling");
     }
 
-    if (hasFeature("student_attendance", "teacher_attendance")) {
+    if (hasFeature("tab_attendance")) {
       departmentItems.push("attendance");
     }
 
-    if (hasFeature("pdf_reports", "monthly_summaries", "lesson_reports")) {
+    if (hasFeature("tab_reports")) {
       departmentItems.push("reports");
     }
 
@@ -2451,7 +2481,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
         <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-16 md:pb-8">
           
-              {activeTab === "dashboard" && hasFeature("live_classes", "up_next_classes") && (
+              {activeTab === "dashboard" && hasFeature("tab_daily_classes") && (
   <div className="w-full max-w-none mx-auto space-y-6">
     {/* ✅ KPI Row */}
 {/* ✅ Pretty background banner like your reference */}
@@ -3097,7 +3127,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
 
           {/* SCHEDULING */}
-{activeTab === "scheduling" && hasFeature("live_classes") && (
+{activeTab === "scheduling" && hasFeature("tab_scheduling") && (
   <SchedulingTab
     appState={viewAppState}
     onCellClick={(teacherId, timeSlot, students) => {
@@ -3112,7 +3142,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
 
 {/* ATTENDANCE */}
-{activeTab === "attendance" && hasFeature("student_attendance", "teacher_attendance") && (
+{activeTab === "attendance" && hasFeature("tab_attendance") && (
   <div className="w-full max-w-none mx-auto space-y-6">
     <div className="bg-white/85 backdrop-blur-xl p-6 rounded-[28px] shadow-[0_18px_55px_rgba(15,23,42,0.08)] border border-slate-200/80">
       <h3 className="font-bold text-lg text-slate-950">Attendance</h3>
@@ -3147,7 +3177,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
 
 {/* LESSONS CONTROL */}
-{activeTab === "lessons" && hasFeature("lesson_reports") && (
+{activeTab === "lessons" && hasFeature("tab_lessons_control") && (
   <div className="w-full max-w-none mx-auto">
     <Suspense fallback={<TabLoading />}>
       <CoordinatorLessons />
@@ -3156,7 +3186,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 )}
 
 {/* REPORTS */}
-{activeTab === "reports" && hasFeature("pdf_reports", "monthly_summaries", "lesson_reports") && (
+{activeTab === "reports" && hasFeature("tab_reports") && (
   <div className="w-full max-w-none mx-auto">
     <Suspense fallback={<TabLoading />}>
       <ReportsTab

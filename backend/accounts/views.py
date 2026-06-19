@@ -119,29 +119,34 @@ class MeView(APIView):
 
 
 
+
 class AuthContextView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
 
-        institution = user.institution
-        department = user.department
+        # Default to user's institution & department
+        institution = getattr(user, "institution", None)
+        department = getattr(user, "department", None)
 
-        # Superadmin may not belong to one department directly.
-        # Since the current department portal is Quran, use Quran as the default
-        # feature context when no user department is assigned.
-        if department is None and user.is_superuser:
-            department = (
-                Department.objects.filter(department_type="quran", is_active=True)
-                .select_related("institution")
-                .order_by("id")
-                .first()
-            )
-
-            if department:
+        # Fallbacks
+        if not department:
+            # For superadmins, default to Quran department
+            if user.is_superuser or getattr(user, "role", "") in [User.Role.PLATFORM_ADMIN, User.Role.INSTITUTION_ADMIN]:
+                department = (
+                    Department.objects.filter(department_type="quran", is_active=True)
+                    .select_related("institution")
+                    .first()
+                )
+                if department:
+                    institution = department.institution
+            # For coordinators/teachers/students, use their primary department if assigned
+            elif hasattr(user, "department") and user.department:
+                department = user.department
                 institution = department.institution
 
+        # Fetch roles
         roles_qs = (
             UserDepartmentRole.objects.filter(user=user, is_active=True)
             .select_related("institution", "department")
@@ -167,20 +172,12 @@ class AuthContextView(APIView):
             for item in roles_qs
         ]
 
+        # Fetch features
         features = {}
-
         if department:
-            feature_settings = (
-                DepartmentFeature.objects.filter(department=department)
-                .select_related("feature")
-                .order_by("feature__sort_order", "feature__name")
-            )
-
-            features = {
-                item.feature.key: item.is_enabled
-                for item in feature_settings
-                if item.feature.is_active
-            }
+            feature_settings = DepartmentFeature.objects.filter(department=department).select_related("feature")
+            for item in feature_settings:
+                features[item.feature.key] = item.is_enabled
 
         return Response({
             "user": auth_payload(user),
@@ -198,7 +195,6 @@ class AuthContextView(APIView):
             "features": features,
             "roles": roles,
         })
-
 
 class CoordinatorAccountListCreateView(APIView):
     permission_classes = [IsAuthenticated]

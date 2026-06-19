@@ -239,6 +239,7 @@ export type CreateLessonAccessRequestInput = {
 export type ReviewLessonAccessRequestInput = {
   action: "approve" | "reject";
   coordinator_note?: string;
+  classKey?: string;
 };
 
 export type GrantLessonPermissionInput = {
@@ -1064,6 +1065,7 @@ export type CreateAttendanceInput = {
   student_id?: number | null;
   date?: string;
   status: "present" | "absent" | "leave";
+  classKey?: string;
 };
 
 export type AttendanceApiResponse = {
