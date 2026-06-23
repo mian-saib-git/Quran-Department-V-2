@@ -21,6 +21,7 @@ import {
   getLessonAccessRequests,
   getLessonPermissions,
   getLessons,
+  generateMonthlyLessonSummary,
   grantLessonPermission,
   reviewLessonAccessRequest,
   deleteLessonAccessRequest,
@@ -28,6 +29,7 @@ import {
   type LessonAccessPermissionPayload,
   type LessonAccessRequestPayload,
   type LessonPayload,
+  type MonthlyLessonSummaryPayload,
 } from "../services/djangoApiService";
 
 import { useAcademyWS } from "../hooks/useAcademyWS";
@@ -51,6 +53,8 @@ type StudentLessonGroup = {
 };
 
 type RequestTab = "pending" | "reviewed";
+type WorkspaceTab = "lessons" | "requests";
+type LessonContentTab = "daily" | "summaries";
 
 const PAGE_SIZE = 24;
 const RECENT_THRESHOLD_MS = 30 * 60 * 1000;
@@ -114,16 +118,24 @@ function formatMonth(value: string) {
 
 function formatDate(value: string) {
   if (!value) return "-";
-  try {
-    return new Date(`${value}T00:00:00`).toLocaleDateString("en-US", {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  } catch {
-    return value;
-  }
+
+  const dateOnly = String(value).slice(0, 10);
+  const match = dateOnly.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (!match) return dateOnly;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  const localDate = new Date(year, month - 1, day);
+
+  return localDate.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 function formatRelativeTime(isoString?: string | null) {
@@ -213,6 +225,58 @@ const [lessons, setLessons] = useState<LessonPayload[]>([]);
   const [message, setMessage] = useState("");
   const [savingKey, setSavingKey] = useState("");
   const [requestTab, setRequestTab] = useState<RequestTab>("pending");
+  const [workspaceTab, setWorkspaceTab] =
+    useState<WorkspaceTab>("lessons");
+  const [lessonContentTab, setLessonContentTab] =
+    useState<LessonContentTab>("daily");
+
+  const [selectedStudentFilter, setSelectedStudentFilter] =
+    useState("all");
+  const [selectedSubject, setSelectedSubject] =
+    useState("all");
+  const [selectedProgress, setSelectedProgress] =
+    useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  const [summaryStudentId, setSummaryStudentId] =
+    useState("");
+  const [summarySubject, setSummarySubject] =
+    useState("");
+
+  const [summaryStartDate, setSummaryStartDate] =
+    useState(() => {
+      const current = new Date();
+
+      const first = new Date(
+        current.getFullYear(),
+        current.getMonth(),
+        1
+      );
+
+      return [
+        first.getFullYear(),
+        String(first.getMonth() + 1).padStart(2, "0"),
+        String(first.getDate()).padStart(2, "0"),
+      ].join("-");
+    });
+
+  const [summaryEndDate, setSummaryEndDate] =
+    useState(() => {
+      const current = new Date();
+
+      return [
+        current.getFullYear(),
+        String(current.getMonth() + 1).padStart(2, "0"),
+        String(current.getDate()).padStart(2, "0"),
+      ].join("-");
+    });
+
+  const [summaryResult, setSummaryResult] =
+    useState<MonthlyLessonSummaryPayload | null>(null);
+
+  const [summarySaving, setSummarySaving] =
+    useState(false);
 
   const [search, setSearch] = useState("");
   const [selectedMonth, setSelectedMonth] = useState("all");
@@ -285,7 +349,19 @@ const [lessonsRes, dailyRes, permissionsRes, requestsRes] = await Promise.all([
     saveNumberSet(CLEARED_REVIEWED_KEY, clearedReviewedRequestIds);
   }, [clearedReviewedRequestIds]);
 
-  useEffect(() => { setPage(1); }, [search, selectedMonth, selectedTeacher]);
+  useEffect(() => {
+    setPage(1);
+    setSelectedStudentId(null);
+  }, [
+    search,
+    selectedMonth,
+    selectedTeacher,
+    selectedStudentFilter,
+    selectedSubject,
+    selectedProgress,
+    dateFrom,
+    dateTo,
+  ]);
 
   // ── Merge server requests with optimistic local updates ───
 
@@ -391,31 +467,163 @@ const [lessonsRes, dailyRes, permissionsRes, requestsRes] = await Promise.all([
   // ── Derived UI data ───────────────────────────────────────
 
 const months = useMemo(() => {
-    const vals = Array.from(new Set(allLessons.map((l) => monthKey(l.date)).filter(Boolean)));
+    const vals = Array.from(
+      new Set(
+        allLessons
+          .map(lesson => monthKey(lesson.date))
+          .filter(Boolean)
+      )
+    );
+
     return vals.sort((a, b) => b.localeCompare(a));
-  }, [lessons]);
+  }, [allLessons]);
 
 const teachers = useMemo(() => {
     const map = new Map<number, string>();
-    for (const l of allLessons) if (l.teacher_id) map.set(l.teacher_id, l.teacher_name || `Teacher ${l.teacher_id}`);
-    for (const r of allRequests) if (r.teacher_id) map.set(r.teacher_id, r.teacher_name || `Teacher ${r.teacher_id}`);
+
+    for (const lesson of allLessons) {
+      if (!lesson.teacher_id) continue;
+
+      map.set(
+        lesson.teacher_id,
+        lesson.teacher_name ||
+          `Teacher ${lesson.teacher_id}`
+      );
+    }
+
+    for (const request of allRequests) {
+      if (!request.teacher_id) continue;
+
+      map.set(
+        request.teacher_id,
+        request.teacher_name ||
+          `Teacher ${request.teacher_id}`
+      );
+    }
+
     return Array.from(map.entries())
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [lessons, allRequests]);
+  }, [allLessons, allRequests]);
 
-const filteredLessons = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return allLessons.filter((l) => {
-      const matchSearch = q
-        ? [l.student_name, l.teacher_name, l.subject, l.topic_summary, l.remarks, l.notes]
-            .filter(Boolean).join(" ").toLowerCase().includes(q)
+const studentOptions = useMemo(() => {
+    const map = new Map<
+      number,
+      {
+        id: number;
+        name: string;
+        teacher_id: number;
+        teacher_name: string;
+      }
+    >();
+
+    for (const lesson of allLessons) {
+      if (!lesson.student_id) continue;
+
+      map.set(lesson.student_id, {
+        id: lesson.student_id,
+        name:
+          lesson.student_name ||
+          `Student ${lesson.student_id}`,
+        teacher_id: lesson.teacher_id,
+        teacher_name:
+          lesson.teacher_name ||
+          `Teacher ${lesson.teacher_id}`,
+      });
+    }
+
+    return Array.from(map.values()).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+  }, [allLessons]);
+
+  const subjectOptions = useMemo(() => {
+    return Array.from(
+      new Set(
+        allLessons
+          .map(item =>
+            String(item.subject || "").trim()
+          )
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+  }, [allLessons]);
+
+  const filteredLessons = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return allLessons.filter(lesson => {
+      const matchesSearch = query
+        ? [
+            lesson.student_name,
+            lesson.teacher_name,
+            lesson.subject,
+            lesson.topic_summary,
+            lesson.remarks,
+            lesson.notes,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(query)
         : true;
-      const matchMonth = selectedMonth === "all" || monthKey(l.date) === selectedMonth;
-      const matchTeacher = selectedTeacher === "all" || String(l.teacher_id) === String(selectedTeacher);
-      return matchSearch && matchMonth && matchTeacher;
+
+      const matchesMonth =
+        selectedMonth === "all" ||
+        monthKey(lesson.date) === selectedMonth;
+
+      const matchesTeacher =
+        selectedTeacher === "all" ||
+        String(lesson.teacher_id) ===
+          String(selectedTeacher);
+
+      const matchesStudent =
+        selectedStudentFilter === "all" ||
+        String(lesson.student_id) ===
+          String(selectedStudentFilter);
+
+      const matchesSubject =
+        selectedSubject === "all" ||
+        String(lesson.subject || "") ===
+          selectedSubject;
+
+      const matchesProgress =
+        selectedProgress === "all" ||
+        String(lesson.progress_status || "") ===
+          selectedProgress;
+
+      const lessonDate = String(
+        lesson.date || ""
+      ).slice(0, 10);
+
+      const matchesStart =
+        !dateFrom || lessonDate >= dateFrom;
+
+      const matchesEnd =
+        !dateTo || lessonDate <= dateTo;
+
+      return (
+        matchesSearch &&
+        matchesMonth &&
+        matchesTeacher &&
+        matchesStudent &&
+        matchesSubject &&
+        matchesProgress &&
+        matchesStart &&
+        matchesEnd
+      );
     });
-  }, [lessons, search, selectedMonth, selectedTeacher]);
+  }, [
+    allLessons,
+    search,
+    selectedMonth,
+    selectedTeacher,
+    selectedStudentFilter,
+    selectedSubject,
+    selectedProgress,
+    dateFrom,
+    dateTo,
+  ]);
 
 const recentActivityLessons = useMemo(() => {
     // Group by student+date to show one card per daily report, not one per subject
@@ -672,6 +880,55 @@ const handleDisablePermission = async (
     });
   };
 
+  const handleGenerateCoordinatorSummary = async () => {
+    setMessage("");
+    setSummaryResult(null);
+
+    if (!summaryStudentId) {
+      setMessage("Please select a student.");
+      return;
+    }
+
+    if (!summaryStartDate || !summaryEndDate) {
+      setMessage(
+        "Please select both summary start and end dates."
+      );
+      return;
+    }
+
+    if (summaryStartDate > summaryEndDate) {
+      setMessage(
+        "Summary start date cannot be after the end date."
+      );
+      return;
+    }
+
+    try {
+      setSummarySaving(true);
+
+      const generated =
+        await generateMonthlyLessonSummary({
+          student_id: Number(summaryStudentId),
+          start_date: summaryStartDate,
+          end_date: summaryEndDate,
+          subject: summarySubject,
+        });
+
+      setSummaryResult(generated);
+
+      setMessage(
+        "Lesson summary generated successfully."
+      );
+    } catch (error: any) {
+      setMessage(
+        error?.message ||
+          "Could not generate the lesson summary."
+      );
+    } finally {
+      setSummarySaving(false);
+    }
+  };
+
   // ── Render ────────────────────────────────────────────────
 
   return (
@@ -727,6 +984,62 @@ const handleDisablePermission = async (
         </div>
       )}
 
+      <section className="rounded-[28px] border border-slate-200/70 bg-white/85 p-2 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setWorkspaceTab("lessons")}
+            className={`rounded-2xl px-5 py-4 text-left transition ${
+              workspaceTab === "lessons"
+                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200"
+                : "bg-white text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            <div className="flex items-center gap-2 text-sm font-black">
+              <BookOpen size={17} />
+              Lessons & Summaries
+            </div>
+
+            <div
+              className={`mt-1 text-xs font-semibold ${
+                workspaceTab === "lessons"
+                  ? "text-indigo-100"
+                  : "text-slate-400"
+              }`}
+            >
+              Daily lesson history, filters and generated summaries
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setWorkspaceTab("requests")}
+            className={`rounded-2xl px-5 py-4 text-left transition ${
+              workspaceTab === "requests"
+                ? "bg-violet-600 text-white shadow-lg shadow-violet-200"
+                : "bg-white text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            <div className="flex items-center gap-2 text-sm font-black">
+              <Bell size={17} />
+              Requests & Notifications
+            </div>
+
+            <div
+              className={`mt-1 text-xs font-semibold ${
+                workspaceTab === "requests"
+                  ? "text-violet-100"
+                  : "text-slate-400"
+              }`}
+            >
+              Teacher activity and lesson permission requests
+            </div>
+          </button>
+        </div>
+      </section>
+
+      {workspaceTab === "requests" && (
+        <>
       {/* Recent Activity Banner */}
       {recentActivityLessons.length > 0 && (
         <section className="rounded-[28px] border border-violet-200/70 bg-violet-50/80 backdrop-blur-xl shadow-[0_12px_36px_rgba(109,40,217,0.08)] overflow-hidden">
@@ -913,34 +1226,481 @@ const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLess
         )}
       </section>
 
+        </>
+      )}
+
+      {workspaceTab === "lessons" && (
+        <>
+          <section className="rounded-[28px] border border-slate-200/70 bg-white/85 p-2 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setLessonContentTab("daily")
+                }
+                className={`rounded-2xl px-5 py-3 text-sm font-black transition ${
+                  lessonContentTab === "daily"
+                    ? "bg-slate-900 text-white shadow"
+                    : "bg-white text-slate-500 hover:bg-slate-50"
+                }`}
+              >
+                Daily Lessons
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setLessonContentTab("summaries")
+                }
+                className={`rounded-2xl px-5 py-3 text-sm font-black transition ${
+                  lessonContentTab === "summaries"
+                    ? "bg-slate-900 text-white shadow"
+                    : "bg-white text-slate-500 hover:bg-slate-50"
+                }`}
+              >
+                Generated Summaries
+              </button>
+            </div>
+          </section>
+
+          {lessonContentTab === "summaries" ? (
+            <section className="overflow-hidden rounded-[30px] border border-slate-200/70 bg-white/90 shadow-[0_18px_50px_rgba(15,23,42,0.07)]">
+              <div className="border-b border-slate-100 bg-gradient-to-r from-indigo-50 via-white to-sky-50 p-6">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-200">
+                    <CalendarDays size={21} />
+                  </div>
+
+                  <div>
+                    <h3 className="text-xl font-black text-slate-950">
+                      Custom Range Summary
+                    </h3>
+
+                    <p className="mt-1 max-w-2xl text-sm text-slate-500">
+                      Generate a coordinator-only summary for
+                      any date range, including ranges that
+                      cross multiple months.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-6 p-6 xl:grid-cols-[360px_1fr]">
+                <div className="space-y-4 rounded-3xl border border-slate-200 bg-slate-50/70 p-5">
+                  <div>
+                    <label className="mb-1.5 block text-xs font-black uppercase tracking-wide text-slate-500">
+                      Student
+                    </label>
+
+                    <select
+                      value={summaryStudentId}
+                      onChange={event => {
+                        setSummaryStudentId(
+                          event.target.value
+                        );
+                        setSummaryResult(null);
+                      }}
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-indigo-200"
+                    >
+                      <option value="">
+                        Select student
+                      </option>
+
+                      {studentOptions.map(student => (
+                        <option
+                          key={student.id}
+                          value={student.id}
+                        >
+                          {student.name} —{" "}
+                          {student.teacher_name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1.5 block text-xs font-black uppercase tracking-wide text-slate-500">
+                      Subject
+                    </label>
+
+                    <select
+                      value={summarySubject}
+                      onChange={event => {
+                        setSummarySubject(
+                          event.target.value
+                        );
+                        setSummaryResult(null);
+                      }}
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-indigo-200"
+                    >
+                      <option value="">
+                        All subjects
+                      </option>
+
+                      {subjectOptions.map(subject => (
+                        <option
+                          key={subject}
+                          value={subject}
+                        >
+                          {subject}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-black uppercase tracking-wide text-slate-500">
+                        From date
+                      </label>
+
+                      <input
+                        type="date"
+                        value={summaryStartDate}
+                        onChange={event => {
+                          setSummaryStartDate(
+                            event.target.value
+                          );
+                          setSummaryResult(null);
+                        }}
+                        className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-indigo-200"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-xs font-black uppercase tracking-wide text-slate-500">
+                        To date
+                      </label>
+
+                      <input
+                        type="date"
+                        value={summaryEndDate}
+                        onChange={event => {
+                          setSummaryEndDate(
+                            event.target.value
+                          );
+                          setSummaryResult(null);
+                        }}
+                        className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-indigo-200"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={
+                      handleGenerateCoordinatorSummary
+                    }
+                    disabled={
+                      summarySaving ||
+                      !summaryStudentId ||
+                      !summaryStartDate ||
+                      !summaryEndDate
+                    }
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-black text-white shadow-lg shadow-indigo-200 transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {summarySaving ? (
+                      <Loader2
+                        size={17}
+                        className="animate-spin"
+                      />
+                    ) : (
+                      <PlusCircle size={17} />
+                    )}
+
+                    {summarySaving
+                      ? "Generating..."
+                      : "Generate Summary"}
+                  </button>
+                </div>
+
+                <div className="min-h-[360px]">
+                  {!summaryResult ? (
+                    <div className="flex min-h-[360px] flex-col items-center justify-center rounded-3xl border border-dashed border-slate-300 bg-slate-50/50 px-6 text-center">
+                      <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-indigo-50 text-indigo-600">
+                        <BookOpen size={27} />
+                      </div>
+
+                      <h4 className="mt-4 text-lg font-black text-slate-900">
+                        No summary generated
+                      </h4>
+
+                      <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">
+                        Select a student and date range,
+                        then press Generate Summary.
+                        Nothing is displayed automatically.
+                      </p>
+                    </div>
+                  ) : (
+                    <article className="overflow-hidden rounded-3xl border border-indigo-100 bg-white shadow-sm">
+                      <div className="border-b border-indigo-100 bg-indigo-50/70 p-5">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <div className="text-xs font-black uppercase tracking-wide text-indigo-500">
+                              Coordinator Summary
+                            </div>
+
+                            <h4 className="mt-1 text-xl font-black text-slate-950">
+                              {summaryResult.student_name}
+                            </h4>
+
+                            <p className="mt-1 text-sm font-semibold text-slate-500">
+                              {formatDate(
+                                summaryResult.start_date
+                              )}
+                              {" — "}
+                              {formatDate(
+                                summaryResult.end_date
+                              )}
+                            </p>
+                          </div>
+
+                          <span className="w-fit rounded-full border border-indigo-200 bg-white px-3 py-1.5 text-xs font-black text-indigo-700">
+                            {summaryResult.generated_from_lessons_count ||
+                              0}{" "}
+                            lessons
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-5 p-6">
+                        <div>
+                          <div className="text-xs font-black uppercase tracking-wide text-slate-400">
+                            Summary
+                          </div>
+
+                          <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">
+                            {summaryResult.summary_text}
+                          </p>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                          <SummaryBlock
+                            title="Strengths"
+                            value={
+                              summaryResult.strengths
+                            }
+                            tone="emerald"
+                          />
+
+                          <SummaryBlock
+                            title="Improvement"
+                            value={
+                              summaryResult.improvement_areas ||
+                              summaryResult.weaknesses ||
+                              ""
+                            }
+                            tone="amber"
+                          />
+
+                          <SummaryBlock
+                            title="Recommendation"
+                            value={
+                              summaryResult.parent_message ||
+                              summaryResult.recommendations ||
+                              ""
+                            }
+                            tone="indigo"
+                          />
+                        </div>
+                      </div>
+                    </article>
+                  )}
+                </div>
+              </div>
+            </section>
+          ) : (
+            <>
       {/* Lesson History by Student */}
       <section className="rounded-[28px] border border-slate-200/70 bg-white/80 backdrop-blur-xl shadow-[0_18px_50px_rgba(15,23,42,0.07)] overflow-hidden">
-        <div className="p-5 border-b border-slate-200/70 grid grid-cols-1 lg:grid-cols-[1fr_auto_auto] gap-3">
-          <div className="relative">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        <div className="border-b border-slate-200/70 p-5">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="relative md:col-span-2 xl:col-span-2">
+              <Search
+                size={16}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+              />
+
+              <input
+                value={search}
+                onChange={event =>
+                  setSearch(event.target.value)
+                }
+                placeholder="Search student, teacher, subject, lesson..."
+                className="w-full rounded-2xl border border-slate-200 bg-white/90 py-3 pl-9 pr-4 text-sm font-semibold outline-none focus:ring-2 focus:ring-indigo-200"
+              />
+            </div>
+
+            <select
+              value={selectedTeacher}
+              onChange={event =>
+                setSelectedTeacher(
+                  event.target.value
+                )
+              }
+              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
+            >
+              <option value="all">
+                All teachers
+              </option>
+
+              {teachers.map(teacher => (
+                <option
+                  key={teacher.id}
+                  value={teacher.id}
+                >
+                  {teacher.name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={selectedStudentFilter}
+              onChange={event =>
+                setSelectedStudentFilter(
+                  event.target.value
+                )
+              }
+              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
+            >
+              <option value="all">
+                All students
+              </option>
+
+              {studentOptions.map(student => (
+                <option
+                  key={student.id}
+                  value={student.id}
+                >
+                  {student.name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={selectedMonth}
+              onChange={event =>
+                setSelectedMonth(
+                  event.target.value
+                )
+              }
+              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
+            >
+              <option value="all">
+                All months
+              </option>
+
+              {months.map(month => (
+                <option
+                  key={month}
+                  value={month}
+                >
+                  {formatMonth(month)}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={selectedSubject}
+              onChange={event =>
+                setSelectedSubject(
+                  event.target.value
+                )
+              }
+              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
+            >
+              <option value="all">
+                All subjects
+              </option>
+
+              {subjectOptions.map(subject => (
+                <option
+                  key={subject}
+                  value={subject}
+                >
+                  {subject}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={selectedProgress}
+              onChange={event =>
+                setSelectedProgress(
+                  event.target.value
+                )
+              }
+              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
+            >
+              <option value="all">
+                All progress statuses
+              </option>
+
+              <option value="excellent">
+                Excellent
+              </option>
+
+              <option value="good">
+                Good
+              </option>
+
+              <option value="satisfactory">
+                Satisfactory
+              </option>
+
+              <option value="needs_improvement">
+                Needs Improvement
+              </option>
+
+              <option value="">
+                Unmarked
+              </option>
+            </select>
+
             <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search student, teacher, subject, lesson..."
-              className="w-full rounded-2xl border border-slate-200 bg-white/90 pl-9 pr-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-indigo-200"
+              type="date"
+              value={dateFrom}
+              onChange={event =>
+                setDateFrom(event.target.value)
+              }
+              title="From date"
+              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
+            />
+
+            <input
+              type="date"
+              value={dateTo}
+              onChange={event =>
+                setDateTo(event.target.value)
+              }
+              title="To date"
+              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
             />
           </div>
-          <select
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-            className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
-          >
-            <option value="all">All Months</option>
-            {months.map((m) => <option key={m} value={m}>{formatMonth(m)}</option>)}
-          </select>
-          <select
-            value={selectedTeacher}
-            onChange={(e) => setSelectedTeacher(e.target.value)}
-            className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
-          >
-            <option value="all">All Teachers</option>
-            {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
+
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-xs font-bold text-slate-500">
+              Showing {filteredLessons.length} matching
+              lesson entries
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                setSelectedMonth("all");
+                setSelectedTeacher("all");
+                setSelectedStudentFilter("all");
+                setSelectedSubject("all");
+                setSelectedProgress("all");
+                setDateFrom("");
+                setDateTo("");
+              }}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-600 hover:bg-slate-50"
+            >
+              Reset Filters
+            </button>
+          </div>
         </div>
 
         {loading ? (
@@ -1082,6 +1842,42 @@ const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLess
           </div>
         )}
       </section>
+            </>
+          )}
+        </>
+      )}
+
+    </div>
+  );
+}
+
+function SummaryBlock({
+  title,
+  value,
+  tone,
+}: {
+  title: string;
+  value: string;
+  tone: "emerald" | "amber" | "indigo";
+}) {
+  const classes =
+    tone === "emerald"
+      ? "border-emerald-100 bg-emerald-50/70 text-emerald-800"
+      : tone === "amber"
+      ? "border-amber-100 bg-amber-50/70 text-amber-800"
+      : "border-indigo-100 bg-indigo-50/70 text-indigo-800";
+
+  return (
+    <div
+      className={`rounded-2xl border p-4 ${classes}`}
+    >
+      <div className="text-xs font-black uppercase tracking-wide opacity-70">
+        {title}
+      </div>
+
+      <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6">
+        {value || "No details generated."}
+      </p>
     </div>
   );
 }
