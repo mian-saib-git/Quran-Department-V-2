@@ -661,8 +661,14 @@ class MonthlyLessonSummary(models.Model):
         related_name="monthly_lesson_summaries",
     )
 
+    # Kept for compatibility with existing monthly records.
     month = models.PositiveSmallIntegerField()
     year = models.PositiveIntegerField()
+
+    # New summaries can cover any period, including ranges
+    # crossing multiple months.
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
 
     subject = models.CharField(max_length=120, blank=True)
 
@@ -691,8 +697,15 @@ class MonthlyLessonSummary(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["student", "teacher", "month", "year", "subject"],
-                name="unique_monthly_summary_per_student_subject",
+                fields=[
+                    "student",
+                    "teacher",
+                    "start_date",
+                    "end_date",
+                    "subject",
+                    "created_by",
+                ],
+                name="unique_summary_per_creator_student_range",
             )
         ]
         indexes = [
@@ -700,6 +713,8 @@ class MonthlyLessonSummary(models.Model):
             models.Index(fields=["teacher", "year", "month"]),
             models.Index(fields=["subject", "year", "month"]),
             models.Index(fields=["source"]),
+            models.Index(fields=["student", "start_date", "end_date"]),
+            models.Index(fields=["created_by", "start_date", "end_date"]),
         ]
 
     def __str__(self):
@@ -744,6 +759,11 @@ class MonthlyLessonPlan(models.Model):
     year = models.PositiveIntegerField()
 
     subject = models.CharField(max_length=120)
+
+    # Structured monthly target, for example:
+    # Qaida: from lesson/line to lesson/line
+    # Quran: from Surah/Ayah to Surah/Ayah
+    plan_data = models.JSONField(default=dict, blank=True)
 
     plan_text = models.TextField()
     target_summary = models.TextField(blank=True)
