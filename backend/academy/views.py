@@ -321,7 +321,25 @@ def daily_lesson_report_payload(report):
     }
 
 
+
 def monthly_summary_payload(summary):
+    if summary is None:
+        return None
+
+    creator = summary.created_by
+
+    start_date = (
+        str(summary.start_date)
+        if summary.start_date
+        else ""
+    )
+
+    end_date = (
+        str(summary.end_date)
+        if summary.end_date
+        else ""
+    )
+
     return {
         "id": summary.id,
         "student_id": summary.student_id,
@@ -330,25 +348,62 @@ def monthly_summary_payload(summary):
         "teacher_name": str(summary.teacher),
         "month": summary.month,
         "year": summary.year,
+        "start_date": start_date,
+        "end_date": end_date,
         "subject": summary.subject,
         "summary_text": summary.summary_text,
         "strengths": summary.strengths,
+        "weaknesses": summary.weaknesses,
+        "recommendations": summary.recommendations,
         "improvement_areas": summary.weaknesses,
         "parent_message": summary.recommendations,
-        "ai_generated": summary.source == MonthlyLessonSummary.SummarySource.AI,
-        "created_by": summary.created_by.username,
-        "created_by_id": summary.created_by.id,
-        "created_by_username": summary.created_by.username,
-        "created_by_name": user_display_name(summary.created_by),
-        "created_by_role": summary.created_by.role,
-        "created_at": summary.created_at.isoformat(),
-        "updated_at": summary.updated_at.isoformat(),
+        "source": summary.source,
+        "ai_generated": (
+            summary.source
+            == MonthlyLessonSummary.SummarySource.AI
+        ),
+        "generated_from_lessons_count": (
+            summary.generated_from_lessons_count
+        ),
+        "created_by": (
+            user_display_name(creator)
+            if creator
+            else ""
+        ),
+        "created_by_id": (
+            creator.id
+            if creator
+            else None
+        ),
+        "created_by_username": (
+            creator.username
+            if creator
+            else ""
+        ),
+        "created_by_name": (
+            user_display_name(creator)
+            if creator
+            else ""
+        ),
+        "created_by_role": (
+            creator.role
+            if creator
+            else ""
+        ),
+        "created_at": (
+            summary.created_at.isoformat()
+            if summary.created_at
+            else None
+        ),
+        "updated_at": (
+            summary.updated_at.isoformat()
+            if summary.updated_at
+            else None
+        ),
     }
 
-
 def monthly_plan_payload(plan):
-    plan_text = getattr(plan, "plan_text", "") or ""
-    target_summary = getattr(plan, "target_summary", "") or ""
+    creator = plan.created_by
 
     return {
         "id": plan.id,
@@ -359,24 +414,47 @@ def monthly_plan_payload(plan):
         "month": plan.month,
         "year": plan.year,
         "subject": plan.subject,
-        "plan_text": plan_text,
-        "week_1_plan": "",
-        "week_2_plan": "",
-        "week_3_plan": "",
-        "week_4_plan": "",
-        "week_5_plan": "",
-        "target_summary": target_summary or plan_text,
+        "plan_data": plan.plan_data or {},
+        "plan_text": plan.plan_text,
+        "target_summary": plan.target_summary,
         "notes": plan.notes,
         "status": plan.status,
-        "created_by": plan.created_by.username,
-        "created_by_id": plan.created_by.id,
-        "created_by_username": plan.created_by.username,
-        "created_by_name": user_display_name(plan.created_by),
-        "created_by_role": plan.created_by.role,
-        "created_at": plan.created_at.isoformat(),
-        "updated_at": plan.updated_at.isoformat(),
+        "created_by": (
+            user_display_name(creator)
+            if creator
+            else ""
+        ),
+        "created_by_id": (
+            creator.id
+            if creator
+            else None
+        ),
+        "created_by_username": (
+            creator.username
+            if creator
+            else ""
+        ),
+        "created_by_name": (
+            user_display_name(creator)
+            if creator
+            else ""
+        ),
+        "created_by_role": (
+            creator.role
+            if creator
+            else ""
+        ),
+        "created_at": (
+            plan.created_at.isoformat()
+            if plan.created_at
+            else None
+        ),
+        "updated_at": (
+            plan.updated_at.isoformat()
+            if plan.updated_at
+            else None
+        ),
     }
-
 
 def safe_int(value, fallback=None):
     try:
@@ -2276,63 +2354,183 @@ class MonthlyLessonPlanDetailView(APIView):
         return Response({"detail": "Monthly lesson plan deleted successfully."})
 
 
+
 class MonthlyLessonSummaryView(APIView):
     permission_classes = [IsAuthenticated]
+
+    def _resolve_range(self, data, query=False):
+        getter = (
+            data.get
+            if query
+            else data.get
+        )
+
+        start_value = str(
+            getter("start_date") or ""
+        ).strip()
+
+        end_value = str(
+            getter("end_date") or ""
+        ).strip()
+
+        month = safe_int(getter("month"))
+        year = safe_int(getter("year"))
+
+        if start_value or end_value:
+            if not start_value or not end_value:
+                return None, None, None, None, (
+                    "Both start_date and end_date are required."
+                )
+
+            start_date, start_error = parse_date_str(
+                start_value,
+                "start_date",
+            )
+
+            end_date, end_error = parse_date_str(
+                end_value,
+                "end_date",
+            )
+
+            if start_error or end_error:
+                return None, None, None, None, (
+                    "Invalid date format. Use YYYY-MM-DD."
+                )
+
+            if start_date > end_date:
+                return None, None, None, None, (
+                    "start_date cannot be after end_date."
+                )
+
+            return (
+                start_date,
+                end_date,
+                start_date.month,
+                start_date.year,
+                None,
+            )
+
+        if not month or month < 1 or month > 12:
+            return None, None, None, None, (
+                "Provide start_date and end_date, or a valid month."
+            )
+
+        if not year or year < 2000:
+            return None, None, None, None, (
+                "Provide start_date and end_date, or a valid year."
+            )
+
+        first_day, next_month = build_month_range(
+            year,
+            month,
+        )
+
+        last_day = date.fromordinal(
+            next_month.toordinal() - 1
+        )
+
+        return (
+            first_day,
+            last_day,
+            month,
+            year,
+            None,
+        )
 
     def get(self, request):
         user = request.user
 
-        month = safe_int(request.query_params.get("month"))
-        year = safe_int(request.query_params.get("year"))
-        student_id = safe_int(request.query_params.get("student_id"))
-        teacher_id = safe_int(request.query_params.get("teacher_id"))
-
-        if not month or month < 1 or month > 12:
-            return Response(
-                {"detail": "month must be between 1 and 12."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if not year or year < 2000:
-            return Response(
-                {"detail": "year is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        first_day, next_month = build_month_range(year, month)
-
-        reports = DailyLessonReport.objects.select_related(
-            "student__user",
-            "teacher__user",
-            "created_by",
-        ).prefetch_related(
-            "subject_entries"
-        ).filter(
-            date__gte=first_day,
-            date__lt=next_month,
+        (
+            range_start,
+            range_end,
+            month,
+            year,
+            range_error,
+        ) = self._resolve_range(
+            request.query_params,
+            query=True,
         )
 
-        plans = MonthlyLessonPlan.objects.select_related(
-            "student__user",
-            "teacher__user",
-            "created_by",
-        ).filter(month=month, year=year)
+        if range_error:
+            return Response(
+                {"detail": range_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        summaries = MonthlyLessonSummary.objects.select_related(
-            "student__user",
-            "teacher__user",
-            "created_by",
-        ).filter(month=month, year=year)
+        student_id = safe_int(
+            request.query_params.get("student_id")
+        )
+
+        teacher_id = safe_int(
+            request.query_params.get("teacher_id")
+        )
+
+        reports = (
+            DailyLessonReport.objects
+            .select_related(
+                "student__user",
+                "teacher__user",
+                "created_by",
+            )
+            .prefetch_related("subject_entries")
+            .filter(
+                date__gte=range_start,
+                date__lte=range_end,
+            )
+        )
+
+        plans = (
+            MonthlyLessonPlan.objects
+            .select_related(
+                "student__user",
+                "teacher__user",
+                "created_by",
+            )
+            .filter(
+                year__gte=range_start.year,
+                year__lte=range_end.year,
+            )
+        )
+
+        summaries = (
+            MonthlyLessonSummary.objects
+            .select_related(
+                "student__user",
+                "teacher__user",
+                "created_by",
+            )
+            .filter(
+                start_date=range_start,
+                end_date=range_end,
+                created_by=user,
+            )
+        )
 
         if student_id:
-            reports = reports.filter(student_id=student_id)
-            plans = plans.filter(student_id=student_id)
-            summaries = summaries.filter(student_id=student_id)
+            reports = reports.filter(
+                student_id=student_id
+            )
+
+            plans = plans.filter(
+                student_id=student_id
+            )
+
+            summaries = summaries.filter(
+                student_id=student_id
+            )
 
         if teacher_id:
-            reports = reports.filter(teacher_id=teacher_id)
-            plans = plans.filter(teacher_id=teacher_id)
-            summaries = summaries.filter(teacher_id=teacher_id)
+            reports = reports.filter(
+                teacher_id=teacher_id
+            )
+
+            plans = plans.filter(
+                teacher_id=teacher_id
+            )
+
+            summaries = summaries.filter(
+                teacher_id=teacher_id
+            )
 
         if is_department_manager(user):
             pass
@@ -2342,7 +2540,10 @@ class MonthlyLessonSummaryView(APIView):
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
                 return Response(
-                    {"detail": "Teacher profile not found."},
+                    {
+                        "detail":
+                        "Teacher profile not found."
+                    },
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
@@ -2355,13 +2556,16 @@ class MonthlyLessonSummaryView(APIView):
                 student = user.student_profile
             except StudentProfile.DoesNotExist:
                 return Response(
-                    {"detail": "Student profile not found."},
+                    {
+                        "detail":
+                        "Student profile not found."
+                    },
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
             reports = reports.filter(student=student)
             plans = plans.filter(student=student)
-            summaries = summaries.filter(student=student)
+            summaries = summaries.none()
 
         else:
             return Response(
@@ -2377,19 +2581,38 @@ class MonthlyLessonSummaryView(APIView):
             )
         )
 
-        plan_rows = list(
+        all_plan_rows = list(
             plans.order_by(
                 "student__user__first_name",
+                "year",
+                "month",
                 "subject",
                 "id",
             )
         )
 
+        plan_rows = []
+
+        for plan in all_plan_rows:
+            plan_start, plan_next = build_month_range(
+                plan.year,
+                plan.month,
+            )
+
+            plan_end = date.fromordinal(
+                plan_next.toordinal() - 1
+            )
+
+            if (
+                plan_start <= range_end
+                and plan_end >= range_start
+            ):
+                plan_rows.append(plan)
+
         summary_rows = list(
             summaries.order_by(
-                "student__user__first_name",
-                "subject",
-                "id",
+                "-updated_at",
+                "-id",
             )
         )
 
@@ -2427,35 +2650,47 @@ class MonthlyLessonSummaryView(APIView):
                     "remarks": [],
                 }
 
-            students[student_key]["total_lessons"] += 1
+            students[student_key][
+                "total_lessons"
+            ] += 1
 
             for entry in report.subject_entries.all():
-                status_value = entry.progress_status or "blank"
-
-                progress_counts[status_value] = (
-                    progress_counts.get(status_value, 0) + 1
+                status_value = (
+                    entry.progress_status
+                    or "blank"
                 )
 
-                if entry.subject:
-                    subjects[entry.subject] += 1
-                    students[student_key]["subjects"][entry.subject] += 1
-
-                students[student_key]["progress_counts"][status_value] = (
-                    students[student_key]["progress_counts"].get(
+                progress_counts[status_value] = (
+                    progress_counts.get(
                         status_value,
                         0,
                     ) + 1
                 )
 
+                if entry.subject:
+                    subjects[entry.subject] += 1
+
+                    students[student_key][
+                        "subjects"
+                    ][entry.subject] += 1
+
+                students[student_key][
+                    "progress_counts"
+                ][status_value] = (
+                    students[student_key][
+                        "progress_counts"
+                    ].get(status_value, 0) + 1
+                )
+
                 if entry.topic_summary:
-                    students[student_key]["topics"].append(
-                        entry.topic_summary
-                    )
+                    students[student_key][
+                        "topics"
+                    ].append(entry.topic_summary)
 
                 if entry.remarks:
-                    students[student_key]["remarks"].append(
-                        entry.remarks
-                    )
+                    students[student_key][
+                        "remarks"
+                    ].append(entry.remarks)
 
                 lesson_rows.append({
                     "id": entry.id,
@@ -2466,13 +2701,24 @@ class MonthlyLessonSummaryView(APIView):
                     "teacher_name": str(report.teacher),
                     "date": str(report.date),
                     "subject": entry.subject,
-                    "topic_summary": entry.topic_summary,
-                    "progress_status": entry.progress_status,
+                    "topic_summary":
+                        entry.topic_summary,
+                    "progress_status":
+                        entry.progress_status,
                     "remarks": entry.remarks,
-                    "lesson_data": entry.lesson_data,
+                    "lesson_data":
+                        entry.lesson_data,
                     "notes": report.notes,
-                    "created_at": report.created_at,
-                    "updated_at": report.updated_at,
+                    "created_at": (
+                        report.created_at.isoformat()
+                        if report.created_at
+                        else None
+                    ),
+                    "updated_at": (
+                        report.updated_at.isoformat()
+                        if report.updated_at
+                        else None
+                    ),
                 })
 
         saved_by_student = {
@@ -2494,12 +2740,16 @@ class MonthlyLessonSummaryView(APIView):
                 "teacher_name": item["teacher_name"],
                 "total_lessons": item["total_lessons"],
                 "subjects": dict(item["subjects"]),
-                "progress_counts": item["progress_counts"],
+                "progress_counts":
+                    item["progress_counts"],
                 "topics": item["topics"][:20],
                 "remarks": item["remarks"][:20],
-                "auto_summary": build_student_auto_summary(item),
+                "auto_summary":
+                    build_student_auto_summary(item),
                 "saved_summary": (
-                    monthly_summary_payload(saved_summary)
+                    monthly_summary_payload(
+                        saved_summary
+                    )
                     if saved_summary
                     else None
                 ),
@@ -2508,6 +2758,8 @@ class MonthlyLessonSummaryView(APIView):
         return Response({
             "month": month,
             "year": year,
+            "start_date": str(range_start),
+            "end_date": str(range_end),
             "total_lessons": len(report_rows),
             "total_plans": len(plan_rows),
             "subjects": dict(subjects),
@@ -2521,7 +2773,8 @@ class MonthlyLessonSummaryView(APIView):
                 monthly_summary_payload(item)
                 for item in summary_rows
             ],
-            "student_summaries": student_summaries,
+            "student_summaries":
+                student_summaries,
         })
 
     def post(self, request):
@@ -2534,15 +2787,28 @@ class MonthlyLessonSummaryView(APIView):
             return Response(
                 {
                     "detail":
-                    "Students cannot create monthly lesson summaries."
+                    "Only teachers and department managers "
+                    "can generate lesson summaries."
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        (
+            range_start,
+            range_end,
+            month,
+            year,
+            range_error,
+        ) = self._resolve_range(request.data)
+
+        if range_error:
+            return Response(
+                {"detail": range_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         student_id = request.data.get("student_id")
         teacher_id = request.data.get("teacher_id")
-        month = safe_int(request.data.get("month"))
-        year = safe_int(request.data.get("year"))
 
         if not student_id:
             return Response(
@@ -2550,24 +2816,16 @@ class MonthlyLessonSummaryView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not month or month < 1 or month > 12:
-            return Response(
-                {"detail": "month must be between 1 and 12."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if not year or year < 2000:
-            return Response(
-                {"detail": "year is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         try:
-            student = StudentProfile.objects.select_related(
-                "teacher",
-                "teacher__user",
-                "user",
-            ).get(id=student_id)
+            student = (
+                StudentProfile.objects
+                .select_related(
+                    "teacher",
+                    "teacher__user",
+                    "user",
+                )
+                .get(id=student_id)
+            )
         except StudentProfile.DoesNotExist:
             return Response(
                 {"detail": "Student not found."},
@@ -2579,7 +2837,10 @@ class MonthlyLessonSummaryView(APIView):
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
                 return Response(
-                    {"detail": "Teacher profile not found."},
+                    {
+                        "detail":
+                        "Teacher profile not found."
+                    },
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
@@ -2587,55 +2848,79 @@ class MonthlyLessonSummaryView(APIView):
                 return Response(
                     {
                         "detail":
-                        "You can only create summaries for your assigned students."
+                        "You can only generate summaries "
+                        "for your assigned students."
                     },
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
         else:
-            teacher_id = teacher_id or student.teacher_id
+            teacher_id = (
+                teacher_id
+                or student.teacher_id
+            )
 
             try:
-                teacher = TeacherProfile.objects.get(id=teacher_id)
+                teacher = TeacherProfile.objects.get(
+                    id=teacher_id
+                )
             except TeacherProfile.DoesNotExist:
                 return Response(
                     {"detail": "Teacher not found."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-        first_day, next_month = build_month_range(year, month)
+        subject = str(
+            request.data.get("subject") or ""
+        ).strip()
 
-        reports = DailyLessonReport.objects.prefetch_related(
-            "subject_entries"
-        ).filter(
-            student=student,
-            teacher=teacher,
-            date__gte=first_day,
-            date__lt=next_month,
-        ).order_by("date", "id")
+        reports = (
+            DailyLessonReport.objects
+            .prefetch_related("subject_entries")
+            .filter(
+                student=student,
+                teacher=teacher,
+                date__gte=range_start,
+                date__lte=range_end,
+            )
+            .order_by("date", "id")
+        )
 
         report_rows = list(reports)
-        total_lessons = len(report_rows)
 
         subjects = Counter()
         progress_counts = Counter()
         topics = []
         remarks = []
+        matching_report_ids = set()
 
         for report in report_rows:
             for entry in report.subject_entries.all():
+                if (
+                    subject
+                    and entry.subject != subject
+                ):
+                    continue
+
+                matching_report_ids.add(report.id)
+
                 if entry.subject:
                     subjects[entry.subject] += 1
 
                 progress_counts[
-                    entry.progress_status or "blank"
+                    entry.progress_status
+                    or "blank"
                 ] += 1
 
                 if entry.topic_summary:
-                    topics.append(entry.topic_summary)
+                    topics.append(
+                        entry.topic_summary
+                    )
 
                 if entry.remarks:
                     remarks.append(entry.remarks)
+
+        total_lessons = len(matching_report_ids)
 
         summary_text = str(
             request.data.get("summary_text") or ""
@@ -2653,15 +2938,22 @@ class MonthlyLessonSummaryView(APIView):
 
         recommendations = str(
             request.data.get("parent_message")
-            or request.data.get("recommendations")
+            or request.data.get(
+                "recommendations"
+            )
             or ""
         ).strip()
+
+        range_label = (
+            f"{range_start.strftime('%d %b %Y')} "
+            f"to {range_end.strftime('%d %b %Y')}"
+        )
 
         if not summary_text:
             if total_lessons == 0:
                 summary_text = (
                     f"No lessons were recorded for "
-                    f"{student} in {month}/{year}."
+                    f"{student} from {range_label}."
                 )
             else:
                 subject_names = (
@@ -2671,59 +2963,91 @@ class MonthlyLessonSummaryView(APIView):
                 )
 
                 topic_preview = (
-                    ", ".join(topics[:5])
+                    ", ".join(topics[:8])
                     if topics
                     else "regular revision"
                 )
 
                 summary_text = (
-                    f"{student} completed {total_lessons} "
-                    f"daily lesson report"
+                    f"{student} completed "
+                    f"{total_lessons} lesson"
                     f"{'' if total_lessons == 1 else 's'} "
-                    f"in {month}/{year}. "
-                    f"Subjects covered: {subject_names}. "
+                    f"from {range_label}. "
+                    f"Subjects covered: "
+                    f"{subject_names}. "
                     f"Main topics: {topic_preview}."
                 )
 
         if not strengths:
+            excellent = progress_counts.get(
+                "excellent",
+                0,
+            )
+
+            good = progress_counts.get(
+                "good",
+                0,
+            )
+
             strengths = (
-                "The student continued learning and completed "
-                "the recorded lessons for this month."
+                f"The student completed "
+                f"{total_lessons} recorded lessons. "
+                f"Excellent: {excellent}; "
+                f"Good: {good}."
             )
 
         if not weaknesses:
+            needs_improvement = progress_counts.get(
+                "needs_improvement",
+                0,
+            )
+
             weaknesses = (
-                "Continue regular revision and focus on consistency."
+                "Continue regular revision and focus "
+                "on consistency."
+                if not needs_improvement
+                else (
+                    f"{needs_improvement} lesson"
+                    f"{'' if needs_improvement == 1 else 's'} "
+                    "were marked as needing improvement."
+                )
             )
 
         if not recommendations:
             recommendations = (
-                "Please support daily revision at home and "
-                "encourage regular attendance."
+                "Please support daily revision at home "
+                "and encourage regular attendance."
             )
 
         source = (
             MonthlyLessonSummary.SummarySource.AI
             if request.data.get("ai_generated")
-            else MonthlyLessonSummary.SummarySource.TEACHER
+            else (
+                MonthlyLessonSummary
+                .SummarySource.TEACHER
+            )
         )
 
         summary, created = (
-            MonthlyLessonSummary.objects.update_or_create(
+            MonthlyLessonSummary.objects
+            .update_or_create(
                 student=student,
                 teacher=teacher,
-                month=month,
-                year=year,
-                subject="",
+                start_date=range_start,
+                end_date=range_end,
+                subject=subject,
+                created_by=user,
                 defaults={
+                    "month": month,
+                    "year": year,
                     "summary_text": summary_text,
                     "strengths": strengths,
                     "weaknesses": weaknesses,
-                    "recommendations": recommendations,
+                    "recommendations":
+                        recommendations,
                     "source": source,
                     "generated_from_lessons_count":
                         total_lessons,
-                    "created_by": user,
                 },
             )
         )
@@ -2736,170 +3060,6 @@ class MonthlyLessonSummaryView(APIView):
                 else status.HTTP_200_OK
             ),
         )
-
-
-# ============================================================
-# Frontend state sync helpers
-# ============================================================
-
-def frontend_teacher_payload(teacher):
-    user = teacher.user
-
-    return {
-        "id": str(teacher.id),
-        "name": user.get_full_name() or user.username,
-        "fatherName": teacher.father_name,
-        "email": user.email,
-        "phone": teacher.phone,
-        "address": teacher.address,
-        "joiningDate": str(teacher.joining_date) if teacher.joining_date else "",
-        "notes": teacher.notes,
-        "photoUrl": "",
-        "loginPin": "",
-        "salary": 0,
-        "subjects": [
-            item.display_name
-            for item in StudentSubject.objects.filter(
-                student__teacher=teacher,
-                is_active=True,
-            ).order_by("subject", "custom_subject_name", "id")
-        ],
-    }
-
-
-def frontend_student_payload(student):
-    schedule = student.schedules.filter(is_active=True).order_by("weekday", "time_slot").first()
-
-    class_days = list(
-        student.schedules.filter(is_active=True)
-        .order_by("weekday", "time_slot")
-        .values_list("weekday", flat=True)
-    )
-
-    weekday_map = {
-        "monday": "Monday",
-        "tuesday": "Tuesday",
-        "wednesday": "Wednesday",
-        "thursday": "Thursday",
-        "friday": "Friday",
-        "saturday": "Saturday",
-        "sunday": "Sunday",
-    }
-
-    class_days = [weekday_map.get(day, day) for day in class_days]
-
-    if not class_days:
-        class_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-
-    return {
-        "id": str(student.id),
-        "name": student.user.get_full_name() or student.user.username,
-        "teacherId": str(student.teacher_id),
-        "timeSlot": str(schedule.time_slot)[:5] if schedule else "16:00",
-        "durationMinutes": schedule.duration_minutes if schedule else 30,
-        "classType": f"{len(class_days)} Day",
-        "classDays": class_days,
-        "loginId": student.user.username,
-        "durationMinutes": int(schedule.duration_minutes) if schedule else 30,
-        "duration_minutes": int(schedule.duration_minutes) if schedule else 30,
-    }
-
-
-def frontend_attendance_payload(record):
-    if record.entity_type == Attendance.EntityType.TEACHER:
-        entity_id = str(record.teacher_id)
-        entity_type = "Teacher"
-    else:
-        entity_id = str(record.student_id)
-        entity_type = "Student"
-
-    class_key = record.class_key or ""
-
-    status_map = {
-        Attendance.Status.PRESENT: "Present",
-        Attendance.Status.ABSENT: "Absent",
-        Attendance.Status.LEAVE: "Leave",
-    }
-
-    return {
-        "id": str(record.id),
-        "entityId": entity_id,
-        "entityType": entity_type,
-        "date": str(record.date),
-        "classKey": class_key,
-        "class_key": class_key,
-        "status": status_map.get(record.status, "Present"),
-        "markedById": str(record.marked_by_id) if record.marked_by_id else "",
-        "markedByUsername": record.marked_by.username if record.marked_by else "",
-        "markedByName": user_display_name(record.marked_by) if record.marked_by else "",
-        "markedByRole": record.marked_by.role if record.marked_by else "",
-        "timestamp": int(record.updated_at.timestamp() * 1000) if record.updated_at else 0,
-    }
-
-
-def parse_frontend_date(value):
-    value = str(value or "").strip()
-    if not value:
-        return timezone.localdate()
-
-    try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
-    except ValueError:
-        return timezone.localdate()
-
-
-def parse_frontend_time(value):
-    value = str(value or "").strip() or "16:00"
-
-    for fmt in ["%H:%M", "%H:%M:%S"]:
-        try:
-            return datetime.strptime(value, fmt).time()
-        except ValueError:
-            pass
-
-    return datetime.strptime("16:00", "%H:%M").time()
-
-
-def frontend_status_to_django(value):
-    value = str(value or "").strip().lower()
-
-    if value == "absent":
-        return Attendance.Status.ABSENT
-
-    if value == "leave":
-        return Attendance.Status.LEAVE
-
-    return Attendance.Status.PRESENT
-
-
-def frontend_entity_to_django(value):
-    value = str(value or "").strip().lower()
-
-    if value == "teacher":
-        return Attendance.EntityType.TEACHER
-
-    return Attendance.EntityType.STUDENT
-
-
-def frontend_weekday_to_django(value):
-    value = str(value or "").strip().lower()
-
-    mapping = {
-        "monday": ClassSchedule.WeekDay.MONDAY,
-        "tuesday": ClassSchedule.WeekDay.TUESDAY,
-        "wednesday": ClassSchedule.WeekDay.WEDNESDAY,
-        "thursday": ClassSchedule.WeekDay.THURSDAY,
-        "friday": ClassSchedule.WeekDay.FRIDAY,
-        "saturday": ClassSchedule.WeekDay.SATURDAY,
-        "sunday": ClassSchedule.WeekDay.SUNDAY,
-    }
-
-    return mapping.get(value)
-
-
-# ============================================================
-# Academy State API
-# ============================================================
 
 class AcademyStateView(APIView):
     permission_classes = [IsAuthenticated]

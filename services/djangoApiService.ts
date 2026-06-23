@@ -382,6 +382,7 @@ export type CreateDailyLessonReportInput = {
 
 export type MonthlyPlanStatus = "planned" | "in_progress" | "completed";
 
+
 export type MonthlyLessonPlanPayload = {
   id: number;
   student_id: number;
@@ -392,6 +393,7 @@ export type MonthlyLessonPlanPayload = {
   year: number;
   subject: string;
 
+  plan_data: Record<string, any>;
   plan_text: string;
   target_summary: string;
   notes: string;
@@ -431,14 +433,18 @@ export type UpdateMonthlyLessonPlanInput = Partial<{
 // Monthly Lesson Summary
 // ============================================================
 
+
 export type MonthlyLessonSummaryPayload = {
   id: number;
   student_id: number;
   student_name: string;
   teacher_id: number;
   teacher_name: string;
+
   month: number;
   year: number;
+  start_date: string;
+  end_date: string;
   subject?: string;
 
   summary_text: string;
@@ -448,7 +454,10 @@ export type MonthlyLessonSummaryPayload = {
 
   improvement_areas?: string;
   parent_message?: string;
+
+  source?: "teacher" | "ai" | "system";
   ai_generated?: boolean;
+  generated_from_lessons_count?: number;
 
   created_by: string;
   created_by_id?: number;
@@ -460,11 +469,17 @@ export type MonthlyLessonSummaryPayload = {
   updated_at: string;
 };
 
+
 export type CreateMonthlyLessonSummaryInput = {
   student_id: number;
   teacher_id?: number | null;
-  month: number;
-  year: number;
+
+  start_date?: string;
+  end_date?: string;
+
+  month?: number;
+  year?: number;
+  subject?: string;
 
   summary_text?: string;
   strengths?: string;
@@ -476,9 +491,13 @@ export type CreateMonthlyLessonSummaryInput = {
   ai_generated?: boolean;
 };
 
+
 export type MonthlyLessonSummaryResponse = {
   month: number;
   year: number;
+  start_date: string;
+  end_date: string;
+
   total_lessons: number;
   total_plans: number;
 
@@ -501,7 +520,6 @@ export type MonthlyLessonSummaryResponse = {
     topics: string[];
     remarks: string[];
     auto_summary: string;
-
     saved_summary?: MonthlyLessonSummaryPayload | null;
   }[];
 };
@@ -1012,9 +1030,12 @@ export async function deleteMonthlyLessonPlan(planId: number) {
 // Monthly Lesson Summary API
 // ============================================================
 
+
 export async function getMonthlyLessonSummary(params: {
-  month: number;
-  year: number;
+  start_date?: string;
+  end_date?: string;
+  month?: number;
+  year?: number;
   student_id?: number;
   teacher_id?: number;
 }): Promise<MonthlyLessonSummaryResponse> {
@@ -1034,17 +1055,26 @@ export async function createMonthlyLessonSummary(
   });
 }
 
+
 export async function generateMonthlyLessonSummary(params: {
   student_id: number;
   teacher_id?: number | null;
-  month: number;
-  year: number;
+
+  start_date?: string;
+  end_date?: string;
+
+  month?: number;
+  year?: number;
+  subject?: string;
 }): Promise<MonthlyLessonSummaryPayload> {
   return createMonthlyLessonSummary({
     student_id: params.student_id,
     teacher_id: params.teacher_id ?? null,
+    start_date: params.start_date,
+    end_date: params.end_date,
     month: params.month,
     year: params.year,
+    subject: params.subject || "",
     summary_text: "",
     strengths: "",
     weaknesses: "",
@@ -1054,39 +1084,6 @@ export async function generateMonthlyLessonSummary(params: {
     ai_generated: true,
   });
 }
-
-// ============================================================
-// Attendance
-// ============================================================
-
-export type CreateAttendanceInput = {
-  entity_type: "teacher" | "student";
-  teacher_id?: number | null;
-  student_id?: number | null;
-  date?: string;
-  status: "present" | "absent" | "leave";
-  classKey?: string;
-};
-
-export type AttendanceApiResponse = {
-  id: number;
-  entity_type: "teacher" | "student";
-  teacher_id: number | null;
-  teacher_name: string | null;
-  student_id: number | null;
-  student_name: string | null;
-  date: string;
-  status: "present" | "absent" | "leave";
-
-  marked_by: string;
-  marked_by_id?: number;
-  marked_by_username?: string;
-  marked_by_name?: string;
-  marked_by_role?: string;
-
-  created_at?: string | null;
-  updated_at?: string | null;
-};
 
 export async function getAttendance(params?: {
   date?: string;
