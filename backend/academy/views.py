@@ -38,6 +38,31 @@ from .ws_notify import (
 )
 
 
+
+DEPARTMENT_MANAGER_ROLES = {"coordinator", "department_admin", "institution_admin"}
+
+
+def is_department_manager(user):
+    role = str(getattr(user, "role", "") or "").lower()
+    return bool(
+        user
+        and user.is_authenticated
+        and (
+            getattr(user, "is_superuser", False)
+            or role in DEPARTMENT_MANAGER_ROLES
+        )
+    )
+
+
+def is_teacher_role(user):
+    return str(getattr(user, "role", "") or "").lower() == "teacher"
+
+
+def is_student_role(user):
+    return str(getattr(user, "role", "") or "").lower() == "student"
+
+
+
 # ============================================================
 # Small payload helpers
 # ============================================================
@@ -67,7 +92,7 @@ def user_payload(user):
         "password_change_allowed": False,  # nosec B105
         "password_change_message": (
             "To change your password, contact the developer on WhatsApp: wa.me/923189995518"
-            if user.role == "coordinator"
+            if is_department_manager(user)
             else ""
         ),
     }
@@ -579,7 +604,7 @@ class DashboardView(APIView):
         active_subjects_prefetch = make_active_subjects_prefetch()
         schedule_prefetch = make_active_schedules_prefetch()
 
-        if user.role == "coordinator":
+        if is_department_manager(user):
             return Response({
                 "user": user_payload(user),
                 "dashboard_type": "coordinator",
@@ -636,7 +661,7 @@ class DashboardView(APIView):
                 ],
             })
 
-        if user.role == "teacher":
+        if is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
@@ -730,7 +755,7 @@ class DashboardView(APIView):
                 },
             })
 
-        if user.role == "student":
+        if is_student_role(user):
             try:
                 student = StudentProfile.objects.select_related(
                     "user",
@@ -858,10 +883,10 @@ class LessonListCreateView(APIView):
             first_day, next_month = build_month_range(year, month)
             lessons = lessons.filter(date__gte=first_day, date__lt=next_month)
 
-        if user.role == "coordinator":
+        if is_department_manager(user):
             pass
 
-        elif user.role == "teacher":
+        elif is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
@@ -872,7 +897,7 @@ class LessonListCreateView(APIView):
 
             lessons = lessons.filter(teacher=teacher)
 
-        elif user.role == "student":
+        elif is_student_role(user):
             try:
                 student = user.student_profile
             except StudentProfile.DoesNotExist:
@@ -942,7 +967,7 @@ class LessonListCreateView(APIView):
         except StudentProfile.DoesNotExist:
             return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if user.role == "teacher":
+        if is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
@@ -959,7 +984,7 @@ class LessonListCreateView(APIView):
                     {
                         "detail": (
                             "Lesson add window expired or has not started yet. "
-                            "Please ask coordinator to enable add permission."
+                            "Please ask department admin or coordinator to enable add permission."
                         )
                     },
                     status=status.HTTP_403_FORBIDDEN,
@@ -1024,10 +1049,10 @@ class LessonDetailView(APIView):
         except Lesson.DoesNotExist:
             return Response({"detail": "Lesson not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if user.role == "coordinator":
+        if is_department_manager(user):
             pass
 
-        elif user.role == "teacher":
+        elif is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
@@ -1044,7 +1069,7 @@ class LessonDetailView(APIView):
                     {
                         "detail": (
                             "Lesson edit window expired. "
-                            "Please ask coordinator to enable edit permission."
+                            "Please ask department admin or coordinator to enable edit permission."
                         )
                     },
                     status=status.HTTP_403_FORBIDDEN,
@@ -1052,7 +1077,7 @@ class LessonDetailView(APIView):
 
         else:
             return Response(
-                {"detail": "Only coordinators and teachers can edit lessons."},
+                {"detail": "Only department admins and coordinators and teachers can edit lessons."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -1107,7 +1132,7 @@ class LessonAccessPermissionView(APIView):
     def get(self, request):
         user = request.user
 
-        if user.role not in ["coordinator", "teacher"]:
+        if not (is_department_manager(user) or is_teacher_role(user)):
             return Response({"detail": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
 
         permissions = LessonAccessPermission.objects.select_related(
@@ -1145,7 +1170,7 @@ class LessonAccessPermissionView(APIView):
             elif active_text in ["false", "0", "no"]:
                 permissions = permissions.filter(is_active=False)
 
-        if user.role == "teacher":
+        if is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
@@ -1164,9 +1189,9 @@ class LessonAccessPermissionView(APIView):
     def post(self, request):
         user = request.user
 
-        if user.role != "coordinator":
+        if not is_department_manager(user):
             return Response(
-                {"detail": "Only coordinators can manage lesson permissions."},
+                {"detail": "Only department admins and coordinators can manage lesson permissions."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -1243,9 +1268,9 @@ class LessonAccessPermissionView(APIView):
     def delete(self, request):
         user = request.user
 
-        if user.role != "coordinator":
+        if not is_department_manager(user):
             return Response(
-                {"detail": "Only coordinators can disable lesson permissions."},
+                {"detail": "Only department admins and coordinators can disable lesson permissions."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -1298,7 +1323,7 @@ class LessonAccessRequestView(APIView):
     def get(self, request):
         user = request.user
 
-        if user.role not in ["coordinator", "teacher"]:
+        if not (is_department_manager(user) or is_teacher_role(user)):
             return Response({"detail": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
 
         rows = LessonAccessRequest.objects.select_related(
@@ -1325,7 +1350,7 @@ class LessonAccessRequestView(APIView):
         if teacher_id:
             rows = rows.filter(teacher_id=teacher_id)
 
-        if user.role == "teacher":
+        if is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
@@ -1458,9 +1483,9 @@ class LessonAccessRequestDetailView(APIView):
     def delete(self, request, pk):
         user = request.user
 
-        if user.role != "coordinator":
+        if not is_department_manager(user):
             return Response(
-                {"detail": "Only coordinators can delete lesson permission requests."},
+                {"detail": "Only department admins and coordinators can delete lesson permission requests."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -1481,9 +1506,9 @@ class LessonAccessRequestDetailView(APIView):
     def patch(self, request, pk):
         user = request.user
 
-        if user.role != "coordinator":
+        if not is_department_manager(user):
             return Response(
-                {"detail": "Only coordinators can review lesson permission requests."},
+                {"detail": "Only department admins and coordinators can review lesson permission requests."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -1579,10 +1604,10 @@ class DailyLessonReportListCreateView(APIView):
             first_day, next_month = build_month_range(year, month)
             reports = reports.filter(date__gte=first_day, date__lt=next_month)
 
-        if user.role == "coordinator":
+        if is_department_manager(user):
             pass
 
-        elif user.role == "teacher":
+        elif is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
@@ -1590,7 +1615,7 @@ class DailyLessonReportListCreateView(APIView):
 
             reports = reports.filter(teacher=teacher)
 
-        elif user.role == "student":
+        elif is_student_role(user):
             try:
                 student = user.student_profile
             except StudentProfile.DoesNotExist:
@@ -1645,7 +1670,7 @@ class DailyLessonReportListCreateView(APIView):
         except StudentProfile.DoesNotExist:
             return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if user.role == "teacher":
+        if is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
@@ -1676,7 +1701,7 @@ class DailyLessonReportListCreateView(APIView):
                         {
                             "detail": (
                                 "Daily lesson report already exists and the edit window expired. "
-                                "Please ask coordinator to enable edit permission."
+                                "Please ask department admin or coordinator to enable edit permission."
                             )
                         },
                         status=status.HTTP_403_FORBIDDEN,
@@ -1692,7 +1717,7 @@ class DailyLessonReportListCreateView(APIView):
                         {
                             "detail": (
                                 "Lesson add window expired or has not started yet. "
-                                "Please ask coordinator to enable add permission."
+                                "Please ask department admin or coordinator to enable add permission."
                             )
                         },
                         status=status.HTTP_403_FORBIDDEN,
@@ -1764,7 +1789,7 @@ class DailyLessonReportListCreateView(APIView):
             )
 
             submitted_subject_names = {item["subject"] for item in cleaned_entries}
-            if user.role == "coordinator":
+            if is_department_manager(user):
                 report.subject_entries.all().delete()
             else:
                 report.subject_entries.filter(subject__in=submitted_subject_names).delete()
@@ -1795,7 +1820,7 @@ class DailyLessonReportListCreateView(APIView):
         # Add request approved -> teacher saves new lesson -> disable add permission.
         # Edit request approved -> teacher saves edited lesson -> disable edit permission.
         # Coordinator still receives the lesson saved notification, but no manual disable is needed.
-        if user.role == "teacher":
+        if is_teacher_role(user):
             try:
                 teacher_obj = user.teacher_profile
                 submitted_subjects = {
@@ -1868,10 +1893,10 @@ class AttendanceListCreateView(APIView):
         if teacher_id and teacher_id.isdigit():
             attendance = attendance.filter(teacher_id=int(teacher_id))
 
-        if user.role == "coordinator":
+        if is_department_manager(user):
             pass
 
-        elif user.role == "teacher":
+        elif is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
@@ -1879,7 +1904,7 @@ class AttendanceListCreateView(APIView):
 
             attendance = attendance.filter(Q(teacher=teacher) | Q(student__teacher=teacher))
 
-        elif user.role == "student":
+        elif is_student_role(user):
             try:
                 student = user.student_profile
             except StudentProfile.DoesNotExist:
@@ -1901,9 +1926,9 @@ class AttendanceListCreateView(APIView):
     def post(self, request):
         user = request.user
 
-        if user.role != "coordinator":
+        if not is_department_manager(user):
             return Response(
-                {"detail": "Only coordinators can mark attendance."},
+                {"detail": "Only department admins and coordinators can mark attendance."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -2000,9 +2025,9 @@ class AttendanceDeleteView(APIView):
     def delete(self, request, pk):
         user = request.user
 
-        if user.role != "coordinator":
+        if not is_department_manager(user):
             return Response(
-                {"detail": "Only coordinators can delete attendance."},
+                {"detail": "Only department admins and coordinators can delete attendance."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -2048,10 +2073,10 @@ class MonthlyLessonPlanListCreateView(APIView):
         if teacher_id:
             plans = plans.filter(teacher_id=teacher_id)
 
-        if user.role == "coordinator":
+        if is_department_manager(user):
             pass
 
-        elif user.role == "teacher":
+        elif is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
@@ -2059,7 +2084,7 @@ class MonthlyLessonPlanListCreateView(APIView):
 
             plans = plans.filter(teacher=teacher)
 
-        elif user.role == "student":
+        elif is_student_role(user):
             try:
                 student = user.student_profile
             except StudentProfile.DoesNotExist:
@@ -2080,7 +2105,7 @@ class MonthlyLessonPlanListCreateView(APIView):
     def post(self, request):
         user = request.user
 
-        if user.role not in ["coordinator", "teacher"]:
+        if not (is_department_manager(user) or is_teacher_role(user)):
             return Response(
                 {"detail": "Students cannot create monthly lesson plans."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -2123,7 +2148,7 @@ class MonthlyLessonPlanListCreateView(APIView):
         except StudentProfile.DoesNotExist:
             return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if user.role == "teacher":
+        if is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
@@ -2188,10 +2213,10 @@ class MonthlyLessonPlanDetailView(APIView):
         except MonthlyLessonPlan.DoesNotExist:
             return Response({"detail": "Monthly lesson plan not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if user.role == "coordinator":
+        if is_department_manager(user):
             pass
 
-        elif user.role == "teacher":
+        elif is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
@@ -2205,7 +2230,7 @@ class MonthlyLessonPlanDetailView(APIView):
 
         else:
             return Response(
-                {"detail": "Only coordinators and teachers can update monthly lesson plans."},
+                {"detail": "Only department admins and coordinators and teachers can update monthly lesson plans."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -2236,9 +2261,9 @@ class MonthlyLessonPlanDetailView(APIView):
     def delete(self, request, pk):
         user = request.user
 
-        if user.role != "coordinator":
+        if not is_department_manager(user):
             return Response(
-                {"detail": "Only coordinators can delete monthly lesson plans."},
+                {"detail": "Only department admins and coordinators can delete monthly lesson plans."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -2263,18 +2288,29 @@ class MonthlyLessonSummaryView(APIView):
         teacher_id = safe_int(request.query_params.get("teacher_id"))
 
         if not month or month < 1 or month > 12:
-            return Response({"detail": "month must be between 1 and 12."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "month must be between 1 and 12."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not year or year < 2000:
-            return Response({"detail": "year is required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "year is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         first_day, next_month = build_month_range(year, month)
 
-        lessons = Lesson.objects.select_related(
+        reports = DailyLessonReport.objects.select_related(
             "student__user",
             "teacher__user",
             "created_by",
-        ).filter(date__gte=first_day, date__lt=next_month)
+        ).prefetch_related(
+            "subject_entries"
+        ).filter(
+            date__gte=first_day,
+            date__lt=next_month,
+        )
 
         plans = MonthlyLessonPlan.objects.select_related(
             "student__user",
@@ -2289,44 +2325,73 @@ class MonthlyLessonSummaryView(APIView):
         ).filter(month=month, year=year)
 
         if student_id:
-            lessons = lessons.filter(student_id=student_id)
+            reports = reports.filter(student_id=student_id)
             plans = plans.filter(student_id=student_id)
             summaries = summaries.filter(student_id=student_id)
 
         if teacher_id:
-            lessons = lessons.filter(teacher_id=teacher_id)
+            reports = reports.filter(teacher_id=teacher_id)
             plans = plans.filter(teacher_id=teacher_id)
             summaries = summaries.filter(teacher_id=teacher_id)
 
-        if user.role == "coordinator":
+        if is_department_manager(user):
             pass
 
-        elif user.role == "teacher":
+        elif is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
-                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
+                return Response(
+                    {"detail": "Teacher profile not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
-            lessons = lessons.filter(teacher=teacher)
+            reports = reports.filter(teacher=teacher)
             plans = plans.filter(teacher=teacher)
             summaries = summaries.filter(teacher=teacher)
 
-        elif user.role == "student":
+        elif is_student_role(user):
             try:
                 student = user.student_profile
             except StudentProfile.DoesNotExist:
-                return Response({"detail": "Student profile not found."}, status=status.HTTP_404_NOT_FOUND)
+                return Response(
+                    {"detail": "Student profile not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
-            lessons = lessons.filter(student=student)
+            reports = reports.filter(student=student)
             plans = plans.filter(student=student)
             summaries = summaries.filter(student=student)
 
         else:
-            return Response({"detail": "Invalid role."}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"detail": "Invalid role."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
-        lesson_rows = list(lessons.order_by("student__user__first_name", "date", "id"))
-        plan_rows = list(plans.order_by("student__user__first_name", "subject", "id"))
-        summary_rows = list(summaries.order_by("student__user__first_name", "subject", "id"))
+        report_rows = list(
+            reports.order_by(
+                "student__user__first_name",
+                "date",
+                "id",
+            )
+        )
+
+        plan_rows = list(
+            plans.order_by(
+                "student__user__first_name",
+                "subject",
+                "id",
+            )
+        )
+
+        summary_rows = list(
+            summaries.order_by(
+                "student__user__first_name",
+                "subject",
+                "id",
+            )
+        )
 
         progress_counts = {
             "excellent": 0,
@@ -2338,22 +2403,17 @@ class MonthlyLessonSummaryView(APIView):
 
         subjects = Counter()
         students = {}
+        lesson_rows = []
 
-        for item in lesson_rows:
-            status_value = item.progress_status or "blank"
-            progress_counts[status_value] = progress_counts.get(status_value, 0) + 1
+        for report in report_rows:
+            student_key = report.student_id
 
-            if item.subject:
-                subjects[item.subject] += 1
-
-            key = item.student_id
-
-            if key not in students:
-                students[key] = {
-                    "student_id": item.student_id,
-                    "student_name": str(item.student),
-                    "teacher_id": item.teacher_id,
-                    "teacher_name": str(item.teacher),
+            if student_key not in students:
+                students[student_key] = {
+                    "student_id": report.student_id,
+                    "student_name": str(report.student),
+                    "teacher_id": report.teacher_id,
+                    "teacher_name": str(report.teacher),
                     "total_lessons": 0,
                     "subjects": Counter(),
                     "progress_counts": {
@@ -2367,29 +2427,66 @@ class MonthlyLessonSummaryView(APIView):
                     "remarks": [],
                 }
 
-            students[key]["total_lessons"] += 1
+            students[student_key]["total_lessons"] += 1
 
-            if item.subject:
-                students[key]["subjects"][item.subject] += 1
+            for entry in report.subject_entries.all():
+                status_value = entry.progress_status or "blank"
 
-            students[key]["progress_counts"][status_value] = (
-                students[key]["progress_counts"].get(status_value, 0) + 1
-            )
+                progress_counts[status_value] = (
+                    progress_counts.get(status_value, 0) + 1
+                )
 
-            if item.topic_summary:
-                students[key]["topics"].append(item.topic_summary)
+                if entry.subject:
+                    subjects[entry.subject] += 1
+                    students[student_key]["subjects"][entry.subject] += 1
 
-            if item.remarks:
-                students[key]["remarks"].append(item.remarks)
+                students[student_key]["progress_counts"][status_value] = (
+                    students[student_key]["progress_counts"].get(
+                        status_value,
+                        0,
+                    ) + 1
+                )
 
-        saved_by_student = {}
-        for summary in summary_rows:
-            saved_by_student[summary.student_id] = summary
+                if entry.topic_summary:
+                    students[student_key]["topics"].append(
+                        entry.topic_summary
+                    )
+
+                if entry.remarks:
+                    students[student_key]["remarks"].append(
+                        entry.remarks
+                    )
+
+                lesson_rows.append({
+                    "id": entry.id,
+                    "report_id": report.id,
+                    "student_id": report.student_id,
+                    "student_name": str(report.student),
+                    "teacher_id": report.teacher_id,
+                    "teacher_name": str(report.teacher),
+                    "date": str(report.date),
+                    "subject": entry.subject,
+                    "topic_summary": entry.topic_summary,
+                    "progress_status": entry.progress_status,
+                    "remarks": entry.remarks,
+                    "lesson_data": entry.lesson_data,
+                    "notes": report.notes,
+                    "created_at": report.created_at,
+                    "updated_at": report.updated_at,
+                })
+
+        saved_by_student = {
+            summary.student_id: summary
+            for summary in summary_rows
+        }
 
         student_summaries = []
 
         for item in students.values():
-            saved_summary = saved_by_student.get(item["student_id"])
+            saved_summary = saved_by_student.get(
+                item["student_id"]
+            )
+
             student_summaries.append({
                 "student_id": item["student_id"],
                 "student_name": item["student_name"],
@@ -2401,28 +2498,44 @@ class MonthlyLessonSummaryView(APIView):
                 "topics": item["topics"][:20],
                 "remarks": item["remarks"][:20],
                 "auto_summary": build_student_auto_summary(item),
-                "saved_summary": monthly_summary_payload(saved_summary) if saved_summary else None,
+                "saved_summary": (
+                    monthly_summary_payload(saved_summary)
+                    if saved_summary
+                    else None
+                ),
             })
 
         return Response({
             "month": month,
             "year": year,
-            "total_lessons": len(lesson_rows),
+            "total_lessons": len(report_rows),
             "total_plans": len(plan_rows),
             "subjects": dict(subjects),
             "progress_counts": progress_counts,
-            "plans": [monthly_plan_payload(item) for item in plan_rows],
-            "lessons": [lesson_payload(item) for item in lesson_rows],
-            "summaries": [monthly_summary_payload(item) for item in summary_rows],
+            "plans": [
+                monthly_plan_payload(item)
+                for item in plan_rows
+            ],
+            "lessons": lesson_rows,
+            "summaries": [
+                monthly_summary_payload(item)
+                for item in summary_rows
+            ],
             "student_summaries": student_summaries,
         })
 
     def post(self, request):
         user = request.user
 
-        if user.role not in ["coordinator", "teacher"]:
+        if not (
+            is_department_manager(user)
+            or is_teacher_role(user)
+        ):
             return Response(
-                {"detail": "Students cannot create monthly lesson summaries."},
+                {
+                    "detail":
+                    "Students cannot create monthly lesson summaries."
+                },
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -2432,13 +2545,22 @@ class MonthlyLessonSummaryView(APIView):
         year = safe_int(request.data.get("year"))
 
         if not student_id:
-            return Response({"detail": "student_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "student_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not month or month < 1 or month > 12:
-            return Response({"detail": "month must be between 1 and 12."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "month must be between 1 and 12."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not year or year < 2000:
-            return Response({"detail": "year is required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "year is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             student = StudentProfile.objects.select_related(
@@ -2447,17 +2569,26 @@ class MonthlyLessonSummaryView(APIView):
                 "user",
             ).get(id=student_id)
         except StudentProfile.DoesNotExist:
-            return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"detail": "Student not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
-        if user.role == "teacher":
+        if is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
-                return Response({"detail": "Teacher profile not found."}, status=status.HTTP_404_NOT_FOUND)
+                return Response(
+                    {"detail": "Teacher profile not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
             if student.teacher_id != teacher.id:
                 return Response(
-                    {"detail": "You can only create summaries for your assigned students."},
+                    {
+                        "detail":
+                        "You can only create summaries for your assigned students."
+                    },
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
@@ -2467,42 +2598,59 @@ class MonthlyLessonSummaryView(APIView):
             try:
                 teacher = TeacherProfile.objects.get(id=teacher_id)
             except TeacherProfile.DoesNotExist:
-                return Response({"detail": "Teacher not found."}, status=status.HTTP_404_NOT_FOUND)
+                return Response(
+                    {"detail": "Teacher not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
         first_day, next_month = build_month_range(year, month)
 
-        lessons = Lesson.objects.filter(
+        reports = DailyLessonReport.objects.prefetch_related(
+            "subject_entries"
+        ).filter(
             student=student,
             teacher=teacher,
             date__gte=first_day,
             date__lt=next_month,
         ).order_by("date", "id")
 
-        total_lessons = lessons.count()
+        report_rows = list(reports)
+        total_lessons = len(report_rows)
+
         subjects = Counter()
         progress_counts = Counter()
         topics = []
         remarks = []
 
-        for lesson in lessons:
-            if lesson.subject:
-                subjects[lesson.subject] += 1
+        for report in report_rows:
+            for entry in report.subject_entries.all():
+                if entry.subject:
+                    subjects[entry.subject] += 1
 
-            progress_counts[lesson.progress_status or "blank"] += 1
+                progress_counts[
+                    entry.progress_status or "blank"
+                ] += 1
 
-            if lesson.topic_summary:
-                topics.append(lesson.topic_summary)
+                if entry.topic_summary:
+                    topics.append(entry.topic_summary)
 
-            if lesson.remarks:
-                remarks.append(lesson.remarks)
+                if entry.remarks:
+                    remarks.append(entry.remarks)
 
-        summary_text = str(request.data.get("summary_text") or "").strip()
-        strengths = str(request.data.get("strengths") or "").strip()
+        summary_text = str(
+            request.data.get("summary_text") or ""
+        ).strip()
+
+        strengths = str(
+            request.data.get("strengths") or ""
+        ).strip()
+
         weaknesses = str(
             request.data.get("improvement_areas")
             or request.data.get("weaknesses")
             or ""
         ).strip()
+
         recommendations = str(
             request.data.get("parent_message")
             or request.data.get("recommendations")
@@ -2511,25 +2659,48 @@ class MonthlyLessonSummaryView(APIView):
 
         if not summary_text:
             if total_lessons == 0:
-                summary_text = f"No lessons were recorded for {student} in {month}/{year}."
-            else:
-                subject_names = ", ".join(subjects.keys()) if subjects else "multiple subjects"
-                topic_preview = ", ".join(topics[:5]) if topics else "regular revision"
                 summary_text = (
-                    f"{student} completed {total_lessons} lesson"
-                    f"{'' if total_lessons == 1 else 's'} in {month}/{year}. "
+                    f"No lessons were recorded for "
+                    f"{student} in {month}/{year}."
+                )
+            else:
+                subject_names = (
+                    ", ".join(subjects.keys())
+                    if subjects
+                    else "multiple subjects"
+                )
+
+                topic_preview = (
+                    ", ".join(topics[:5])
+                    if topics
+                    else "regular revision"
+                )
+
+                summary_text = (
+                    f"{student} completed {total_lessons} "
+                    f"daily lesson report"
+                    f"{'' if total_lessons == 1 else 's'} "
+                    f"in {month}/{year}. "
                     f"Subjects covered: {subject_names}. "
                     f"Main topics: {topic_preview}."
                 )
 
         if not strengths:
-            strengths = "The student continued learning and completed the recorded lessons for this month."
+            strengths = (
+                "The student continued learning and completed "
+                "the recorded lessons for this month."
+            )
 
         if not weaknesses:
-            weaknesses = "Continue regular revision and focus on consistency."
+            weaknesses = (
+                "Continue regular revision and focus on consistency."
+            )
 
         if not recommendations:
-            recommendations = "Please support daily revision at home and encourage regular attendance."
+            recommendations = (
+                "Please support daily revision at home and "
+                "encourage regular attendance."
+            )
 
         source = (
             MonthlyLessonSummary.SummarySource.AI
@@ -2537,26 +2708,33 @@ class MonthlyLessonSummaryView(APIView):
             else MonthlyLessonSummary.SummarySource.TEACHER
         )
 
-        summary, created = MonthlyLessonSummary.objects.update_or_create(
-            student=student,
-            teacher=teacher,
-            month=month,
-            year=year,
-            subject="",
-            defaults={
-                "summary_text": summary_text,
-                "strengths": strengths,
-                "weaknesses": weaknesses,
-                "recommendations": recommendations,
-                "source": source,
-                "generated_from_lessons_count": total_lessons,
-                "created_by": user,
-            },
+        summary, created = (
+            MonthlyLessonSummary.objects.update_or_create(
+                student=student,
+                teacher=teacher,
+                month=month,
+                year=year,
+                subject="",
+                defaults={
+                    "summary_text": summary_text,
+                    "strengths": strengths,
+                    "weaknesses": weaknesses,
+                    "recommendations": recommendations,
+                    "source": source,
+                    "generated_from_lessons_count":
+                        total_lessons,
+                    "created_by": user,
+                },
+            )
         )
 
         return Response(
             monthly_summary_payload(summary),
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+            status=(
+                status.HTTP_201_CREATED
+                if created
+                else status.HTTP_200_OK
+            ),
         )
 
 
@@ -2734,7 +2912,7 @@ class AcademyStateView(APIView):
             queryset=ClassSchedule.objects.filter(is_active=True).order_by("weekday", "time_slot"),
         )
 
-        if user.role == "coordinator":
+        if is_department_manager(user):
             teachers = TeacherProfile.objects.select_related("user").order_by("id")
             students = StudentProfile.objects.select_related(
                 "user",
@@ -2746,7 +2924,7 @@ class AcademyStateView(APIView):
                 "marked_by",
             ).order_by("-date", "-id")[:2000]
 
-        elif user.role == "teacher":
+        elif is_teacher_role(user):
             try:
                 teacher = user.teacher_profile
             except TeacherProfile.DoesNotExist:
@@ -2763,7 +2941,7 @@ class AcademyStateView(APIView):
                 "marked_by",
             ).filter(Q(teacher=teacher) | Q(student__teacher=teacher)).order_by("-date", "-id")[:1000]
 
-        elif user.role == "student":
+        elif is_student_role(user):
             try:
                 student = user.student_profile
             except StudentProfile.DoesNotExist:
@@ -2911,8 +3089,8 @@ class AcademyStateView(APIView):
     def post(self, request):
         user = request.user
 
-        if user.role != "coordinator":
-            return Response({"detail": "Only coordinators can sync state."}, status=status.HTTP_403_FORBIDDEN)
+        if not is_department_manager(user):
+            return Response({"detail": "Only department admins and coordinators can sync state."}, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data or {}
         teachers_data = data.get("teachers", [])
@@ -3119,7 +3297,7 @@ def build_assistant_school_context(user):
         "created_by",
     ).order_by("-year", "-month", "-updated_at", "-id")[:60]
 
-    if user.role == "teacher":
+    if is_teacher_role(user):
         try:
             teacher = user.teacher_profile
             teachers = teachers.filter(id=teacher.id)
@@ -3130,7 +3308,7 @@ def build_assistant_school_context(user):
         except TeacherProfile.DoesNotExist:
             pass
 
-    elif user.role == "student":
+    elif is_student_role(user):
         try:
             student = user.student_profile
             teachers = teachers.filter(id=student.teacher_id)

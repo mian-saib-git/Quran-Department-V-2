@@ -52,4 +52,16 @@ components.zip
 build/
 
 # Vercel
-.vercel
+.vercel*.bak
+*.pyc
+diagnose-actions.cjs
+diagnose-report-buttons.cjs
+diagnose-scheduling.cjs
+diagnose.mjs
+feature_lock_diagnostic.txt
+saas_accounts_diagnostic.txt
+apply_feature_lock_ui.py
+update_locked_feature_ui.py
+refine_locked_feature_ui.py
+*.bak
+*_diagnostic.txt

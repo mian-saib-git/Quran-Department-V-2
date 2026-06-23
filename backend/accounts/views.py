@@ -17,6 +17,43 @@ from .serializers import (
 from academy.models import TeacherProfile, StudentProfile, StudentSubject, ClassSchedule
 from academy.ws_notify import notify_global
 
+def account_role(user):
+    return str(getattr(user, "role", "") or "").lower()
+
+
+def can_manage_department_accounts(user):
+    role = account_role(user)
+    return bool(
+        user
+        and user.is_authenticated
+        and (
+            getattr(user, "is_superuser", False)
+            or role in {"coordinator", "department_admin", "institution_admin"}
+        )
+    )
+
+
+def can_manage_coordinator_accounts(user):
+    role = account_role(user)
+    return bool(
+        user
+        and user.is_authenticated
+        and (
+            getattr(user, "is_superuser", False)
+            or role in {"department_admin", "institution_admin"}
+        )
+    )
+
+
+
+def user_can_manage_accounts(user):
+    role = str(getattr(user, "role", "") or "").lower()
+    return (
+        bool(getattr(user, "is_superuser", False))
+        or role in {"coordinator", "department_admin", "institution_admin", "platform_admin"}
+    )
+
+
 
 def auth_payload(user):
     payload = {
@@ -200,9 +237,9 @@ class CoordinatorAccountListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        if request.user.role != User.Role.COORDINATOR:
+        if not can_manage_department_accounts(request.user):
             return Response(
-                {"detail": "Only coordinators can view accounts."},
+                {"detail": "Only Quran department admins and coordinators can view accounts."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -280,7 +317,7 @@ class CoordinatorAccountListCreateView(APIView):
             return qs
 
         def build_coordinators():
-            if not request.user.is_superuser:
+            if not can_manage_coordinator_accounts(request.user):
                 return User.objects.none()
 
             qs = User.objects.filter(role=User.Role.COORDINATOR).order_by(
@@ -390,7 +427,7 @@ class CoordinatorAccountListCreateView(APIView):
         })
 
     def post(self, request):
-        if request.user.role != User.Role.COORDINATOR:
+        if not can_manage_department_accounts(request.user):
             return Response(
                 {"detail": "Only coordinators can create accounts."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -450,7 +487,7 @@ class CoordinatorAccountDetailView(APIView):
             return None
 
     def patch(self, request, user_id):
-        if request.user.role != User.Role.COORDINATOR:
+        if not can_manage_department_accounts(request.user):
             return Response(
                 {"detail": "Only coordinators can edit accounts."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -492,7 +529,7 @@ class CoordinatorAccountDetailView(APIView):
         return Response(account)
 
     def delete(self, request, user_id):
-        if request.user.role != User.Role.COORDINATOR:
+        if not can_manage_department_accounts(request.user):
             return Response(
                 {"detail": "Only coordinators can delete accounts."},
                 status=status.HTTP_403_FORBIDDEN,

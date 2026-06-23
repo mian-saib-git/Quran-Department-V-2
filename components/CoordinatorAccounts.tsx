@@ -37,6 +37,14 @@ import {
 import { loadSession } from "../services/sessionService";
 import { useAcademyWS } from "../hooks/useAcademyWS";
 
+import { showFeatureLocked } from "../services/featureAccess";
+const DEPARTMENT_ADMIN_ROLES = ["department_admin", "institution_admin"];
+
+const isDepartmentAdminRole = (role: unknown) =>
+  DEPARTMENT_ADMIN_ROLES.includes(String(role || "").toLowerCase());
+
+const isCoordinatorRole = (role: unknown) =>
+  String(role || "").toLowerCase() === "coordinator";
 
 type Mode = "coordinator" | "teacher" | "student";
 
@@ -559,7 +567,15 @@ function statusBadge(active: boolean) {
   );
 }
 
-export default function CoordinatorAccounts() {
+type CoordinatorAccountsProps = {
+  canBulkImport?: boolean;
+  canDeleteAccounts?: boolean;
+};
+
+export default function CoordinatorAccounts({
+  canBulkImport = true,
+  canDeleteAccounts = true,
+}: CoordinatorAccountsProps = {}) {
   const [data, setData] = useState<CoordinatorAccountsResponse>({
     coordinators: [],
     teachers: [],
@@ -568,6 +584,12 @@ export default function CoordinatorAccounts() {
 
   const session = loadSession();
   const isSuperAdmin = Boolean(session?.user?.is_superuser);
+  const sessionRole = String((session as any)?.role || (session as any)?.user?.role || "").toLowerCase();
+
+  // Department admin can manage coordinators, teachers, and students.
+  // Coordinator can manage only teachers and students.
+  const canManageCoordinators = isSuperAdmin || isDepartmentAdminRole(sessionRole);
+  const canManageDepartmentAccounts = canManageCoordinators || isCoordinatorRole(sessionRole);
 
   const [activeMode, setActiveMode] = useState<Mode>("teacher");
   const [search, setSearch] = useState("");
@@ -624,10 +646,10 @@ export default function CoordinatorAccounts() {
   });
 
   useEffect(() => {
-    if (!isSuperAdmin && activeMode === "coordinator") {
+    if (!canManageCoordinators && activeMode === "coordinator") {
       setActiveMode("teacher");
     }
-  }, [isSuperAdmin, activeMode]);
+  }, [canManageCoordinators, activeMode]);
 
   const filteredCoordinators = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -716,7 +738,10 @@ export default function CoordinatorAccounts() {
   };
 
   const openCreate = (role: Mode) => {
-    if (role === "coordinator" && !isSuperAdmin) return;
+    if (role === "coordinator" && !canManageCoordinators) {
+      setMessage("Only department admins can manage coordinator accounts.");
+      return;
+    }
 
     setShowPassword(false);
     setForm(emptyForm(role));
@@ -735,7 +760,7 @@ export default function CoordinatorAccounts() {
   };
 
   const openEditCoordinator = (coordinator: CoordinatorCoordinatorAccount) => {
-    if (!isSuperAdmin) return;
+    if (!canManageCoordinators) return;
 
     setShowPassword(false);
     setForm({
@@ -805,6 +830,14 @@ export default function CoordinatorAccounts() {
   };
 
   const openCsvImport = () => {
+    if (!canBulkImport) {
+      showFeatureLocked(
+        "Bulk Import",
+        "Bulk Import is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation."
+      );
+      return;
+    }
+
     setCsvRows([]);
     setCsvWarnings([]);
     setCsvFileName("");
@@ -967,8 +1000,8 @@ export default function CoordinatorAccounts() {
         return;
       }
 
-      if (form.role === "coordinator" && !isSuperAdmin) {
-        setMessage("Only superadmin can manage coordinator accounts.");
+      if (form.role === "coordinator" && !canManageCoordinators) {
+        setMessage("Only department admins can manage coordinator accounts.");
         setSaving(false);
         return;
       }
@@ -1039,6 +1072,14 @@ export default function CoordinatorAccounts() {
   };
 
   const deleteAccount = async (userId: number) => {
+    if (!canDeleteAccounts) {
+      showFeatureLocked(
+        "Delete Accounts",
+        "Permanent account deletion is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation."
+      );
+      return;
+    }
+
     if (
       !confirm(
         "Delete this account permanently? This will remove the account and related records from the system. This action cannot be undone."
@@ -1081,7 +1122,7 @@ export default function CoordinatorAccounts() {
   };
 
   const activeCount = [
-    ...(isSuperAdmin ? data.coordinators : []),
+    ...(canManageCoordinators ? data.coordinators : []),
     ...data.teachers,
     ...data.students,
   ].filter((x) => x.is_active).length;
@@ -1108,6 +1149,14 @@ export default function CoordinatorAccounts() {
       ? pagedTeachers
       : pagedStudents;
 
+  if (!canManageDepartmentAccounts) {
+    return (
+      <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+        Only Quran department admins and coordinators can view accounts.
+      </div>
+    );
+  }
+
   return (
     <div className="w-full space-y-6">
       <div className="relative overflow-hidden rounded-[32px] border border-slate-200/70 bg-white/70 backdrop-blur-xl shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
@@ -1119,7 +1168,7 @@ export default function CoordinatorAccounts() {
             <div>
               <div className="inline-flex items-center gap-2 rounded-full bg-indigo-50 border border-indigo-100 px-3 py-1.5 text-xs font-extrabold text-indigo-700">
                 <ShieldCheck size={14} />
-                {isSuperAdmin ? "Superadmin Control" : "Coordinator Control"}
+                {canManageCoordinators ? "Department Admin Control" : "Coordinator Control"}
               </div>
 
               <h2 className="mt-4 text-2xl md:text-3xl font-extrabold text-slate-950 tracking-tight">
@@ -1142,10 +1191,17 @@ export default function CoordinatorAccounts() {
               <button
                 type="button"
                 onClick={openCsvImport}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm font-extrabold text-slate-700 shadow-sm hover:bg-white transition"
+                aria-disabled={!canBulkImport}
+                title={canBulkImport ? "Import CSV" : "Bulk Import is not enabled"}
+                className={`inline-flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-extrabold shadow-sm transition ${
+                  canBulkImport
+                    ? "border-slate-200 bg-white/80 text-slate-700 hover:bg-white"
+                    : "border-slate-200 bg-slate-100 text-slate-500 opacity-75 hover:bg-slate-200"
+                }`}
               >
                 <Upload size={16} />
-                Import CSV
+                <span>Import CSV</span>
+                {!canBulkImport && <span className="text-[10px]">??</span>}
               </button>
               <button
                 onClick={() => openCreate(activeMode)}
@@ -1162,8 +1218,8 @@ export default function CoordinatorAccounts() {
             </div>
           </div>
 
-          <div className={`mt-7 grid grid-cols-1 ${isSuperAdmin ? "sm:grid-cols-4" : "sm:grid-cols-3"} gap-4`}>
-            {isSuperAdmin && (
+          <div className={`mt-7 grid grid-cols-1 ${canManageCoordinators ? "sm:grid-cols-4" : "sm:grid-cols-3"} gap-4`}>
+            {canManageCoordinators && (
               <div className="rounded-3xl border border-slate-200/70 bg-white/75 p-5 shadow-sm">
                 <div className="flex items-center justify-between">
                   <div>
@@ -1225,7 +1281,7 @@ export default function CoordinatorAccounts() {
       <div className="rounded-[28px] border border-slate-200/70 bg-white/75 backdrop-blur-xl shadow-[0_18px_50px_rgba(15,23,42,0.07)] overflow-hidden">
         <div className="p-5 border-b border-slate-200/70 flex flex-col lg:flex-row gap-4 lg:items-center justify-between">
           <div className="flex rounded-2xl bg-slate-100/70 p-1">
-            {isSuperAdmin && (
+            {canManageCoordinators && (
               <button
                 onClick={() => setActiveMode("coordinator")}
                 className={`px-4 py-2.5 rounded-xl text-sm font-extrabold transition ${
@@ -1281,13 +1337,14 @@ export default function CoordinatorAccounts() {
               <span className="text-sm font-extrabold">Loading accounts...</span>
             </div>
           </div>
-        ) : activeMode === "coordinator" && isSuperAdmin ? (
+        ) : activeMode === "coordinator" && canManageCoordinators ? (
           <CoordinatorTable
             items={filteredCoordinators}
             copiedUsername={copiedUsername}
             onCopyUsername={handleCopyUsername}
             onEdit={openEditCoordinator}
             onDisable={deleteAccount}
+            canDeleteAccounts={canDeleteAccounts}
           />
         ) : activeMode === "teacher" ? (
           <TeacherTable
@@ -1296,6 +1353,7 @@ export default function CoordinatorAccounts() {
             onCopyUsername={handleCopyUsername}
             onEdit={openEditTeacher}
             onDisable={deleteAccount}
+            canDeleteAccounts={canDeleteAccounts}
           />
         ) : (
           <StudentTable
@@ -1304,6 +1362,7 @@ export default function CoordinatorAccounts() {
             onCopyUsername={handleCopyUsername}
             onEdit={openEditStudent}
             onDisable={deleteAccount}
+            canDeleteAccounts={canDeleteAccounts}
           />
         )}
 
@@ -1592,7 +1651,7 @@ export default function CoordinatorAccounts() {
 
                     <p className="mt-1 text-sm font-semibold text-slate-500">
                       {form.role === "coordinator"
-                        ? "Only superadmin can manage coordinator login access."
+                        ? "Only department admins can manage coordinator login access."
                         : "Manage login details, profile information, and account status."}
                     </p>
                   </div>
@@ -2533,12 +2592,14 @@ function CoordinatorTable({
   onCopyUsername,
   onEdit,
   onDisable,
+canDeleteAccounts = true,
 }: {
   items: CoordinatorCoordinatorAccount[];
   copiedUsername: string;
   onCopyUsername: (username: string) => void;
   onEdit: (item: CoordinatorCoordinatorAccount) => void;
   onDisable: (userId: number) => void;
+  canDeleteAccounts?: boolean;
 }) {
   if (!items.length) {
     return <EmptyState title="No coordinators found" subtitle="Create your first coordinator account." />;
@@ -2607,7 +2668,7 @@ function CoordinatorTable({
                     <button
                       onClick={() => onDisable(item.id)}
                       className="h-10 w-10 rounded-2xl border border-rose-100 bg-rose-50 text-rose-600 hover:bg-rose-100"
-                      title="Disable"
+                      title={canDeleteAccounts ? "Delete permanently" : "Delete Accounts is not enabled"}
                     >
                       <Trash2 size={16} className="mx-auto" />
                     </button>
@@ -2632,12 +2693,14 @@ function TeacherTable({
   onCopyUsername,
   onEdit,
   onDisable,
+canDeleteAccounts = true,
 }: {
   items: CoordinatorTeacherAccount[];
   copiedUsername: string;
   onCopyUsername: (username: string) => void;
   onEdit: (item: CoordinatorTeacherAccount) => void;
   onDisable: (userId: number) => void;
+  canDeleteAccounts?: boolean;
 }) {
   if (!items.length) {
     return <EmptyState title="No teachers found" subtitle="Create your first teacher account." />;
@@ -2706,13 +2769,15 @@ function TeacherTable({
                     <Edit2 size={16} className="mx-auto" />
                   </button>
 
+                  {(
                   <button
                     onClick={() => onDisable(item.id)}
                     className="h-10 w-10 rounded-2xl border border-rose-100 bg-rose-50 text-rose-600 hover:bg-rose-100"
-                    title="Disable"
+                    title={canDeleteAccounts ? "Delete permanently" : "Delete Accounts is not enabled"}
                   >
                     <Trash2 size={16} className="mx-auto" />
                   </button>
+                  )}
                 </div>
               </td>
             </tr>
@@ -2735,12 +2800,14 @@ function StudentTable({
   onCopyUsername,
   onEdit,
   onDisable,
+canDeleteAccounts = true,
 }: {
   items: CoordinatorStudentAccount[];
   copiedUsername: string;
   onCopyUsername: (username: string) => void;
   onEdit: (item: CoordinatorStudentAccount) => void;
   onDisable: (userId: number) => void;
+  canDeleteAccounts?: boolean;
 }) {
   if (!items.length) {
     return <EmptyState title="No students found" subtitle="Create your first student account." />;
@@ -2875,14 +2942,16 @@ function StudentTable({
                       <Edit2 size={16} className="mx-auto" />
                     </button>
 
+                    {(
                     <button
                       type="button"
                       onClick={() => onDisable(item.id)}
                       className="h-10 w-10 rounded-2xl border border-rose-100 bg-rose-50 text-rose-600 hover:bg-rose-100 shadow-[0_10px_22px_rgba(244,63,94,0.10)] transition"
-                      title="Disable"
+                      title={canDeleteAccounts ? "Delete permanently" : "Delete Accounts is not enabled"}
                     >
                       <Trash2 size={16} className="mx-auto" />
                     </button>
+                    )}
                   </div>
                 </td>
               </tr>

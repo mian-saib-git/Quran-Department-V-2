@@ -1371,3 +1371,53 @@ aside[class*="fixed"][class*="inset-y-0"] nav::-webkit-scrollbar {
   }
 }
 
+
+
+/* Fast theme switching: prevent laggy full-page transition recalculation */
+html.theme-fast-switch,
+html.theme-fast-switch *,
+html.theme-fast-switch *::before,
+html.theme-fast-switch *::after {
+  transition: none !important;
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  scroll-behavior: auto !important;
+}
+
+
+
+/* Platform Admin separate portal scroll fix */
+.platform-admin-scroll {
+  height: 100vh;
+  overflow-y: auto !important;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+}
+
+.platform-admin-scroll:focus {
+  outline: none;
+}
+
+/* Department sidebar locked feature styling */
+.department-sidebar-nav button[aria-disabled="true"] {
+  opacity: 0.48 !important;
+  filter: grayscale(0.28) saturate(0.7);
+  cursor: pointer;
+}
+
+.department-sidebar-nav button[aria-disabled="true"]:hover {
+  opacity: 0.58 !important;
+}
+
+.department-sidebar-nav .feature-lock-badge {
+  opacity: 1 !important;
+  filter: none !important;
+  z-index: 20;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .department-sidebar-nav button {
+    transition: none !important;
+  }
+}
+

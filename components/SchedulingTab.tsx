@@ -105,7 +105,7 @@ const TimeCell = memo(function TimeCell({ slot }: { slot: string }) {
         bg-white/96 backdrop-blur-xl
         border-r border-b border-slate-200/80
         px-4 py-3
-        shadow-[8px_0_18px_rgba(15,23,42,0.035)]
+
         dark:bg-slate-950/96 dark:border-slate-700
       "
     >
@@ -345,16 +345,14 @@ export const SchedulingTab: React.FC<SchedulingTabProps> = ({
           relative overflow-hidden
           rounded-[34px]
           border border-white/80
-          bg-white/82 backdrop-blur-xl
+          bg-white/95
           h-[calc(100vh-140px)]
           flex flex-col
-          shadow-[0_18px_55px_rgba(15,23,42,0.08)]
+          shadow-none
           dark:bg-slate-950/70 dark:border-slate-700/70
         "
       >
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white via-slate-50/60 to-white dark:from-slate-950 dark:via-slate-900/70 dark:to-slate-950" />
-        <div className="pointer-events-none absolute -top-40 -right-40 h-96 w-96 rounded-full bg-sky-200/35 blur-3xl dark:bg-sky-500/10" />
-        <div className="pointer-events-none absolute -bottom-44 -left-44 h-96 w-96 rounded-full bg-indigo-100/35 blur-3xl dark:bg-indigo-500/10" />
 
         {/* Header */}
         <div
@@ -362,7 +360,7 @@ export const SchedulingTab: React.FC<SchedulingTabProps> = ({
             relative z-10
             px-5 py-4
             border-b border-slate-200/70
-            bg-white/86 backdrop-blur-xl
+            bg-white/95
             flex items-center justify-between gap-4
             shrink-0
             dark:bg-slate-950/86 dark:border-slate-700
@@ -440,7 +438,7 @@ export const SchedulingTab: React.FC<SchedulingTabProps> = ({
             relative z-10
             flex-1
             overflow-x-auto overflow-y-auto
-            bg-white/55
+            bg-white
             custom-scrollbar
             dark:bg-slate-950/45
           "
@@ -455,7 +453,7 @@ export const SchedulingTab: React.FC<SchedulingTabProps> = ({
                     border-b border-r border-slate-200/80
                     px-4 py-4
                     min-w-[132px]
-                    shadow-[8px_0_18px_rgba(15,23,42,0.04)]
+
                     dark:bg-slate-950/96 dark:border-slate-700
                   "
                 >

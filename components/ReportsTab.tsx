@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { showFeatureLocked } from "../services/featureAccess";
 import {
   AppState,
   AttendanceRecord,
@@ -285,20 +286,38 @@ function IconButton({
   icon,
   label,
   tone,
+  enabled = true,
 }: {
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
   tone: string;
+  enabled?: boolean;
 }) {
   return (
     <button
-      onClick={onClick}
-      className={`inline-flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-extrabold transition active:scale-[0.99] ${tone}`}
+      onClick={() => {
+        if (!enabled) {
+          showFeatureLocked(
+            `${label} Export`,
+            `${label} export is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
+          );
+          return;
+        }
+        onClick();
+      }}
+      aria-disabled={!enabled}
+      className={`inline-flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-extrabold transition active:scale-[0.99] ${
+        enabled
+          ? tone
+          : "border border-slate-200 bg-slate-100 text-slate-500 opacity-75 hover:bg-slate-200"
+      }`}
       type="button"
+      title={enabled ? label : `${label} is not enabled`}
     >
       {icon}
       {label}
+      {!enabled && <span className="ml-1 text-[10px]">🔒</span>}
     </button>
   );
 }
@@ -313,6 +332,7 @@ function StatCard({
   value: number | string;
   icon: React.ReactNode;
   tone: string;
+  show?: boolean;
 }) {
   return (
     <div className={`rounded-3xl border p-5 shadow-[0_14px_34px_rgba(15,23,42,0.06)] ${tone}`}>
@@ -332,13 +352,21 @@ function StatCard({
   );
 }
 
+type ReportsTabProps = {
+  appState: AppState;
+  generatedBy?: string;
+  canExportPdf?: boolean;
+  canExportCsv?: boolean;
+  canExportExcel?: boolean;
+};
+
 export function ReportsTab({
   appState,
   generatedBy = "Coordinator",
-}: {
-  appState: AppState;
-  generatedBy?: string;
-}) {
+  canExportPdf = true,
+  canExportCsv = true,
+  canExportExcel = true,
+}: ReportsTabProps) {
   const [period, setPeriod] = useState<Period>("weekly");
   const [anchor, setAnchor] = useState<string>(todayStr());
   const [start, setStart] = useState<string>(todayStr());
@@ -729,6 +757,11 @@ const [parentPage, setParentPage] = useState(1);
   };
 
   const exportCSV = () => {
+  if (!canExportCsv) {
+    showFeatureLocked("CSV Export");
+    return;
+  }
+
     if (rows.length === 0) {
       alert("No rows to export for the current filters.");
       return;
@@ -767,6 +800,11 @@ const [parentPage, setParentPage] = useState(1);
   };
 
 const exportExcel = async () => {
+  if (!canExportExcel) {
+    showFeatureLocked("Excel Export");
+    return;
+  }
+
   if (rows.length === 0) {
     alert('No rows to export for the current filters.');
     return;
@@ -816,6 +854,11 @@ const exportExcel = async () => {
 };
 
 const exportPDF = async () => {
+  if (!canExportPdf) {
+    showFeatureLocked("PDF Export");
+    return;
+  }
+
   if (rows.length === 0) {
     alert("No rows to export for the current filters.");
     return;
@@ -1674,6 +1717,7 @@ const pagedParents = useMemo(
 
           <div className="flex flex-wrap gap-2">
             <IconButton
+              enabled={canExportCsv}
               onClick={exportCSV}
               icon={<FileDown size={16} />}
               label="CSV"
@@ -1681,6 +1725,7 @@ const pagedParents = useMemo(
             />
 
             <IconButton
+              enabled={canExportExcel}
               onClick={exportExcel}
               icon={<FileSpreadsheet size={16} />}
               label="Excel"
@@ -1688,6 +1733,7 @@ const pagedParents = useMemo(
             />
 
             <IconButton
+              enabled={canExportPdf}
               onClick={exportPDF}
               icon={<FileText size={16} />}
               label="PDF"
@@ -2378,6 +2424,7 @@ function SmallStatus({
   label: string;
   value: string | number;
   tone: string;
+  show?: boolean;
 }) {
   return (
     <div className={`rounded-2xl border px-3 py-3 ${tone}`}>

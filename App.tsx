@@ -2,6 +2,8 @@ import { connectAcademyWS, disconnectAcademyWS, useAcademyWS } from "././hooks/u
 import React, { useState, useEffect, useMemo, lazy, Suspense, useRef, startTransition, useCallback } from "react";
 import Lottie from "lottie-react";
 import { loadSession, saveSession, clearSession, type Session } from "./services/sessionService";
+import { FEATURE_LOCK_EVENT, showFeatureLocked, type FeatureLockDetail } from "./services/featureAccess";
+import { FeatureLockedModal } from "./components/FeatureLockedModal";
 import {
   loginToDjango,
   markAttendanceInDjango,
@@ -477,6 +479,19 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
   const [enabledFeatures, setEnabledFeatures] = useState<Record<string, boolean>>({});
   const [featureContextLoaded, setFeatureContextLoaded] = useState(false);
+  const [lockedFeature, setLockedFeature] = useState<FeatureLockDetail | null>(null);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const customEvent = event as CustomEvent<FeatureLockDetail>;
+      if (customEvent.detail?.title) {
+        setLockedFeature(customEvent.detail);
+      }
+    };
+
+    window.addEventListener(FEATURE_LOCK_EVENT, handler);
+    return () => window.removeEventListener(FEATURE_LOCK_EVENT, handler);
+  }, []);
   // Fetch feature flags from the backend whenever the session changes.
   // Populates enabledFeatures so hasFeature() correctly hides/shows tabs.
   useEffect(() => {
@@ -510,8 +525,35 @@ const [themeMode, setThemeMode] = useState<"light" | "dark">(() => {
   }
 });
 
+const applyThemeModeFast = (mode: "light" | "dark") => {
+  const root = document.documentElement;
+
+  // Disable expensive transitions only during theme switch
+  root.classList.add("theme-fast-switch");
+
+  if (mode === "dark") {
+    root.classList.add("dark");
+  } else {
+    root.classList.remove("dark");
+  }
+
+  try {
+    localStorage.setItem("ivs_theme_mode", mode);
+  } catch {
+    // ignore
+  }
+
+  window.setTimeout(() => {
+    root.classList.remove("theme-fast-switch");
+  }, 120);
+};
+
 const toggleTheme = () => {
-  setThemeMode((current) => (current === "dark" ? "light" : "dark"));
+  setThemeMode((current) => {
+    const next = current === "dark" ? "light" : "dark";
+    applyThemeModeFast(next);
+    return next;
+  });
 };
 
 const [superAdminSaving, setSuperAdminSaving] = useState(false);
@@ -656,7 +698,8 @@ useEffect(() => {
   // =====================
   // Role helpers
   // =====================
-  const isCoordinator = session?.role === "coordinator";
+  const isDepartmentAdmin = session?.role === "department_admin" || session?.role === "institution_admin";
+  const isCoordinator = session?.role === "coordinator" || isDepartmentAdmin;
   const isTeacher = session?.role === "teacher";
   const isStudent = session?.role === "student";
 
@@ -664,6 +707,8 @@ useEffect(() => {
   const ActiveTopIcon = activeMeta.icon;
 
   const isSuperAdmin = Boolean((session as any)?.user?.is_superuser);
+  const sessionUsername = String((session as any)?.user?.username || (session as any)?.username || "").toLowerCase();
+  const isPlatformAdmin = session?.role === "platform_admin" || sessionUsername === "mian";
 
   const featuresLoaded = featureContextLoaded;
 
@@ -674,41 +719,55 @@ useEffect(() => {
     return keys.some((key) => enabledFeatures[key] === true);
   }, [enabledFeatures, featuresLoaded]);
 
+  const tabFeatureKey: Partial<Record<TabId, string>> = {
+    dashboard: "tab_daily_classes",
+    accounts: "tab_accounts_enrollment",
+    lessons: "tab_lessons_control",
+    scheduling: "tab_scheduling",
+    attendance: "tab_attendance",
+    reports: "tab_reports",
+  };
+
+  const departmentNavItems: TabId[] = [
+    "dashboard",
+    "accounts",
+    "lessons",
+    "scheduling",
+    "attendance",
+    "reports",
+  ];
+
   const coordinatorNavItems = useMemo<TabId[]>(() => {
-    const departmentItems: TabId[] = [];
+    if (isPlatformAdmin) return ["platform-admin"];
+    return departmentNavItems;
+  }, [isPlatformAdmin]);
 
-    if (hasFeature("tab_daily_classes")) {
-      departmentItems.push("dashboard");
-    }
+  const isTabLocked = useCallback(
+    (tab: TabId) => {
+      const featureKey = tabFeatureKey[tab];
+      return Boolean(featureKey && featureContextLoaded && !hasFeature(featureKey));
+    },
+    [featureContextLoaded, hasFeature]
+  );
 
-    if (hasFeature("tab_accounts_enrollment")) {
-      departmentItems.push("accounts");
-    }
+  const handleSidebarTabClick = useCallback(
+    (tab: TabId) => {
+      if (!featureContextLoaded && !isPlatformAdmin) return;
 
-    if (hasFeature("tab_lessons_control")) {
-      departmentItems.push("lessons");
-    }
+      if (isTabLocked(tab)) {
+        showFeatureLocked(
+          NAV_META[tab]?.label || "This section",
+          `${NAV_META[tab]?.label || "This section"} is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
+        );
+        return;
+      }
 
-    if (hasFeature("tab_scheduling")) {
-      departmentItems.push("scheduling");
-    }
-
-    if (hasFeature("tab_attendance")) {
-      departmentItems.push("attendance");
-    }
-
-    if (hasFeature("tab_reports")) {
-      departmentItems.push("reports");
-    }
-
-    if (isSuperAdmin) {
-      return ["platform-admin", ...departmentItems];
-    }
-
-    return departmentItems;
-  }, [hasFeature, isSuperAdmin]);
-  const roleLabel = isSuperAdmin ? "Super Admin" : "Coordinator";
-  const roleIconSrc = isSuperAdmin ? "/superadmin-icon.png" : "/coordinator-icon.png";
+      navigateToTab(tab);
+    },
+    [featureContextLoaded, isPlatformAdmin, isTabLocked]
+  );
+  const roleLabel = isPlatformAdmin ? "Platform Admin" : isDepartmentAdmin ? "Quran Super Admin" : "Coordinator";
+  const roleIconSrc = isPlatformAdmin ? "/superadmin-icon.png" : isDepartmentAdmin ? "/superadmin-icon.png" : "/coordinator-icon.png";
 
   const sessionTeacherId = isTeacher ? (session?.teacherId ?? null) : null;
   const sessionStudentId = isStudent ? (session?.studentId ?? null) : null;
@@ -901,6 +960,7 @@ const validTabs: TabId[] = [
   "scheduling",
   "accounts",
   "lessons",
+  "platform-admin",
 ];
 
   return validTabs.includes(raw as TabId) ? (raw as TabId) : "dashboard";
@@ -937,6 +997,27 @@ useEffect(() => {
     navigateToTab(coordinatorNavItems[0] || "dashboard");
   }
 }, [activeTab, coordinatorNavItems]);
+
+useEffect(() => {
+  // Direct URL protection for locked tabs
+  if (!featureContextLoaded || isPlatformAdmin) return;
+
+  const featureKey = tabFeatureKey[activeTab];
+  if (!featureKey || hasFeature(featureKey)) return;
+
+  showFeatureLocked(
+    NAV_META[activeTab]?.label || "This section",
+    `${NAV_META[activeTab]?.label || "This section"} is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
+  );
+
+  const fallback =
+    departmentNavItems.find((tab) => {
+      const key = tabFeatureKey[tab];
+      return !key || hasFeature(key);
+    }) || "dashboard";
+
+  if (fallback !== activeTab) navigateToTab(fallback);
+}, [activeTab, featureContextLoaded, hasFeature, isPlatformAdmin]);
 
 useEffect(() => {
   if (!session) return;
@@ -1201,6 +1282,14 @@ if (rememberLogin) {
     saveSession(nextSession);
     connectAcademyWS();
 
+    const nextUsername = String((nextSession as any)?.user?.username || (nextSession as any)?.username || "").toLowerCase();
+
+    if (nextSession.role === "platform_admin" || nextUsername === "mian") {
+      navigateToTab("platform-admin");
+    } else {
+      navigateToTab("dashboard");
+    }
+
     setLoginUsername("");
     setLoginPassword("");
   } catch (err: any) {
@@ -1239,17 +1328,47 @@ if (rememberLogin) {
     classKey?: string;
   }) => {
     const { entityId, entityType, date, status, classKey } = args;
-
+    const normalizedClassKey = classKey || "";
     const isTeacher = entityType === EntityType.TEACHER;
 
+    const matches = (record: AttendanceRecord) =>
+      record.entityId === entityId &&
+      record.entityType === entityType &&
+      record.date === date &&
+      ((record.classKey || "") === normalizedClassKey);
+
+    const previousRecord = appState.attendance.find(matches);
+
+    const optimisticRecord: AttendanceRecord = {
+      id: previousRecord?.id || `local-${entityType}-${entityId}-${date}-${normalizedClassKey}-${Date.now()}`,
+      entityId,
+      entityType,
+      date,
+      classKey: normalizedClassKey,
+      status,
+      timestamp: Date.now(),
+    };
+
+    // Instant UI update first
+    setAppState((prev) => {
+      const others = prev.attendance.filter((record) => !matches(record));
+
+      return {
+        ...prev,
+        attendance: [...others, optimisticRecord],
+      };
+    });
+
     try {
+      // Save to Django in the background
       const saved = await markAttendanceInDjango({
         entity_type: isTeacher ? "teacher" : "student",
         teacher_id: isTeacher ? Number(entityId) : null,
         student_id: isTeacher ? null : Number(entityId),
         date,
         status: localStatusToDjango(status),
-      });
+        class_key: normalizedClassKey,
+      } as any);
 
       const entityIdFromBackend =
         saved.entity_type === "teacher"
@@ -1258,21 +1377,22 @@ if (rememberLogin) {
 
       const nextRecord: AttendanceRecord = {
         id: String(saved.id),
-        entityId: entityIdFromBackend,
+        entityId: entityIdFromBackend || entityId,
         entityType: djangoEntityToLocal(saved.entity_type),
         date: saved.date,
-        classKey: classKey || "",
+        classKey: normalizedClassKey,
         status: djangoStatusToLocal(saved.status),
         timestamp: saved.updated_at ? Date.parse(saved.updated_at) : Date.now(),
       };
 
       setAppState((prev) => {
         const others = prev.attendance.filter(
-          (r) =>
+          (record) =>
             !(
-              r.entityId === nextRecord.entityId &&
-              r.entityType === nextRecord.entityType &&
-              r.date === nextRecord.date
+              record.entityId === entityId &&
+              record.entityType === entityType &&
+              record.date === date &&
+              ((record.classKey || "") === normalizedClassKey)
             )
         );
 
@@ -1282,6 +1402,16 @@ if (rememberLogin) {
         };
       });
     } catch (err: any) {
+      // Roll back only this click if backend fails
+      setAppState((prev) => {
+        const others = prev.attendance.filter((record) => !matches(record));
+
+        return {
+          ...prev,
+          attendance: previousRecord ? [...others, previousRecord] : others,
+        };
+      });
+
       alert(err?.message || "Could not save attendance.");
     }
   };
@@ -1293,33 +1423,35 @@ if (rememberLogin) {
     classKey?: string;
   }) => {
     const { entityId, entityType, date, classKey } = args;
+    const normalizedClassKey = classKey || "";
 
-    const existing = appState.attendance.find(
-      (r) =>
-        r.entityId === entityId &&
-        r.entityType === entityType &&
-        r.date === date &&
-        ((r.classKey || "") === (classKey || "") || entityType === EntityType.TEACHER)
-    );
+    const matches = (record: AttendanceRecord) =>
+      record.entityId === entityId &&
+      record.entityType === entityType &&
+      record.date === date &&
+      ((record.classKey || "") === normalizedClassKey);
+
+    const existing = appState.attendance.find(matches);
+
+    // Instant UI remove first
+    setAppState((prev) => ({
+      ...prev,
+      attendance: prev.attendance.filter((record) => !matches(record)),
+    }));
 
     try {
       if (existing?.id && /^\d+$/.test(String(existing.id))) {
         await deleteAttendanceInDjango(Number(existing.id));
       }
-
-      setAppState((prev) => ({
-        ...prev,
-        attendance: prev.attendance.filter(
-          (r) =>
-            !(
-              r.entityId === entityId &&
-              r.entityType === entityType &&
-              r.date === date &&
-              ((r.classKey || "") === (classKey || "") || entityType === EntityType.TEACHER)
-            )
-        ),
-      }));
     } catch (err: any) {
+      // Roll back if backend delete fails
+      if (existing) {
+        setAppState((prev) => ({
+          ...prev,
+          attendance: [...prev.attendance.filter((record) => !matches(record)), existing],
+        }));
+      }
+
       alert(err?.message || "Could not delete attendance.");
     }
   };
@@ -1369,7 +1501,11 @@ const saveStudent = (e: React.FormEvent) => {
     loginId: existing?.loginId || generateStudentId(),
   };
 
-  setAppState((prev) => {
+  setShowModal(false);
+  setEditingStudent(null);
+
+  startTransition(() => {
+    setAppState((prev) => {
     const others = prev.students.filter((student) => student.id !== nextStudent.id);
 
     return {
@@ -1393,11 +1529,18 @@ const saveStudent = (e: React.FormEvent) => {
     };
   });
 
-  setEditingStudent(null);
-  setShowModal(false);
+  });
 };
 
   const removeStudentFromClass = (studentId: string) => {
+    if (!hasFeature("delete_schedule")) {
+      showFeatureLocked(
+        "Delete Schedule",
+        "Delete Schedule is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation."
+      );
+      return;
+    }
+
     const student = viewStudents.find(s => s.id === studentId);
     if (!student) return;
 
@@ -1415,6 +1558,14 @@ const saveStudent = (e: React.FormEvent) => {
   };
 
   const deleteClass = (teacherId: string, timeSlot: string) => {
+    if (!hasFeature("delete_schedule")) {
+      showFeatureLocked(
+        "Delete Schedule",
+        "Delete Schedule is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation."
+      );
+      return;
+    }
+
     const teacherName = viewTeachers.find(t => t.id === teacherId)?.name || "this teacher";
 
     if (!confirm(`Delete the whole class for ${teacherName} at ${formatTime12(timeSlot)}?\n\nThis will remove all students in that time slot.`)) {
@@ -2121,7 +2272,65 @@ if (session?.role === "student") {
     />
   );
 }
-  // ---------------- Main UI ----------------
+  // ---------------- Separate Platform Admin Portal ----------------
+if (isPlatformAdmin) {
+  return (
+    <div className="h-screen overflow-y-auto bg-slate-50 platform-admin-scroll" tabIndex={0}>
+      <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-4 md:px-8">
+          <div className="min-w-0">
+            <div className="inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-indigo-700">
+              Platform Super Admin
+            </div>
+            <h1 className="mt-2 text-xl font-black tracking-tight text-slate-950 md:text-2xl">
+              Admin Portal
+            </h1>
+            <p className="mt-0.5 text-xs font-semibold text-slate-500 md:text-sm">
+              Separate platform control center. Quran Department users will not see this portal.
+            </p>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+              title={themeMode === "dark" ? "Light Mode" : "Dark Mode"}
+            >
+              {themeMode === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+              <span className="hidden sm:inline">
+                {themeMode === "dark" ? "Light" : "Dark"}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                disconnectAcademyWS();
+                clearSession();
+                setSession(null);
+                navigateToTab("dashboard");
+              }}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-rose-100 bg-rose-50 px-4 text-sm font-black text-rose-600 shadow-sm transition hover:bg-rose-100"
+              title="Logout"
+            >
+              <LogOut size={17} />
+              <span className="hidden sm:inline">Logout</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-[1600px] p-4 md:p-8">
+        <Suspense fallback={<TabLoading />}>
+          <PlatformAdmin />
+        </Suspense>
+      </main>
+    </div>
+  );
+}
+
+  // ---------------- Main Quran Department UI ----------------
   return (
   <>
 
@@ -2228,7 +2437,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
     {/* ─────────────────────────────────────
         NAVIGATION
     ───────────────────────────────────── */}
-    <nav className="flex-1 px-3 pt-3 overflow-y-auto" style={{scrollbarWidth:'none',msOverflowStyle:'none'}}>
+    <nav className="department-sidebar-nav flex-1 px-3 pt-3 overflow-y-auto" style={{scrollbarWidth:'none',msOverflowStyle:'none'}}>
 
       {/* Collapsed: stacked bare icons */}
       <div className="hidden md:flex md:group-hover:hidden flex-col items-center gap-2.5 py-1">
@@ -2236,10 +2445,17 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
           const item = NAV_META[id];
           const Icon = item.icon;
           const active = activeTab === id;
+          const locked = isTabLocked(id);
           return (
-            <button key={id} onClick={() => { navigateToTab(id); setMobileMenuOpen(false); }} title={item.label} className="transition-all duration-300">
+            <button key={id} onClick={() => { handleSidebarTabClick(id); setMobileMenuOpen(false); }} title={item.label} aria-disabled={locked}
+              className={`relative transition-all duration-300 ${locked ? "opacity-55" : ""}`}>
               <div className={`w-[52px] h-[52px] rounded-[17px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${active ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]" : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"}`}>
                 <Icon size={20} />
+                {locked && (
+                  <span className="feature-lock-badge absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full border border-white bg-amber-400 text-[10px] shadow-sm">
+                    🔒
+                  </span>
+                )}
               </div>
             </button>
           );
@@ -2252,18 +2468,25 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
           const item = NAV_META[id];
           const Icon = item.icon;
           const active = activeTab === id;
+          const locked = isTabLocked(id);
           return (
             <button
               key={id}
-              onClick={() => { navigateToTab(id); setMobileMenuOpen(false); }}
-              title={item.label}
+              onClick={() => { handleSidebarTabClick(id); setMobileMenuOpen(false); }}
+              aria-disabled={locked}
+              title={locked ? `${item.label} - not enabled` : item.label}
               className={`w-full rounded-[18px] transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${active ? "bg-white/72 shadow-[-5px_-5px_14px_rgba(255,255,255,0.97),7px_9px_18px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,1)]" : "hover:bg-white/45"}`}
             >
               {/* 52px col = icon (46px) + 3px padding each side — label starts right after */}
               <div className="grid grid-cols-[52px_1fr] items-center">
                 <div className="flex items-center justify-center py-1.5">
-                  <div className={`w-[46px] h-[46px] rounded-[15px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${active ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]" : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"}`}>
+                  <div className={`relative w-[46px] h-[46px] rounded-[15px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${active ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]" : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"}`}>
                     <Icon size={19} />
+                    {locked && (
+                      <span className="feature-lock-badge absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full border border-white bg-amber-400 text-[10px] shadow-sm">
+                        🔒
+                      </span>
+                    )}
                   </div>
                 </div>
                 {/* No extra padding-left — label starts flush with end of icon col */}
@@ -3164,12 +3387,15 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 {/* ACCOUNTS */}
 {activeTab === "accounts" && (
   <Suspense fallback={<TabLoading />}>
-    <CoordinatorAccounts />
+    <CoordinatorAccounts
+      canBulkImport={hasFeature("bulk_import")}
+      canDeleteAccounts={hasFeature("delete_accounts")}
+    />
   </Suspense>
 )}
 
 {/* PLATFORM ADMIN */}
-{activeTab === "platform-admin" && (
+{activeTab === "platform-admin" && isPlatformAdmin && (
   <Suspense fallback={<TabLoading />}>
     <PlatformAdmin />
   </Suspense>
@@ -3191,6 +3417,9 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
     <Suspense fallback={<TabLoading />}>
       <ReportsTab
         appState={viewAppState}
+        canExportPdf={hasFeature("pdf_reports")}
+        canExportCsv={hasFeature("csv_export")}
+        canExportExcel={hasFeature("excel_export")}
         generatedBy={
           (session as any)?.user?.full_name ||
           `${(session as any)?.user?.first_name || ""} ${(session as any)?.user?.last_name || ""}`.trim() ||
@@ -3205,15 +3434,22 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
           
         </div>
 
-        <Suspense fallback={null}>
-          <AssistantChat
-            appState={viewAppState}
-            isOpen={assistantOpen}
-            onClose={() => setAssistantOpen(false)}
-          />
-        </Suspense>
+        {hasFeature("ai_assistant") && (
+          <Suspense fallback={null}>
+            <AssistantChat
+              appState={viewAppState}
+              isOpen={assistantOpen}
+              onClose={() => setAssistantOpen(false)}
+            />
+          </Suspense>
+        )}
 
       </main>
+
+      <FeatureLockedModal
+        feature={lockedFeature}
+        onClose={() => setLockedFeature(null)}
+      />
 
       {/* MODALS */}
       {showModal && (
@@ -3231,7 +3467,11 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
       Class Details
     </h3>
     <button
-      onClick={() => setShowModal(false)}
+      onClick={() => {
+        setShowModal(false);
+        setEditingStudent(null);
+        setViewingClass(null);
+      }}
       className="text-slate-400 hover:text-slate-600"
     >
       <X size={24} />
@@ -3385,21 +3625,20 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
   >
     <Edit2 size={16} className="mx-auto" />
   </button>
-
-  <button
-    type="button"
-    onClick={() => removeStudentFromClass(s.id)}
-    className="
-      h-10 w-10 rounded-2xl
-      bg-rose-50 border border-rose-100
-      text-rose-600 hover:bg-rose-100
-      shadow-[0_10px_22px_rgba(244,63,94,0.10)]
-      transition active:scale-[0.98]
-    "
-    title="Remove student from this class"
-  >
-    <Trash2 size={16} className="mx-auto" />
-  </button>
+    <button
+      type="button"
+      onClick={() => removeStudentFromClass(s.id)}
+      className="
+        h-10 w-10 rounded-2xl
+        bg-rose-50 border border-rose-100
+        text-rose-600 hover:bg-rose-100
+        shadow-[0_10px_22px_rgba(244,63,94,0.10)]
+        transition active:scale-[0.98]
+      "
+      title="Remove student from this class"
+    >
+      <Trash2 size={16} className="mx-auto" />
+    </button>
 </div>
 
             </div>
@@ -3407,26 +3646,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
         </div>
       )}
     </div>
-
-
-
-    {/* Optional: delete class (nice danger button) */}
-    <button
-      type="button"
-      onClick={() => deleteClass(viewingClass.teacherId, viewingClass.timeSlot)}
-      className="
-        w-full rounded-2xl
-        bg-white/80 hover:bg-white
-        border border-rose-200/70
-        text-rose-700 font-extrabold
-        py-3
-        shadow-[0_10px_22px_rgba(15,23,42,0.06)]
-        transition
-      "
-    >
-      Delete This Class
-    </button>
-  </div>
+</div>
 )}
 
 {/* ADD / EDIT STUDENT */}
@@ -3572,8 +3792,9 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
     <button
       type="button"
       onClick={() => {
-        setEditingStudent(null);
         setShowModal(false);
+        setEditingStudent(null);
+        setViewingClass(null);
       }}
       className="
         w-full rounded-2xl

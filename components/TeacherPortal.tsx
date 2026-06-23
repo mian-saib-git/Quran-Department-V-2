@@ -880,6 +880,7 @@ const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [attendanceDateFilter, setAttendanceDateFilter] = useState(today());
   const [attendanceMonthFilter, setAttendanceMonthFilter] = useState(new Date().getMonth() + 1);
   const [attendanceYearFilter, setAttendanceYearFilter] = useState(new Date().getFullYear());
+  const [attendanceEntityView, setAttendanceEntityView] = useState<"teacher" | "student">("teacher");
 
 // ── WebSocket real-time updates ──
 useAcademyWS((data) => {
@@ -1389,8 +1390,8 @@ const handleSaveLesson = async (event: React.FormEvent) => {
     const latest = new Map<string, any>();
     for (const raw of dashboard?.attendance || []) {
       const type = String(raw.entity_type || "").trim().toLowerCase();
-      if (type !== "student") continue;
-      const normalized = { ...raw, entity_type: "student", status: normalizeAttendanceStatus(raw.status) };
+      if (type !== "student" && type !== "teacher") continue;
+      const normalized = { ...raw, entity_type: type, status: normalizeAttendanceStatus(raw.status) };
       const key = attendanceKey(normalized);
       const existing = latest.get(key);
       if (!existing || attendanceTimeValue(normalized) >= attendanceTimeValue(existing)) latest.set(key, normalized);
@@ -1442,18 +1443,110 @@ const handleSaveLesson = async (event: React.FormEvent) => {
     () => paginateItems(filteredClassRows, classPage, PAGE_SIZE), [filteredClassRows, classPage]
   );
 
+  const attendanceScopeRows = useMemo(() => {
+    const entityType = attendanceEntityView;
+
+    let rows = attendance.filter(
+      item =>
+        String(item.entity_type || "").toLowerCase() === entityType
+    );
+
+    if (
+      attendanceEntityView === "student" &&
+      attendanceStudentFilter
+    ) {
+      rows = rows.filter(
+        item =>
+          String(item.student_id || "") ===
+          String(attendanceStudentFilter)
+      );
+    }
+
+    return rows;
+  }, [
+    attendance,
+    attendanceEntityView,
+    attendanceStudentFilter,
+  ]);
+
+  const currentAttendance = useMemo(() => {
+    if (
+      attendanceEntityView === "student" &&
+      !attendanceStudentFilter
+    ) {
+      return null;
+    }
+
+    return (
+      attendanceScopeRows.find(
+        item => String(item.date) === String(todayDate)
+      ) || null
+    );
+  }, [
+    attendanceScopeRows,
+    attendanceEntityView,
+    attendanceStudentFilter,
+    todayDate,
+  ]);
+
   const attendanceRows = useMemo(() => {
-    let filtered = attendanceStudentFilter
-      ? attendance.filter(item => String(item.student_id) === String(attendanceStudentFilter))
-      : attendance;
-    if (attendanceView === "daily") filtered = filtered.filter(item => item.date === attendanceDateFilter);
-    if (attendanceView === "weekly") { const { start, end } = getWeekRange(attendanceDateFilter); filtered = filtered.filter(item => item.date >= start && item.date <= end); }
-    if (attendanceView === "monthly") { const month = String(attendanceMonthFilter).padStart(2, "0"); filtered = filtered.filter(item => String(item.date || "").startsWith(`${attendanceYearFilter}-${month}`)); }
-    if (attendanceView === "yearly") filtered = filtered.filter(item => String(item.date || "").startsWith(`${attendanceYearFilter}-`));
-    const todayRows = filtered.filter(item => item.date === todayDate);
-    const otherRows = filtered.filter(item => item.date !== todayDate);
-    return attendanceView === "all" ? [...todayRows, ...otherRows] : filtered;
-  }, [attendance, todayDate, attendanceStudentFilter, attendanceView, attendanceDateFilter, attendanceMonthFilter, attendanceYearFilter]);
+    let filtered = [...attendanceScopeRows];
+
+    if (attendanceView === "daily") {
+      filtered = filtered.filter(
+        item => item.date === attendanceDateFilter
+      );
+    }
+
+    if (attendanceView === "weekly") {
+      const { start, end } = getWeekRange(
+        attendanceDateFilter
+      );
+
+      filtered = filtered.filter(
+        item => item.date >= start && item.date <= end
+      );
+    }
+
+    if (attendanceView === "monthly") {
+      const month = String(
+        attendanceMonthFilter
+      ).padStart(2, "0");
+
+      filtered = filtered.filter(item =>
+        String(item.date || "").startsWith(
+          `${attendanceYearFilter}-${month}`
+        )
+      );
+    }
+
+    if (attendanceView === "yearly") {
+      filtered = filtered.filter(item =>
+        String(item.date || "").startsWith(
+          `${attendanceYearFilter}-`
+        )
+      );
+    }
+
+    const currentRows = filtered.filter(
+      item => item.date === todayDate
+    );
+
+    const previousRows = filtered.filter(
+      item => item.date !== todayDate
+    );
+
+    return attendanceView === "all"
+      ? [...currentRows, ...previousRows]
+      : filtered;
+  }, [
+    attendanceScopeRows,
+    attendanceView,
+    attendanceDateFilter,
+    attendanceMonthFilter,
+    attendanceYearFilter,
+    todayDate,
+  ]);
 
   const { pageItems: paginatedAttendanceRows, totalPages: attendanceTotalPages, safePage: safeAttendancePage } = useMemo(
     () => paginateItems(attendanceRows, attendancePage, PAGE_SIZE), [attendanceRows, attendancePage]
@@ -1512,7 +1605,16 @@ const historyGroups = useMemo(() => {
 
   useEffect(() => { setClassPage(1); }, [classSearch]);
   useEffect(() => { setHistoryPage(1); }, [historyStudentFilter]);
-  useEffect(() => { setAttendancePage(1); }, [attendanceStudentFilter, attendanceView, attendanceDateFilter, attendanceMonthFilter, attendanceYearFilter]);
+  useEffect(() => {
+    setAttendancePage(1);
+  }, [
+    attendanceEntityView,
+    attendanceStudentFilter,
+    attendanceView,
+    attendanceDateFilter,
+    attendanceMonthFilter,
+    attendanceYearFilter,
+  ]);
 
   // ─── Monthly data ──────────────────────────────────────────────────────────
 
@@ -1637,6 +1739,7 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
   const filteredPresentCount = attendanceRows.filter(item => item.status === "present").length;
   const filteredAbsentCount = attendanceRows.filter(item => item.status === "absent").length;
   const filteredLeaveCount = attendanceRows.filter(item => item.status === "leave").length;
+  const currentAttendanceStyle = progressColor(currentAttendance?.status);
 
   const NAV_ITEMS: { tab: Tab; icon: React.ReactNode; label: string }[] = [
     { tab: "overview", icon: <LayoutDashboard size={18} />, label: "Overview" },
@@ -2277,64 +2380,315 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
           {/* ── Attendance Tab ── */}
           {activeTab === "attendance" && (
             <div className="space-y-5">
-              <div className="grid grid-cols-3 gap-4">
-                {[{ label: "Present", value: filteredPresentCount, color: "emerald" }, { label: "Absent", value: filteredAbsentCount, color: "rose" }, { label: "Leave", value: filteredLeaveCount, color: "amber" }].map(({ label, value, color }) => (
-                  <div key={label} className={`tp-att-stat tp-att-stat--${color}`}>
-                    <div className="text-xs font-semibold opacity-70">{label}</div>
-                    <div className="text-2xl font-black mt-1">{value}</div>
+              <div className="tp-card">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h2 className="text-base font-black text-slate-900">
+                      Attendance
+                    </h2>
+
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                      View your attendance separately from your students'
+                      attendance.
+                    </p>
+                  </div>
+
+                  <div className="inline-flex self-start rounded-2xl border border-slate-200 bg-slate-100 p-1 sm:self-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttendanceEntityView("teacher");
+                        setAttendanceStudentFilter("");
+                      }}
+                      className={`rounded-xl px-4 py-2.5 text-xs font-black transition ${
+                        attendanceEntityView === "teacher"
+                          ? "bg-white text-indigo-600 shadow-sm"
+                          : "text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      My Attendance
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (attendanceEntityView !== "student") {
+                          setAttendanceStudentFilter("");
+                        }
+
+                        setAttendanceEntityView("student");
+                      }}
+                      className={`rounded-xl px-4 py-2.5 text-xs font-black transition ${
+                        attendanceEntityView === "student"
+                          ? "bg-white text-indigo-600 shadow-sm"
+                          : "text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      Student Attendance
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="tp-card">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-400">
+                      Today's Status
+                    </div>
+
+                    <div className="mt-1 text-base font-black text-slate-900">
+                      {attendanceEntityView === "teacher"
+                        ? currentAttendance?.teacher_name ||
+                          "My Attendance"
+                        : students.find(
+                            student =>
+                              String(student.id) ===
+                              String(attendanceStudentFilter)
+                          )?.name || "Select a student"}
+                    </div>
+
+                    <div className="mt-1 text-xs font-semibold text-slate-500">
+                      {formatDate(todayDate)}
+                    </div>
+                  </div>
+
+                  <span
+                    className={`inline-flex w-fit items-center gap-2 rounded-full border px-4 py-2 text-sm font-black ${currentAttendanceStyle.light}`}
+                  >
+                    <span
+                      className={`h-2 w-2 rounded-full ${currentAttendanceStyle.dot}`}
+                    />
+
+                    {attendanceEntityView === "student" &&
+                    !attendanceStudentFilter
+                      ? "Select Student"
+                      : currentAttendance
+                      ? statusLabel(currentAttendance.status)
+                      : "Not Marked"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                {[
+                  {
+                    label: "Present",
+                    value: filteredPresentCount,
+                    color: "emerald",
+                  },
+                  {
+                    label: "Absent",
+                    value: filteredAbsentCount,
+                    color: "rose",
+                  },
+                  {
+                    label: "Leave",
+                    value: filteredLeaveCount,
+                    color: "amber",
+                  },
+                ].map(({ label, value, color }) => (
+                  <div
+                    key={label}
+                    className={`tp-att-stat tp-att-stat--${color}`}
+                  >
+                    <div className="text-xs font-semibold opacity-70">
+                      {label}
+                    </div>
+
+                    <div className="mt-1 text-2xl font-black">
+                      {value}
+                    </div>
                   </div>
                 ))}
               </div>
 
-              <div className="tp-card p-0 overflow-hidden">
-                <div className="px-5 py-4 border-b border-slate-100">
-                  <h2 className="text-base font-bold text-slate-800">Attendance Records</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">Coordinator marks attendance. View-only for teachers.</p>
+              <div className="tp-card overflow-hidden p-0">
+                <div className="border-b border-slate-100 px-5 py-4">
+                  <h2 className="text-base font-bold text-slate-800">
+                    {attendanceEntityView === "teacher"
+                      ? "My Attendance History"
+                      : "Student Attendance History"}
+                  </h2>
+
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Today's record appears first, followed by previous
+                    attendance records.
+                  </p>
+
                   <div className="tp-filter-shell mt-4">
                     <div className="tp-filter-grid">
                       <div className="tp-field">
-                        <label className="tp-label">View</label>
-                        <select value={attendanceView} onChange={e => setAttendanceView(e.target.value as any)} className="tp-select">
-                          <option value="all">All</option>
-                          <option value="daily">Daily</option>
-                          <option value="weekly">Weekly</option>
-                          <option value="monthly">Monthly</option>
-                          <option value="yearly">Yearly</option>
+                        <label className="tp-label">
+                          View
+                        </label>
+
+                        <select
+                          value={attendanceView}
+                          onChange={event =>
+                            setAttendanceView(
+                              event.target.value as any
+                            )
+                          }
+                          className="tp-select"
+                        >
+                          <option value="all">
+                            All Records
+                          </option>
+                          <option value="daily">
+                            Daily
+                          </option>
+                          <option value="weekly">
+                            Weekly
+                          </option>
+                          <option value="monthly">
+                            Monthly
+                          </option>
+                          <option value="yearly">
+                            Yearly
+                          </option>
                         </select>
                       </div>
-                      <div className="tp-field">
-                        <label className="tp-label">Student</label>
-                        <select value={attendanceStudentFilter} onChange={e => setAttendanceStudentFilter(e.target.value)} className="tp-select">
-                          <option value="">All students</option>
-                          {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                        </select>
-                      </div>
-                      {(attendanceView === "daily" || attendanceView === "weekly") && (
+
+                      {attendanceEntityView === "student" && (
                         <div className="tp-field">
-                          <label className="tp-label">{attendanceView === "daily" ? "Date" : "Week From"}</label>
-                          <input type="date" value={attendanceDateFilter} onChange={e => setAttendanceDateFilter(e.target.value)} className="tp-input-el" />
-                        </div>
-                      )}
-                      {attendanceView === "monthly" && (<>
-                        <div className="tp-field">
-                          <label className="tp-label">Month</label>
-                          <select value={attendanceMonthFilter} onChange={e => setAttendanceMonthFilter(Number(e.target.value))} className="tp-select">
-                            {Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{monthName(m)}</option>)}
+                          <label className="tp-label">
+                            Student
+                          </label>
+
+                          <select
+                            value={attendanceStudentFilter}
+                            onChange={event =>
+                              setAttendanceStudentFilter(
+                                event.target.value
+                              )
+                            }
+                            className="tp-select"
+                          >
+                            <option value="">
+                              All students
+                            </option>
+
+                            {students.map(student => (
+                              <option
+                                key={student.id}
+                                value={student.id}
+                              >
+                                {student.name}
+                              </option>
+                            ))}
                           </select>
                         </div>
+                      )}
+
+                      {(attendanceView === "daily" ||
+                        attendanceView === "weekly") && (
                         <div className="tp-field">
-                          <label className="tp-label">Year</label>
-                          <input type="number" value={attendanceYearFilter} onChange={e => setAttendanceYearFilter(Number(e.target.value))} className="tp-input-el" min={2000} />
+                          <label className="tp-label">
+                            {attendanceView === "daily"
+                              ? "Date"
+                              : "Week From"}
+                          </label>
+
+                          <input
+                            type="date"
+                            value={attendanceDateFilter}
+                            onChange={event =>
+                              setAttendanceDateFilter(
+                                event.target.value
+                              )
+                            }
+                            className="tp-input-el"
+                          />
                         </div>
-                      </>)}
+                      )}
+
+                      {attendanceView === "monthly" && (
+                        <>
+                          <div className="tp-field">
+                            <label className="tp-label">
+                              Month
+                            </label>
+
+                            <select
+                              value={attendanceMonthFilter}
+                              onChange={event =>
+                                setAttendanceMonthFilter(
+                                  Number(event.target.value)
+                                )
+                              }
+                              className="tp-select"
+                            >
+                              {Array.from(
+                                { length: 12 },
+                                (_, index) => index + 1
+                              ).map(month => (
+                                <option
+                                  key={month}
+                                  value={month}
+                                >
+                                  {monthName(month)}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="tp-field">
+                            <label className="tp-label">
+                              Year
+                            </label>
+
+                            <input
+                              type="number"
+                              value={attendanceYearFilter}
+                              onChange={event =>
+                                setAttendanceYearFilter(
+                                  Number(event.target.value)
+                                )
+                              }
+                              className="tp-input-el"
+                              min={2000}
+                            />
+                          </div>
+                        </>
+                      )}
+
                       {attendanceView === "yearly" && (
                         <div className="tp-field">
-                          <label className="tp-label">Year</label>
-                          <input type="number" value={attendanceYearFilter} onChange={e => setAttendanceYearFilter(Number(e.target.value))} className="tp-input-el" min={2000} />
+                          <label className="tp-label">
+                            Year
+                          </label>
+
+                          <input
+                            type="number"
+                            value={attendanceYearFilter}
+                            onChange={event =>
+                              setAttendanceYearFilter(
+                                Number(event.target.value)
+                              )
+                            }
+                            className="tp-input-el"
+                            min={2000}
+                          />
                         </div>
                       )}
                     </div>
-                    <button type="button" onClick={() => { setAttendanceView("all"); setAttendanceStudentFilter(""); setAttendanceDateFilter(today()); setAttendanceMonthFilter(new Date().getMonth() + 1); setAttendanceYearFilter(new Date().getFullYear()); }} className="tp-auto-btn mt-3">
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttendanceView("all");
+                        setAttendanceStudentFilter("");
+                        setAttendanceDateFilter(today());
+                        setAttendanceMonthFilter(
+                          new Date().getMonth() + 1
+                        );
+                        setAttendanceYearFilter(
+                          new Date().getFullYear()
+                        );
+                      }}
+                      className="tp-auto-btn mt-3"
+                    >
                       Reset Filters
                     </button>
                   </div>
@@ -2343,34 +2697,88 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-sm">
                     <thead>
-                      <tr className="bg-slate-50 border-b border-slate-100">
-                        {["Date", "Type", "Name", "Status", "Marked By"].map(h => (
-                          <th key={h} className="px-5 py-3 text-xs font-black text-slate-500 uppercase tracking-wide">{h}</th>
+                      <tr className="border-b border-slate-100 bg-slate-50">
+                        {[
+                          "Date",
+                          "Type",
+                          "Name",
+                          "Status",
+                          "Marked By",
+                        ].map(heading => (
+                          <th
+                            key={heading}
+                            className="px-5 py-3 text-xs font-black uppercase tracking-wide text-slate-500"
+                          >
+                            {heading}
+                          </th>
                         ))}
                       </tr>
                     </thead>
+
                     <tbody className="divide-y divide-slate-50">
                       {paginatedAttendanceRows.map(item => {
-                        const pc = progressColor(item.status);
+                        const statusStyle = progressColor(
+                          item.status
+                        );
+
                         return (
-                          <tr key={item.id} className="hover:bg-slate-50/70 transition-colors">
-                            <td className="px-5 py-3 font-semibold text-slate-800">{formatDate(item.date)}</td>
-                            <td className="px-5 py-3 text-slate-600 capitalize">{item.entity_type}</td>
-                            <td className="px-5 py-3 font-semibold text-slate-800">{item.student_name || item.teacher_name || "-"}</td>
+                          <tr
+                            key={item.id}
+                            className="transition-colors hover:bg-slate-50/70"
+                          >
+                            <td className="px-5 py-3 font-semibold text-slate-800">
+                              {formatDate(item.date)}
+                            </td>
+
+                            <td className="px-5 py-3 capitalize text-slate-600">
+                              {item.entity_type}
+                            </td>
+
+                            <td className="px-5 py-3 font-semibold text-slate-800">
+                              {item.student_name ||
+                                item.teacher_name ||
+                                "-"}
+                            </td>
+
                             <td className="px-5 py-3">
-                              <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold ${pc.light}`}>
-                                <span className={`h-1.5 w-1.5 rounded-full ${pc.dot}`} /> {statusLabel(item.status)}
+                              <span
+                                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold ${statusStyle.light}`}
+                              >
+                                <span
+                                  className={`h-1.5 w-1.5 rounded-full ${statusStyle.dot}`}
+                                />
+
+                                {statusLabel(item.status)}
                               </span>
                             </td>
+
                             <td className="px-5 py-3 text-slate-600">
-                              <div className="font-semibold text-slate-700">{markedByLabel(item)}</div>
-                              {item.updated_at && <div className="text-[11px] text-slate-400 mt-0.5">Updated {new Date(item.updated_at).toLocaleString()}</div>}
+                              <div className="font-semibold text-slate-700">
+                                {markedByLabel(item)}
+                              </div>
+
+                              {item.updated_at && (
+                                <div className="mt-0.5 text-[11px] text-slate-400">
+                                  Updated{" "}
+                                  {new Date(
+                                    item.updated_at
+                                  ).toLocaleString()}
+                                </div>
+                              )}
                             </td>
                           </tr>
                         );
                       })}
+
                       {attendanceRows.length === 0 && (
-                        <tr><td colSpan={5} className="px-5 py-12 text-center text-slate-400 text-sm">No attendance records yet.</td></tr>
+                        <tr>
+                          <td
+                            colSpan={5}
+                            className="px-5 py-12 text-center text-sm text-slate-400"
+                          >
+                            No attendance records found.
+                          </td>
+                        </tr>
                       )}
                     </tbody>
                   </table>
@@ -2378,12 +2786,27 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
               </div>
 
               {attendanceRows.length > PAGE_SIZE && (
-                <Pagination page={safeAttendancePage} totalPages={attendanceTotalPages} onPrev={() => setAttendancePage(p => Math.max(1, p - 1))} onNext={() => setAttendancePage(p => Math.min(attendanceTotalPages, p + 1))} />
+                <Pagination
+                  page={safeAttendancePage}
+                  totalPages={attendanceTotalPages}
+                  onPrev={() =>
+                    setAttendancePage(page =>
+                      Math.max(1, page - 1)
+                    )
+                  }
+                  onNext={() =>
+                    setAttendancePage(page =>
+                      Math.min(
+                        attendanceTotalPages,
+                        page + 1
+                      )
+                    )
+                  }
+                />
               )}
             </div>
           )}
 
-{/* ── History Tab: List view ── */}
           {activeTab === "history" && !editingGroup && (
             <div className="space-y-4">
               <div className="flex flex-col gap-4">
