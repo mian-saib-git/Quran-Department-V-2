@@ -1,5 +1,8 @@
+from datetime import time
+
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class SubjectName(models.TextChoices):
@@ -40,11 +43,44 @@ class TeacherProfile(models.Model):
     notes = models.TextField(blank=True)
     zoom_link = models.URLField(blank=True)
 
+    def save(self, *args, **kwargs):
+        if self.user_id:
+            if not self.department_id:
+                self.department_id = getattr(self.user, "department_id", None)
+            if not self.institution_id:
+                self.institution_id = getattr(self.user, "institution_id", None)
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.user.get_full_name() or self.user.username
 
 
 class StudentProfile(models.Model):
+    class StudentType(models.TextChoices):
+        OLD_STUDENT = "old_student", "Old Student"
+        TRIAL_STUDENT = "trial_student", "Trial Student"
+        TRANSFERRED_FROM_TEACHER = "transferred_from_teacher", "Transferred from another teacher"
+        RETURNED_FROM_LEAVE = "returned_from_leave", "Student return from leave"
+        TRANSFERRED_TO_TEACHER = "transferred_to_teacher", "Class transferred to another teacher"
+
+    class ClassStatus(models.TextChoices):
+        RUNNING = "running", "Running"
+        ON_LEAVE = "on_leave", "On Leave"
+        OLD_DROPPED = "old_dropped", "Old Class Dropped"
+        TRIAL_DROPPED = "trial_dropped", "Trial Dropped"
+        OLD_DROPPED_OTHER = "old_dropped_other", "Old Dropped (Other)"
+        NOT_COUNTED = "not_counted", "Not Counted Class"
+
+    class SpeakingLanguage(models.TextChoices):
+        ENGLISH = "english", "English"
+        URDU = "urdu", "Urdu"
+        ARABIC = "arabic", "Arabic"
+        OTHER = "other", "Other"
+
+    class SalaryClassMode(models.TextChoices):
+        STANDARD = "standard", "Standard class"
+        HALF_MONTH = "half_month", "Half-month class"
+
     institution = models.ForeignKey(
         "accounts.Institution",
         null=True,
@@ -72,6 +108,73 @@ class StudentProfile(models.Model):
     )
     phone = models.CharField(max_length=40, blank=True)
     notes = models.TextField(blank=True)
+
+    student_type = models.CharField(
+        max_length=40,
+        choices=StudentType.choices,
+        default=StudentType.TRIAL_STUDENT,
+        db_index=True,
+    )
+    class_status = models.CharField(
+        max_length=40,
+        choices=ClassStatus.choices,
+        default=ClassStatus.RUNNING,
+        db_index=True,
+    )
+    speaking_language = models.CharField(
+        max_length=30,
+        choices=SpeakingLanguage.choices,
+        default=SpeakingLanguage.URDU,
+        db_index=True,
+    )
+    first_fee_paid = models.BooleanField(default=False)
+    referral_teacher = models.ForeignKey(
+        TeacherProfile,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="referred_students",
+    )
+    referral_student = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="referred_new_students",
+        help_text="Existing student who referred this student. The teacher credit is captured from the referring student's teacher at enrollment time.",
+    )
+    status_effective_date = models.DateField(default=timezone.localdate)
+    salary_class_mode = models.CharField(
+        max_length=20,
+        choices=SalaryClassMode.choices,
+        default=SalaryClassMode.STANDARD,
+    )
+    half_month_salary_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+    )
+
+    def save(self, *args, **kwargs):
+        if self.user_id:
+            if not self.department_id:
+                self.department_id = getattr(self.user, "department_id", None)
+            if not self.institution_id:
+                self.institution_id = getattr(self.user, "institution_id", None)
+        if self.teacher_id:
+            if not self.department_id:
+                self.department_id = self.teacher.department_id
+            if not self.institution_id:
+                self.institution_id = self.teacher.institution_id
+        super().save(*args, **kwargs)
+
+    @property
+    def is_dropped(self):
+        return self.class_status in {
+            self.ClassStatus.OLD_DROPPED,
+            self.ClassStatus.TRIAL_DROPPED,
+            self.ClassStatus.OLD_DROPPED_OTHER,
+        }
 
     def __str__(self):
         return self.user.get_full_name() or self.user.username
@@ -105,6 +208,12 @@ class StudentSubject(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def save(self, *args, **kwargs):
+        if self.student_id:
+            self.department_id = self.student.department_id
+            self.institution_id = self.student.institution_id
+        super().save(*args, **kwargs)
+
     class Meta:
         constraints = [
             models.UniqueConstraint(
@@ -125,6 +234,219 @@ class StudentSubject(models.Model):
 
     def __str__(self):
         return f"{self.student} - {self.display_name}"
+
+
+class StudentClassHistory(models.Model):
+    class EventType(models.TextChoices):
+        ENROLLED = "enrolled", "Enrolled"
+        PROFILE_UPDATED = "profile_updated", "Profile updated"
+        STATUS_CHANGED = "status_changed", "Class status changed"
+        STUDENT_TYPE_CHANGED = "student_type_changed", "Student type changed"
+        TEACHER_TRANSFER = "teacher_transfer", "Teacher transfer"
+        RETURNED_FROM_LEAVE = "returned_from_leave", "Returned from leave"
+        FIRST_FEE_RECEIVED = "first_fee_received", "First fee received"
+
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    student = models.ForeignKey(
+        StudentProfile,
+        on_delete=models.CASCADE,
+        related_name="class_history",
+    )
+    event_type = models.CharField(max_length=40, choices=EventType.choices)
+    effective_date = models.DateField(default=timezone.localdate, db_index=True)
+    previous_teacher = models.ForeignKey(
+        TeacherProfile,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="student_history_previous_teacher",
+    )
+    new_teacher = models.ForeignKey(
+        TeacherProfile,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="student_history_new_teacher",
+    )
+    previous_student_type = models.CharField(max_length=40, blank=True)
+    new_student_type = models.CharField(max_length=40, blank=True)
+    previous_class_status = models.CharField(max_length=40, blank=True)
+    new_class_status = models.CharField(max_length=40, blank=True)
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_student_class_history",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if self.student_id:
+            self.department_id = self.student.department_id
+            self.institution_id = self.student.institution_id
+        super().save(*args, **kwargs)
+
+    class Meta:
+        ordering = ["-effective_date", "-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["student", "effective_date"]),
+            models.Index(fields=["previous_teacher", "effective_date"]),
+            models.Index(fields=["new_teacher", "effective_date"]),
+            models.Index(fields=["event_type", "effective_date"]),
+        ]
+
+    def __str__(self):
+        return f"{self.student} - {self.event_type} - {self.effective_date}"
+
+
+def default_standard_salary_tiers():
+    return [
+        {"min": 0, "max": 9, "rate": 1500},
+        {"min": 10, "max": 14, "rate": 1800},
+        {"min": 15, "max": 19, "rate": 2000},
+        {"min": 20, "max": None, "rate": 2200},
+    ]
+
+
+def default_three_day_salary_tiers():
+    return [
+        {"min": 0, "max": 9, "rate": 1000},
+        {"min": 10, "max": 14, "rate": 1500},
+        {"min": 15, "max": 19, "rate": 1800},
+        {"min": 20, "max": None, "rate": 2000},
+    ]
+
+
+def default_salary_bonus_rates():
+    return {
+        "english": 200,
+        "lesson_filled": 200,
+        "night": 200,
+        "reference": 2000,
+    }
+
+
+def default_achievement_payouts():
+    return [
+        {"min_points": 7, "max_points": 9, "amount": 2000},
+        {"min_points": 10, "max_points": 10, "amount": 3000},
+    ]
+
+
+class SalaryConfiguration(models.Model):
+    department = models.OneToOneField(
+        "accounts.Department",
+        on_delete=models.CASCADE,
+        related_name="quran_salary_configuration",
+    )
+    standard_tiers = models.JSONField(default=default_standard_salary_tiers)
+    three_day_tiers = models.JSONField(default=default_three_day_salary_tiers)
+    bonus_rates = models.JSONField(default=default_salary_bonus_rates)
+    achievement_payouts = models.JSONField(default=default_achievement_payouts)
+    night_start = models.TimeField(default=time(22, 0))
+    night_end = models.TimeField(default=time(8, 30))
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="updated_quran_salary_configurations",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Salary settings - {self.department}"
+
+
+class TeacherSalarySlip(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        PROCESSED = "processed", "Processed"
+
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    department = models.ForeignKey(
+        "accounts.Department",
+        on_delete=models.CASCADE,
+        related_name="teacher_salary_slips",
+    )
+    teacher = models.ForeignKey(
+        TeacherProfile,
+        on_delete=models.CASCADE,
+        related_name="salary_slips",
+    )
+    month = models.PositiveSmallIntegerField()
+    year = models.PositiveSmallIntegerField()
+    behavior_good = models.BooleanField(default=False)
+    half_class_overrides = models.JSONField(default=list, blank=True)
+    other_bonuses = models.JSONField(default=list, blank=True)
+    deductions = models.JSONField(default=dict, blank=True)
+    override_values = models.JSONField(default=dict, blank=True)
+    calculated_snapshot = models.JSONField(default=dict, blank=True)
+    calculated_total = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    gross_total = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    deduction_total = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    final_total = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    admin_note = models.TextField(blank=True)
+    pdf_generated_at = models.DateTimeField(null=True, blank=True)
+    pdf_download_count = models.PositiveIntegerField(default=0)
+    pdf_last_downloaded_at = models.DateTimeField(null=True, blank=True)
+    processed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="processed_teacher_salary_slips",
+    )
+    processed_at = models.DateTimeField(null=True, blank=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="updated_teacher_salary_slips",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-year", "-month", "teacher__user__first_name", "teacher__user__username"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["department", "teacher", "year", "month"],
+                name="unique_teacher_salary_slip_month",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["department", "year", "month"]),
+            models.Index(fields=["teacher", "year", "month"]),
+            models.Index(fields=["status", "year", "month"]),
+        ]
+
+    def __str__(self):
+        return f"{self.teacher} - {self.month}/{self.year}"
 
 
 class ClassSchedule(models.Model):
@@ -167,10 +489,75 @@ class ClassSchedule(models.Model):
     duration_minutes = models.PositiveIntegerField(default=30)
     is_active = models.BooleanField(default=True)
 
+    # Salary V2 requires the exact schedule that applied on a historical date.
+    #
+    # Current schedule:
+    #   is_active=True
+    #   effective_to=None
+    #
+    # Historical schedule:
+    #   is_active=False
+    #   effective_to=<last date this schedule applied>
+    #
+    # When a schedule changes, old rows must be closed instead of deleted.
+    effective_from = models.DateField(
+        null=True,
+        blank=True,
+        db_index=True,
+    )
+
+    effective_to = models.DateField(
+        null=True,
+        blank=True,
+        db_index=True,
+    )
+
+    def save(self, *args, **kwargs):
+        source = self.student if self.student_id else (self.teacher if self.teacher_id else None)
+        if source is not None:
+            self.department_id = source.department_id
+            self.institution_id = source.institution_id
+        super().save(*args, **kwargs)
+
     class Meta:
         indexes = [
-            models.Index(fields=["teacher", "weekday", "time_slot"]),
-            models.Index(fields=["student", "weekday", "time_slot"]),
+            models.Index(
+                fields=["teacher", "weekday", "time_slot"],
+            ),
+            models.Index(
+                fields=["student", "weekday", "time_slot"],
+            ),
+            models.Index(
+                fields=[
+                    "student",
+                    "effective_from",
+                    "effective_to",
+                ],
+                name="qsched_student_range",
+            ),
+            models.Index(
+                fields=[
+                    "teacher",
+                    "effective_from",
+                    "effective_to",
+                ],
+                name="qsched_teacher_range",
+            ),
+        ]
+
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(effective_to__isnull=True)
+                    | models.Q(effective_from__isnull=True)
+                    | models.Q(
+                        effective_to__gte=models.F(
+                            "effective_from"
+                        )
+                    )
+                ),
+                name="qsched_valid_date_range",
+            ),
         ]
 
     def __str__(self):
@@ -227,6 +614,13 @@ class Attendance(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        source = self.teacher if self.teacher_id else (self.student if self.student_id else None)
+        if source is not None:
+            self.department_id = source.department_id
+            self.institution_id = source.institution_id
+        super().save(*args, **kwargs)
 
     class Meta:
         constraints = [
@@ -318,6 +712,13 @@ class Lesson(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def save(self, *args, **kwargs):
+        source = self.student if self.student_id else (self.teacher if self.teacher_id else None)
+        if source is not None:
+            self.department_id = source.department_id
+            self.institution_id = source.institution_id
+        super().save(*args, **kwargs)
+
     class Meta:
         indexes = [
             models.Index(fields=["student", "date"]),
@@ -380,6 +781,13 @@ class DailyLessonReport(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def save(self, *args, **kwargs):
+        source = self.student if self.student_id else (self.teacher if self.teacher_id else None)
+        if source is not None:
+            self.department_id = source.department_id
+            self.institution_id = source.institution_id
+        super().save(*args, **kwargs)
+
     class Meta:
         constraints = [
             models.UniqueConstraint(
@@ -441,6 +849,12 @@ class DailyLessonSubjectEntry(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        if self.report_id:
+            self.department_id = self.report.department_id
+            self.institution_id = self.report.institution_id
+        super().save(*args, **kwargs)
 
     class Meta:
         indexes = [
@@ -509,6 +923,13 @@ class LessonAccessPermission(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        source = self.student if self.student_id else (self.teacher if self.teacher_id else None)
+        if source is not None:
+            self.department_id = source.department_id
+            self.institution_id = source.institution_id
+        super().save(*args, **kwargs)
 
     class Meta:
         ordering = ["-lesson_date", "-updated_at", "-id"]
@@ -607,6 +1028,13 @@ class LessonAccessRequest(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def save(self, *args, **kwargs):
+        source = self.student if self.student_id else (self.teacher if self.teacher_id else None)
+        if source is not None:
+            self.department_id = source.department_id
+            self.institution_id = source.institution_id
+        super().save(*args, **kwargs)
+
     class Meta:
         ordering = ["-created_at", "-id"]
         indexes = [
@@ -693,6 +1121,13 @@ class MonthlyLessonSummary(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        source = self.student if self.student_id else (self.teacher if self.teacher_id else None)
+        if source is not None:
+            self.department_id = source.department_id
+            self.institution_id = source.institution_id
+        super().save(*args, **kwargs)
 
     class Meta:
         constraints = [
@@ -784,6 +1219,13 @@ class MonthlyLessonPlan(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def save(self, *args, **kwargs):
+        source = self.student if self.student_id else (self.teacher if self.teacher_id else None)
+        if source is not None:
+            self.department_id = source.department_id
+            self.institution_id = source.institution_id
+        super().save(*args, **kwargs)
+
     class Meta:
         constraints = [
             models.UniqueConstraint(
@@ -800,3 +1242,16 @@ class MonthlyLessonPlan(models.Model):
 
     def __str__(self):
         return f"{self.student} - {self.subject} plan - {self.month}/{self.year}"
+
+
+# Salary Management V2 models
+# Kept separate during migration so the legacy salary system remains
+# operational until Salary V2 is fully verified and switched live.
+from .salary_v2_models import (
+    QuranSalaryPolicy,
+    QuranTeacherMonthlyPayroll,
+    QuranSalaryLedgerEntry,
+    QuranSalaryAdjustment,
+    QuranClassCoverage,
+    QuranStudentDropEvent,
+)

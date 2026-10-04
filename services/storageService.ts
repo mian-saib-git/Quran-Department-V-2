@@ -143,6 +143,12 @@ const normalizeState = (state: any): AppState => {
         classKey: String(a?.classKey ?? a?.class_key ?? ""),
         status: normalizeAttendanceStatus(a?.status),
         timestamp: Number(a?.timestamp ?? Date.now()),
+        markedById: String(a?.markedById ?? a?.marked_by_id ?? ""),
+        markedByUsername: String(
+          a?.markedByUsername ?? a?.marked_by_username ?? a?.marked_by ?? ""
+        ),
+        markedByName: String(a?.markedByName ?? a?.marked_by_name ?? ""),
+        markedByRole: String(a?.markedByRole ?? a?.marked_by_role ?? ""),
       }))
     : [];
 

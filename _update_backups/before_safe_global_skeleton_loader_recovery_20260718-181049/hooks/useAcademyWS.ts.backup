@@ -1,0 +1,47 @@
+import { useEffect, useRef } from "react";
+import { getAccessToken } from "../services/sessionService";
+import { academyWS } from "../services/websocketService";
+
+type AcademyEvent = Record<string, unknown> & { type?: string };
+type AcademyEventHandler = (event: AcademyEvent) => void;
+
+let activeToken: string | null = null;
+
+/**
+ * Opens the shared academy WebSocket with the access token stored in the
+ * current session. Repeated calls are safe and do not recreate a healthy
+ * connection for the same token.
+ */
+export function connectAcademyWS(force = false): void {
+  const token = getAccessToken();
+  if (!token) return;
+
+  if (!force && activeToken === token) return;
+
+  activeToken = token;
+  academyWS.connect(token);
+}
+
+/** Close the shared WebSocket and stop automatic reconnection. */
+export function disconnectAcademyWS(_clearConnection = false): void {
+  academyWS.disconnect();
+  activeToken = null;
+}
+
+/** Subscribe a React component to all academy WebSocket events. */
+export function useAcademyWS(handler: AcademyEventHandler): void {
+  const handlerRef = useRef(handler);
+
+  useEffect(() => {
+    handlerRef.current = handler;
+  }, [handler]);
+
+  useEffect(() => {
+    const unsubscribe = academyWS.on("any", (event) => {
+      handlerRef.current(event as AcademyEvent);
+    });
+
+    connectAcademyWS();
+    return unsubscribe;
+  }, []);
+}

@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
+// IVS_ATTENDANCE_TIME_CLASS_BASED_V24
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { showFeatureLocked } from "../services/featureAccess";
 import {
   AppState,
@@ -33,14 +34,21 @@ import {
   GraduationCap,
   UserRound,
   TrendingUp,
-  Sparkles,
   RefreshCw,
   Loader2,
-  Award,
   ClipboardList,
+  ChevronDown,
+  Search,
+  Check,
+  Clock3,
+  X,
+  RotateCcw,
 } from "lucide-react";
 
+// IVS_REPORTS_DROPDOWN_THEME_V9
+// IVS_ATTENDANCE_AUDIT_REPORTS_V12
 type Period = "daily" | "weekly" | "monthly" | "yearly" | "custom";
+type DateFilterBasis = "attendance_date" | "last_updated";
 type ReportStatus = AttendanceStatus | "Unmarked";
 
 type Row = {
@@ -48,7 +56,9 @@ type Row = {
   entityType: EntityType;
   teacherName: string;
   studentName: string;
+  classTime: string;
   status: ReportStatus;
+  markedBy: string;
   updatedAt: number | null;
 };
 
@@ -79,6 +89,355 @@ type TeacherReport = {
   lessonCount: number;
 };
 
+
+type MultiSelectOption = {
+  id: string;
+  label: string;
+  meta?: string;
+};
+
+const normalizeClassTime = (value?: string | null): string => {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return "";
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return "";
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return "";
+
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+};
+
+const timeToMinutes = (value?: string | null): number | null => {
+  const normalized = normalizeClassTime(value);
+  if (!normalized) return null;
+  const [hour, minute] = normalized.split(":").map(Number);
+  return hour * 60 + minute;
+};
+
+const timeMatchesRange = (
+  value: string | null | undefined,
+  startTime: string,
+  endTime: string
+): boolean => {
+  if (!startTime && !endTime) return true;
+
+  const valueMinutes = timeToMinutes(value);
+  if (valueMinutes === null) return false;
+
+  const startMinutes = timeToMinutes(startTime);
+  const endMinutes = timeToMinutes(endTime);
+
+  if (startMinutes !== null && endMinutes !== null) {
+    if (startMinutes <= endMinutes) {
+      return valueMinutes >= startMinutes && valueMinutes <= endMinutes;
+    }
+
+    // Overnight range, for example 20:00 to 10:00.
+    return valueMinutes >= startMinutes || valueMinutes <= endMinutes;
+  }
+
+  if (startMinutes !== null) return valueMinutes >= startMinutes;
+  if (endMinutes !== null) return valueMinutes <= endMinutes;
+  return true;
+};
+
+const formatClassTime = (value?: string | null): string => {
+  const normalized = normalizeClassTime(value);
+  if (!normalized) return "—";
+
+  const [hour, minute] = normalized.split(":").map(Number);
+  const date = new Date(2000, 0, 1, hour, minute);
+  return date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+};
+
+const timeRangeText = (startTime: string, endTime: string): string => {
+  if (!startTime && !endTime) return "All class times";
+  if (startTime && endTime) {
+    const overnight = timeToMinutes(startTime)! > timeToMinutes(endTime)!;
+    return `${formatClassTime(startTime)} to ${formatClassTime(endTime)}${
+      overnight ? " (overnight)" : ""
+    }`;
+  }
+  if (startTime) return `${formatClassTime(startTime)} and later`;
+  return `${formatClassTime(endTime)} and earlier`;
+};
+
+function MultiSelectFilter({
+  label,
+  allLabel,
+  options,
+  selectedIds,
+  onChange,
+  icon,
+}: {
+  label: string;
+  allLabel: string;
+  options: MultiSelectOption[];
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+  icon: React.ReactNode;
+}) {
+  const [query, setQuery] = useState("");
+  const [isOpen, setIsOpen] = useState(false);
+  const [dropdownPlacement, setDropdownPlacement] = useState<"top" | "bottom">("bottom");
+  const [dropdownPanelMaxHeight, setDropdownPanelMaxHeight] = useState(360);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const selectedSet = useMemo(() => new Set(selectedIds.map(String)), [selectedIds]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsOpen(false);
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
+
+  const visibleOptions = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return options;
+
+    return options.filter((option) =>
+      `${option.label} ${option.meta || ""}`.toLowerCase().includes(needle)
+    );
+  }, [options, query]);
+
+  const selectedOptions = useMemo(
+    () => options.filter((option) => selectedSet.has(String(option.id))),
+    [options, selectedSet]
+  );
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let animationFrame = 0;
+
+    const updatePlacement = () => {
+      window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(() => {
+        const trigger = triggerRef.current;
+        if (!trigger) return;
+
+        const rect = trigger.getBoundingClientRect();
+        const viewportMargin = 12;
+        const availableBelow = Math.max(
+          0,
+          window.innerHeight - rect.bottom - viewportMargin
+        );
+        const availableAbove = Math.max(0, rect.top - viewportMargin);
+        const preferredMenuHeight = Math.min(
+          menuRef.current?.scrollHeight || 360,
+          360
+        );
+
+        const nextPlacement =
+          availableBelow >= preferredMenuHeight || availableBelow >= availableAbove
+            ? "bottom"
+            : "top";
+        const availableSpace =
+          nextPlacement === "bottom" ? availableBelow : availableAbove;
+
+        setDropdownPlacement(nextPlacement);
+        setDropdownPanelMaxHeight(
+          Math.max(140, Math.min(360, availableSpace))
+        );
+      });
+    };
+
+    updatePlacement();
+    window.addEventListener("resize", updatePlacement);
+    window.addEventListener("scroll", updatePlacement, true);
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      window.removeEventListener("resize", updatePlacement);
+      window.removeEventListener("scroll", updatePlacement, true);
+    };
+  }, [isOpen, visibleOptions.length]);
+
+  const summary =
+    selectedIds.length === 0
+      ? allLabel
+      : selectedOptions.length === 1
+      ? selectedOptions[0]?.label || `1 ${label.toLowerCase()} selected`
+      : `${selectedIds.length} ${label.toLowerCase()} selected`;
+
+  const toggle = (id: string) => {
+    const normalized = String(id);
+    if (selectedSet.has(normalized)) {
+      onChange(selectedIds.filter((value) => String(value) !== normalized));
+      return;
+    }
+    onChange([...selectedIds, normalized]);
+  };
+
+  const selectVisible = () => {
+    const merged = new Set(selectedIds.map(String));
+    visibleOptions.forEach((option) => merged.add(String(option.id)));
+    onChange(Array.from(merged));
+  };
+
+  return (
+    <div
+      ref={rootRef}
+      className={`relative min-w-0 ${isOpen ? "z-[140]" : "z-10"}`}
+    >
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <label className="text-[12px] font-bold text-[#40506B]">{label}</label>
+        {selectedIds.length > 0 && (
+          <span className="text-[11px] font-semibold text-[#8A9AB3]">
+            {selectedIds.length} selected
+          </span>
+        )}
+      </div>
+
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((current) => !current)}
+        className={`flex h-10 w-full items-center gap-2.5 rounded-[12px] border bg-white px-3 text-left text-sm shadow-[0_1px_2px_rgba(51,65,85,0.03)] transition duration-150 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-indigo-500/10 ${
+          isOpen
+            ? "border-[#A99CFF] bg-white shadow-[0_0_0_3px_rgba(91,67,230,0.10),0_8px_22px_-16px_rgba(79,70,229,0.70)]"
+            : "border-[#D8E2EF] hover:border-[#C5D2E3]"
+        }`}
+      >
+        <span className="shrink-0 text-[#8A9AB3]">{icon}</span>
+        <span className="min-w-0 flex-1 truncate font-semibold text-[#1F2A44]">
+          {summary}
+        </span>
+        {selectedIds.length > 0 && (
+          <span className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-indigo-50 px-1.5 text-[10px] font-black tabular-nums text-indigo-700">
+            {selectedIds.length}
+          </span>
+        )}
+        <ChevronDown
+          size={15}
+          className={`shrink-0 text-slate-400 transition duration-150 ${
+            isOpen ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+
+      {isOpen && (
+        <div
+          ref={menuRef}
+          className={`absolute left-0 z-[200] flex w-full min-w-[300px] flex-col overflow-hidden rounded-2xl border border-[#D8E2EF] bg-white shadow-[0_24px_65px_-18px_rgba(31,42,68,0.32)] ${
+            dropdownPlacement === "top" ? "bottom-full mb-2" : "top-full mt-2"
+          }`}
+          style={{ maxHeight: dropdownPanelMaxHeight }}
+        >
+          <div className="border-b border-[#E9EEF5] bg-[#F8FAFD] p-3">
+            <div className="relative">
+              <Search
+                size={15}
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+              />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={`Search ${label.toLowerCase()}...`}
+                autoFocus
+                className="h-10 w-full rounded-xl border border-[#D8E2EF] bg-white pl-9 pr-3 text-xs font-semibold text-[#1F2A44] outline-none transition placeholder:text-[#93A0B5] focus:border-indigo-300 focus:ring-[3px] focus:ring-indigo-500/10"
+              />
+            </div>
+
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={selectVisible}
+                disabled={visibleOptions.length === 0}
+                className="text-[11px] font-bold text-indigo-700 transition hover:text-indigo-900 disabled:opacity-40"
+              >
+                Select visible
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange([])}
+                className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-500 transition hover:text-slate-900"
+              >
+                <X size={12} /> Use all
+              </button>
+            </div>
+          </div>
+
+          <div
+            className="min-h-0 flex-1 overflow-y-auto p-2"
+            role="listbox"
+            aria-multiselectable="true"
+          >
+            {visibleOptions.length === 0 ? (
+              <div className="px-3 py-7 text-center text-xs font-semibold text-slate-500">
+                No matching {label.toLowerCase()} found.
+              </div>
+            ) : (
+              visibleOptions.map((option) => {
+                const selected = selectedSet.has(String(option.id));
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onClick={() => toggle(option.id)}
+                    className={`flex w-full items-start gap-2.5 rounded-xl px-3 py-2.5 text-left transition ${
+                      selected
+                        ? "bg-[#F1EFFE] text-[#4438CA] shadow-[0_6px_16px_-12px_rgba(79,70,229,0.75)] ring-1 ring-inset ring-[#DDD7FF]"
+                        : "text-slate-800 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span
+                      className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition ${
+                        selected
+                          ? "border-indigo-600 bg-indigo-600 text-white"
+                          : "border-slate-300 bg-white"
+                      }`}
+                    >
+                      {selected && <Check size={11} strokeWidth={3} />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs font-bold">
+                        {option.label}
+                      </span>
+                      {option.meta && (
+                        <span className="mt-0.5 block truncate text-[10px] font-medium text-slate-500">
+                          {option.meta}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const REPORT_PAGE_SIZE = 20;
 const CARD_PAGE_SIZE = 10;
 
@@ -96,6 +455,18 @@ function paginate<T>(items: T[], page: number, pageSize: number) {
 }
 
 const todayStr = () => new Date().toISOString().split("T")[0];
+
+const timestampToLocalDate = (value: number | string | null | undefined) => {
+  if (value === null || value === undefined || value === "") return "";
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 
 const toDate = (yyyyMmDd: string) => {
   const [y, m, d] = yyyyMmDd.split("-").map((v) => parseInt(v, 10));
@@ -248,6 +619,12 @@ function initials(name: string) {
   );
 }
 
+function teacherReportCode(name: string, fallbackIndex = 0) {
+  const match = String(name || "").trim().match(/^(\d{1,2})(?=\D|$)/);
+  if (match) return match[1].padStart(2, "0");
+  return String(fallbackIndex + 1).padStart(2, "0");
+}
+
 function Segmented({
   value,
   onChange,
@@ -258,26 +635,100 @@ function Segmented({
   options: { value: string; label: string }[];
 }) {
   return (
-    <div className="inline-flex rounded-2xl bg-white/70 border border-slate-200/70 p-1 shadow-sm overflow-x-auto">
-      {options.map((o) => {
-        const active = value === o.value;
+    <div className="inline-flex min-h-10 max-w-full items-center overflow-x-auto rounded-[13px] border border-[#DCE5F1] bg-[#F4F7FB] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+      {options.map((option) => {
+        const active = value === option.value;
 
         return (
           <button
-            key={o.value}
+            key={option.value}
             type="button"
-            onClick={() => onChange(o.value)}
-            className={`px-3 py-2 rounded-xl text-xs font-extrabold transition whitespace-nowrap ${
+            onClick={() => onChange(option.value)}
+            className={`h-8 whitespace-nowrap rounded-lg px-3 text-xs font-bold transition duration-150 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-indigo-500/10 ${
               active
-                ? "bg-white text-indigo-700 shadow-[0_10px_22px_rgba(15,23,42,0.08)] border border-slate-200/70"
-                : "text-slate-600 hover:text-slate-900"
+                ? "border border-[#DDD7FF] bg-white text-[#5B43E6] shadow-[0_8px_20px_-12px_rgba(79,70,229,0.72),0_1px_2px_rgba(51,65,85,0.06)] ring-1 ring-[#F0EDFF]"
+                : "text-[#53627A] hover:bg-white/80 hover:text-[#1F2A44]"
             }`}
           >
-            {o.label}
+            {option.label}
           </button>
         );
       })}
     </div>
+  );
+}
+
+function FilterSectionHeading({
+  title,
+  description,
+  dotClass,
+  icon,
+}: {
+  title: string;
+  description?: string;
+  dotClass: string;
+  icon?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center gap-2.5">
+        {icon ? (
+          <span className="flex h-8 w-8 items-center justify-center rounded-[11px] border border-[#DED9FF] bg-[#F1EFFE] text-[#5B43E6] shadow-[0_7px_16px_-10px_rgba(79,70,229,0.72)]">
+            {icon}
+          </span>
+        ) : (
+          <span className={`h-2 w-2 rounded-full ${dotClass}`} />
+        )}
+        <h3 className="text-[12.5px] font-black uppercase tracking-[0.055em] text-[#1F2A44]">
+          {title}
+        </h3>
+      </div>
+      {description && (
+        <p className="text-[11px] font-medium text-[#8A9AB3]">{description}</p>
+      )}
+    </div>
+  );
+}
+
+function FilterToggle({
+  checked,
+  disabled = false,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={`${label}: ${checked ? "on" : "off"}`}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className="group inline-flex items-center gap-3 rounded-lg px-0.5 py-1 text-left text-sm font-semibold text-[#33415C] transition duration-150 hover:text-[#17213A] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-indigo-500/12 disabled:cursor-not-allowed disabled:opacity-45"
+    >
+      <span
+        aria-hidden="true"
+        className="relative block h-7 w-12 shrink-0 rounded-full border transition duration-150"
+        style={{
+          backgroundColor: checked ? "#5B43E6" : "#D5DEEA",
+          borderColor: checked ? "#4F46E5" : "#C5D0DF",
+          boxShadow: checked
+            ? "0 7px 16px -10px rgba(79, 70, 229, 0.85), inset 0 1px 1px rgba(255,255,255,0.22)"
+            : "inset 0 1px 2px rgba(15,23,42,0.10)",
+        }}
+      >
+        <span
+          className="absolute left-[3px] top-[3px] block h-5 w-5 rounded-full border border-white/80 bg-white shadow-[0_2px_5px_rgba(15,23,42,0.28)] transition-transform duration-150"
+          style={{ transform: checked ? "translateX(20px)" : "translateX(0)" }}
+        />
+      </span>
+      <span className="whitespace-nowrap">{label}</span>
+    </button>
   );
 }
 
@@ -354,6 +805,7 @@ function StatCard({
 
 type ReportsTabProps = {
   appState: AppState;
+  departmentName?: string;
   generatedBy?: string;
   canExportPdf?: boolean;
   canExportCsv?: boolean;
@@ -362,6 +814,7 @@ type ReportsTabProps = {
 
 export function ReportsTab({
   appState,
+  departmentName = "Quran Department",
   generatedBy = "Coordinator",
   canExportPdf = true,
   canExportCsv = true,
@@ -371,19 +824,25 @@ export function ReportsTab({
   const [anchor, setAnchor] = useState<string>(todayStr());
   const [start, setStart] = useState<string>(todayStr());
   const [end, setEnd] = useState<string>(todayStr());
-  const [teacherId, setTeacherId] = useState<string>("all");
-  const [studentId, setStudentId] = useState<string>("all");
-  const [includeTeacherRow, setIncludeTeacherRow] = useState(true);
+  const [selectedTeacherIds, setSelectedTeacherIds] = useState<string[]>([]);
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [classTimeStart, setClassTimeStart] = useState<string>("");
+  const [classTimeEnd, setClassTimeEnd] = useState<string>("");
+  const [includeTeacherRow, setIncludeTeacherRow] = useState(false);
   const [includeUnmarked, setIncludeUnmarked] = useState(false);
-  const [activeView, setActiveView] = useState<"attendance" | "students" | "teachers" | "parent">("attendance");
+  const [reportSearch, setReportSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | ReportStatus>("all");
+  const [dateFilterBasis, setDateFilterBasis] = useState<DateFilterBasis>("attendance_date");
+  const [activeView, setActiveView] = useState<"attendance" | "students" | "teachers">("attendance");
+  const [filtersCollapsed, setFiltersCollapsed] = useState(false);
+  const isReportView = (view: string) => String(activeView) === view;
 
   const [lessons, setLessons] = useState<LessonPayload[]>([]);
   const [lessonsLoading, setLessonsLoading] = useState(false);
   const [lessonMessage, setLessonMessage] = useState("");
   const [attendancePage, setAttendancePage] = useState(1);
-const [studentPage, setStudentPage] = useState(1);
-const [teacherPage, setTeacherPage] = useState(1);
-const [parentPage, setParentPage] = useState(1);
+  const [studentPage, setStudentPage] = useState(1);
+  const [teacherPage, setTeacherPage] = useState(1);
 
   const loadLessons = async () => {
     try {
@@ -404,21 +863,25 @@ const [parentPage, setParentPage] = useState(1);
   }, []);
 
   useEffect(() => {
-  setAttendancePage(1);
-  setStudentPage(1);
-  setTeacherPage(1);
-  setParentPage(1);
-}, [
-  activeView,
-  period,
-  anchor,
-  start,
-  end,
-  teacherId,
-  studentId,
-  includeTeacherRow,
-  includeUnmarked,
-]);
+    setAttendancePage(1);
+    setStudentPage(1);
+    setTeacherPage(1);
+  }, [
+    activeView,
+    period,
+    anchor,
+    start,
+    end,
+    selectedTeacherIds,
+    selectedStudentIds,
+    classTimeStart,
+    classTimeEnd,
+    includeTeacherRow,
+    includeUnmarked,
+    dateFilterBasis,
+    reportSearch,
+    statusFilter,
+  ]);
 
   const teacherById = useMemo(() => {
     const m = new Map<string, Teacher>();
@@ -432,10 +895,98 @@ const [parentPage, setParentPage] = useState(1);
     return m;
   }, [appState.students]);
 
-  const studentsForTeacher = useMemo(() => {
-    if (teacherId === "all") return appState.students;
-    return appState.students.filter((s) => String(s.teacherId) === String(teacherId));
-  }, [appState.students, teacherId]);
+  const selectedTeacherIdSet = useMemo(
+    () => new Set(selectedTeacherIds.map(String)),
+    [selectedTeacherIds]
+  );
+
+  const teacherScopedStudents = useMemo(() => {
+    if (selectedTeacherIds.length === 0) return appState.students;
+    return appState.students.filter((student) =>
+      selectedTeacherIdSet.has(String(student.teacherId))
+    );
+  }, [appState.students, selectedTeacherIds, selectedTeacherIdSet]);
+
+  const teacherScopedStudentIdSet = useMemo(
+    () => new Set(teacherScopedStudents.map((student) => String(student.id))),
+    [teacherScopedStudents]
+  );
+
+  useEffect(() => {
+    setSelectedStudentIds((current) => {
+      const next = current.filter((id) => teacherScopedStudentIdSet.has(String(id)));
+      return next.length === current.length ? current : next;
+    });
+  }, [teacherScopedStudentIdSet]);
+
+  const selectedStudentIdSet = useMemo(
+    () => new Set(selectedStudentIds.map(String)),
+    [selectedStudentIds]
+  );
+
+  const hasTimeFilter = Boolean(classTimeStart || classTimeEnd);
+
+  const reportStudents = useMemo(() => {
+    const entityScoped =
+      selectedStudentIds.length === 0
+        ? teacherScopedStudents
+        : teacherScopedStudents.filter((student) =>
+            selectedStudentIdSet.has(String(student.id))
+          );
+
+    return entityScoped.filter((student) =>
+      timeMatchesRange(student.timeSlot, classTimeStart, classTimeEnd)
+    );
+  }, [
+    teacherScopedStudents,
+    selectedStudentIds,
+    selectedStudentIdSet,
+    classTimeStart,
+    classTimeEnd,
+  ]);
+
+  const reportStudentIdSet = useMemo(
+    () => new Set(reportStudents.map((student) => String(student.id))),
+    [reportStudents]
+  );
+
+  const reportTeacherIdSet = useMemo(() => {
+    const ids = new Set<string>();
+
+    if (selectedTeacherIds.length > 0) {
+      selectedTeacherIds.forEach((id) => ids.add(String(id)));
+    } else if (selectedStudentIds.length > 0 || hasTimeFilter) {
+      reportStudents.forEach((student) => ids.add(String(student.teacherId)));
+    } else {
+      appState.teachers.forEach((teacher) => ids.add(String(teacher.id)));
+    }
+
+    if (hasTimeFilter) {
+      const teachersWithMatchingClasses = new Set(
+        reportStudents.map((student) => String(student.teacherId))
+      );
+      Array.from(ids).forEach((id) => {
+        if (!teachersWithMatchingClasses.has(id)) ids.delete(id);
+      });
+    }
+
+    return ids;
+  }, [
+    selectedTeacherIds,
+    selectedStudentIds,
+    hasTimeFilter,
+    reportStudents,
+    appState.teachers,
+  ]);
+
+  const reportTeachers = useMemo(
+    () =>
+      appState.teachers
+        .filter((teacher) => reportTeacherIdSet.has(String(teacher.id)))
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [appState.teachers, reportTeacherIdSet]
+  );
 
   const teachersSorted = useMemo(
     () => appState.teachers.slice().sort((a, b) => a.name.localeCompare(b.name)),
@@ -443,8 +994,25 @@ const [parentPage, setParentPage] = useState(1);
   );
 
   const studentsSorted = useMemo(
-    () => studentsForTeacher.slice().sort((a, b) => a.name.localeCompare(b.name)),
-    [studentsForTeacher]
+    () => teacherScopedStudents.slice().sort((a, b) => a.name.localeCompare(b.name)),
+    [teacherScopedStudents]
+  );
+
+  const teacherOptions = useMemo<MultiSelectOption[]>(
+    () => teachersSorted.map((teacher) => ({ id: String(teacher.id), label: teacher.name })),
+    [teachersSorted]
+  );
+
+  const studentOptions = useMemo<MultiSelectOption[]>(
+    () =>
+      studentsSorted.map((student) => ({
+        id: String(student.id),
+        label: student.name,
+        meta: `${teacherById.get(String(student.teacherId))?.name || "Unknown Teacher"} · ${formatClassTime(
+          student.timeSlot
+        )}`,
+      })),
+    [studentsSorted, teacherById]
   );
 
   const effectiveRange = useMemo(() => {
@@ -459,58 +1027,75 @@ const [parentPage, setParentPage] = useState(1);
     return lessons.filter((lesson) => {
       if (s && lesson.date < s) return false;
       if (e && lesson.date > e) return false;
-
-      if (teacherId !== "all" && String(lesson.teacher_id) !== String(teacherId)) {
-        return false;
-      }
-
-      if (studentId !== "all" && String(lesson.student_id) !== String(studentId)) {
-        return false;
-      }
-
+      if (!reportStudentIdSet.has(String(lesson.student_id))) return false;
+      if (!reportTeacherIdSet.has(String(lesson.teacher_id))) return false;
       return true;
     });
-  }, [lessons, effectiveRange, teacherId, studentId]);
+  }, [lessons, effectiveRange, reportStudentIdSet, reportTeacherIdSet]);
 
-  const scope = useMemo(() => {
-    const teacher = teacherId !== "all" ? teacherById.get(String(teacherId)) : undefined;
-    const student = studentId !== "all" ? studentById.get(String(studentId)) : undefined;
+  const scope = useMemo(
+    () => ({ teachers: reportTeachers, students: reportStudents }),
+    [reportTeachers, reportStudents]
+  );
 
-    if (student) {
-      const t = teacherById.get(String(student.teacherId));
+  const teacherClassTimes = useMemo(() => {
+    const map = new Map<string, Set<string>>();
 
-      return {
-        teachers: includeTeacherRow && t ? [t] : [],
-        students: [student],
-      };
-    }
-
-    if (teacher) {
-      return {
-        teachers: includeTeacherRow ? [teacher] : [],
-        students: appState.students.filter((s) => String(s.teacherId) === String(teacher.id)),
-      };
-    }
-
-    return {
-      teachers: includeTeacherRow ? appState.teachers : [],
-      students: appState.students,
+    const add = (teacherId: string, value?: string | null) => {
+      const time = normalizeClassTime(value);
+      if (!time) return;
+      if (!map.has(teacherId)) map.set(teacherId, new Set<string>());
+      map.get(teacherId)!.add(time);
     };
+
+    reportStudents.forEach((student) => add(String(student.teacherId), student.timeSlot));
+
+    appState.attendance.forEach((record) => {
+      if (record.entityType !== EntityType.TEACHER) return;
+
+      const basisDate =
+        dateFilterBasis === "attendance_date"
+          ? record.date
+          : timestampToLocalDate(record.timestamp);
+
+      if (!basisDate) return;
+      if (basisDate < effectiveRange.start || basisDate > effectiveRange.end) return;
+      if (!reportTeacherIdSet.has(String(record.entityId))) return;
+      add(String(record.entityId), record.classKey);
+    });
+
+    const result = new Map<string, string[]>();
+    map.forEach((times, teacherId) => {
+      result.set(teacherId, Array.from(times).sort());
+    });
+    return result;
   }, [
-    teacherId,
-    studentId,
-    includeTeacherRow,
-    teacherById,
-    studentById,
-    appState.teachers,
-    appState.students,
+    reportStudents,
+    appState.attendance,
+    reportTeacherIdSet,
+    effectiveRange,
+    dateFilterBasis,
   ]);
+
+  const teacherDatesWithClassRecords = useMemo(() => {
+    const keys = new Set<string>();
+    for (const record of appState.attendance) {
+      if (record.entityType !== EntityType.TEACHER) continue;
+      if (!normalizeClassTime(record.classKey)) continue;
+      keys.add(`${record.date}:${record.entityId}`);
+    }
+    return keys;
+  }, [appState.attendance]);
 
   const recordMap = useMemo(() => {
     const map = new Map<string, AttendanceRecord>();
 
-    for (const r of appState.attendance) {
-      map.set(`${r.date}:${r.entityType}:${r.entityId}`, r);
+    for (const record of appState.attendance) {
+      const classKey =
+        record.entityType === EntityType.TEACHER
+          ? normalizeClassTime(record.classKey)
+          : "";
+      map.set(`${record.date}:${record.entityType}:${record.entityId}:${classKey}`, record);
     }
 
     return map;
@@ -522,90 +1107,150 @@ const [parentPage, setParentPage] = useState(1);
     if (!s || !e) return [] as Row[];
 
     const dates = dateListInclusive(s, e, 400);
-    const wantsUnmarked = includeUnmarked && (teacherId !== "all" || studentId !== "all");
+    const hasEntitySelection =
+      selectedTeacherIds.length > 0 || selectedStudentIds.length > 0;
+    const wantsUnmarked =
+      dateFilterBasis === "attendance_date" &&
+      includeUnmarked &&
+      (hasEntitySelection || hasTimeFilter);
 
-    if (includeUnmarked && !wantsUnmarked) return [] as Row[];
+    if (
+      dateFilterBasis === "attendance_date" &&
+      includeUnmarked &&
+      !wantsUnmarked
+    ) {
+      return [] as Row[];
+    }
 
     const out: Row[] = [];
 
-    const pushFromRecord = (r: AttendanceRecord) => {
-      if (r.date < s || r.date > e) return;
+    const teacherRecordMatchesTime = (teacherId: string, classKey: string) => {
+      if (!hasTimeFilter) return true;
+      if (classKey) return timeMatchesRange(classKey, classTimeStart, classTimeEnd);
+      return (teacherClassTimes.get(teacherId) || []).some((time) =>
+        timeMatchesRange(time, classTimeStart, classTimeEnd)
+      );
+    };
 
-      if (teacherId !== "all") {
-        if (r.entityType === EntityType.TEACHER && String(r.entityId) !== String(teacherId)) return;
+    const pushFromRecord = (record: AttendanceRecord) => {
+      const basisDate =
+        dateFilterBasis === "attendance_date"
+          ? record.date
+          : timestampToLocalDate(record.timestamp);
 
-        if (r.entityType === EntityType.STUDENT) {
-          const st = studentById.get(String(r.entityId));
-          if (!st || String(st.teacherId) !== String(teacherId)) return;
+      if (!basisDate || basisDate < s || basisDate > e) return;
+
+      if (record.entityType === EntityType.TEACHER) {
+        if (!includeTeacherRow) return;
+        const teacherId = String(record.entityId);
+        if (!reportTeacherIdSet.has(teacherId)) return;
+
+        const normalizedTime = normalizeClassTime(record.classKey);
+        if (
+          !normalizedTime &&
+          teacherDatesWithClassRecords.has(`${record.date}:${teacherId}`)
+        ) {
+          // Ignore a legacy daily teacher row when class-specific rows exist
+          // for the same teacher and date. This prevents double counting.
+          return;
         }
-      }
+        if (!teacherRecordMatchesTime(teacherId, normalizedTime)) return;
 
-      if (studentId !== "all") {
-        if (r.entityType !== EntityType.STUDENT || String(r.entityId) !== String(studentId)) return;
-      }
+        const fallbackTimes = teacherClassTimes.get(teacherId) || [];
+        const displayTime = normalizedTime
+          ? formatClassTime(normalizedTime)
+          : fallbackTimes.length === 1
+          ? formatClassTime(fallbackTimes[0])
+          : fallbackTimes.length > 1
+          ? "Multiple"
+          : "—";
 
-      if (r.entityType === EntityType.TEACHER) {
-        const t = teacherById.get(String(r.entityId));
-
+        const teacher = teacherById.get(teacherId);
         out.push({
-          date: r.date,
-          entityType: r.entityType,
-          teacherName: t?.name ?? "Unknown Teacher",
+          date: record.date,
+          entityType: record.entityType,
+          teacherName: teacher?.name ?? "Unknown Teacher",
           studentName: "—",
-          status: r.status,
-          updatedAt: r.timestamp,
+          classTime: displayTime,
+          status: record.status,
+          markedBy: record.markedByName || record.markedByUsername || "—",
+          updatedAt: record.timestamp,
         });
-      } else {
-        const st = studentById.get(String(r.entityId));
-        const t = st ? teacherById.get(String(st.teacherId)) : undefined;
-
-        out.push({
-          date: r.date,
-          entityType: r.entityType,
-          teacherName: t?.name ?? "Unknown Teacher",
-          studentName: st?.name ?? "Unknown Student",
-          status: r.status,
-          updatedAt: r.timestamp,
-        });
+        return;
       }
+
+      const studentId = String(record.entityId);
+      if (!reportStudentIdSet.has(studentId)) return;
+
+      const student = studentById.get(studentId);
+      if (!student) return;
+      if (!timeMatchesRange(student.timeSlot, classTimeStart, classTimeEnd)) return;
+
+      const teacher = teacherById.get(String(student.teacherId));
+      out.push({
+        date: record.date,
+        entityType: record.entityType,
+        teacherName: teacher?.name ?? "Unknown Teacher",
+        studentName: student.name,
+        classTime: formatClassTime(student.timeSlot),
+        status: record.status,
+        markedBy: record.markedByName || record.markedByUsername || "—",
+        updatedAt: record.timestamp,
+      });
     };
 
     if (!wantsUnmarked) {
-      for (const r of appState.attendance) pushFromRecord(r);
+      for (const record of appState.attendance) pushFromRecord(record);
 
       return out.sort((a, b) =>
         a.date === b.date
-          ? a.teacherName.localeCompare(b.teacherName)
+          ? a.classTime === b.classTime
+            ? a.teacherName.localeCompare(b.teacherName)
+            : a.classTime.localeCompare(b.classTime)
           : a.date.localeCompare(b.date)
       );
     }
 
-    for (const d of dates) {
-      for (const t of scope.teachers) {
-        const key = `${d}:${EntityType.TEACHER}:${t.id}`;
-        const r = recordMap.get(key);
+    for (const date of dates) {
+      if (includeTeacherRow) {
+        for (const teacher of scope.teachers) {
+          const teacherId = String(teacher.id);
+          const times = (teacherClassTimes.get(teacherId) || []).filter((time) =>
+            timeMatchesRange(time, classTimeStart, classTimeEnd)
+          );
+          const rowTimes = times.length > 0 ? times : hasTimeFilter ? [] : [""];
 
-        out.push({
-          date: d,
-          entityType: EntityType.TEACHER,
-          teacherName: t.name,
-          studentName: "—",
-          status: r?.status ?? "Unmarked",
-          updatedAt: r?.timestamp ?? null,
-        });
+          for (const time of rowTimes) {
+            const key = `${date}:${EntityType.TEACHER}:${teacher.id}:${time}`;
+            const record = recordMap.get(key);
+
+            out.push({
+              date,
+              entityType: EntityType.TEACHER,
+              teacherName: teacher.name,
+              studentName: "—",
+              classTime: formatClassTime(time),
+              status: record?.status ?? "Unmarked",
+              markedBy: record?.markedByName || record?.markedByUsername || "—",
+              updatedAt: record?.timestamp ?? null,
+            });
+          }
+        }
       }
 
-      for (const sObj of scope.students) {
-        const key = `${d}:${EntityType.STUDENT}:${sObj.id}`;
-        const r = recordMap.get(key);
+      for (const student of scope.students) {
+        const key = `${date}:${EntityType.STUDENT}:${student.id}:`;
+        const record = recordMap.get(key);
 
         out.push({
-          date: d,
+          date,
           entityType: EntityType.STUDENT,
-          teacherName: teacherById.get(String(sObj.teacherId))?.name ?? "Unknown Teacher",
-          studentName: sObj.name,
-          status: r?.status ?? "Unmarked",
-          updatedAt: r?.timestamp ?? null,
+          teacherName: teacherById.get(String(student.teacherId))?.name ?? "Unknown Teacher",
+          studentName: student.name,
+          classTime: formatClassTime(student.timeSlot),
+          status: record?.status ?? "Unmarked",
+          markedBy: record?.markedByName || record?.markedByUsername || "—",
+          updatedAt: record?.timestamp ?? null,
         });
       }
     }
@@ -614,14 +1259,47 @@ const [parentPage, setParentPage] = useState(1);
   }, [
     appState.attendance,
     effectiveRange,
+    selectedTeacherIds,
+    selectedStudentIds,
     includeUnmarked,
-    teacherId,
-    studentId,
+    includeTeacherRow,
+    hasTimeFilter,
+    classTimeStart,
+    classTimeEnd,
     scope,
     recordMap,
+    reportTeacherIdSet,
+    reportStudentIdSet,
+    teacherClassTimes,
+    teacherDatesWithClassRecords,
     teacherById,
     studentById,
+    dateFilterBasis,
   ]);
+
+  const normalizedReportSearch = reportSearch.trim().toLocaleLowerCase();
+
+  const filteredAttendanceRows = useMemo(() => {
+    return rows.filter((row) => {
+      if (statusFilter !== "all" && row.status !== statusFilter) return false;
+      if (!normalizedReportSearch) return true;
+
+      const haystack = [
+        row.date,
+        row.classTime,
+        row.teacherName,
+        row.studentName,
+        row.entityType,
+        row.status,
+        row.markedBy,
+        row.updatedAt ? new Date(row.updatedAt).toLocaleString() : "",
+      ]
+        .join(" ")
+        .toLocaleLowerCase();
+
+      return haystack.includes(normalizedReportSearch);
+    });
+  }, [rows, statusFilter, normalizedReportSearch]);
 
   const summary = useMemo(() => {
     const counts: Record<string, number> = {
@@ -631,12 +1309,12 @@ const [parentPage, setParentPage] = useState(1);
       Unmarked: 0,
     };
 
-    for (const r of rows) {
+    for (const r of filteredAttendanceRows) {
       counts[r.status] = (counts[r.status] ?? 0) + 1;
     }
 
     return counts;
-  }, [rows]);
+  }, [filteredAttendanceRows]);
 
   const studentReports = useMemo<StudentReport[]>(() => {
     const list = scope.students.map((student) => {
@@ -701,22 +1379,38 @@ const [parentPage, setParentPage] = useState(1);
 
   const teacherReports = useMemo<TeacherReport[]>(() => {
     const list = scope.teachers.map((teacher) => {
-      const students = appState.students.filter((student) => String(student.teacherId) === String(teacher.id));
+      const students = scope.students.filter(
+        (student) => String(student.teacherId) === String(teacher.id)
+      );
 
       const teacherLessons = filteredLessons.filter((lesson) => {
         return String(lesson.teacher_id) === String(teacher.id);
       });
 
+      const scopedStudentIds = new Set(students.map((student) => String(student.id)));
       const attendanceRows = appState.attendance.filter((item) => {
         if (item.date < effectiveRange.start || item.date > effectiveRange.end) return false;
 
         if (item.entityType === EntityType.TEACHER) {
-          return String(item.entityId) === String(teacher.id);
+          if (String(item.entityId) !== String(teacher.id)) return false;
+          if (!hasTimeFilter) return true;
+
+          const normalizedTime = normalizeClassTime(item.classKey);
+          if (normalizedTime) {
+            return timeMatchesRange(
+              normalizedTime,
+              classTimeStart,
+              classTimeEnd
+            );
+          }
+
+          return (teacherClassTimes.get(String(teacher.id)) || []).some((time) =>
+            timeMatchesRange(time, classTimeStart, classTimeEnd)
+          );
         }
 
         if (item.entityType === EntityType.STUDENT) {
-          const student = studentById.get(String(item.entityId));
-          return String(student?.teacherId || "") === String(teacher.id);
+          return scopedStudentIds.has(String(item.entityId));
         }
 
         return false;
@@ -746,7 +1440,64 @@ const [parentPage, setParentPage] = useState(1);
     });
 
     return list.sort((a, b) => a.teacher.name.localeCompare(b.teacher.name));
-  }, [scope.teachers, appState.students, appState.attendance, effectiveRange, filteredLessons, studentById]);
+  }, [
+    scope.teachers,
+    scope.students,
+    appState.attendance,
+    effectiveRange,
+    filteredLessons,
+    classTimeStart,
+    classTimeEnd,
+    hasTimeFilter,
+    teacherClassTimes,
+  ]);
+
+  const filteredStudentReports = useMemo(() => {
+    return studentReports.filter((report) => {
+      if (statusFilter !== "all") {
+        const statusCount = statusFilter === AttendanceStatus.PRESENT
+          ? report.present
+          : statusFilter === AttendanceStatus.ABSENT
+            ? report.absent
+            : statusFilter === AttendanceStatus.LEAVE
+              ? report.leave
+              : report.unmarked;
+        if (!statusCount) return false;
+      }
+      if (!normalizedReportSearch) return true;
+      const haystack = [
+        report.student.name,
+        report.teacher?.name || "",
+        report.subjects.join(" "),
+        progressLabel(report.latestLesson?.progress_status),
+        report.latestLesson?.subject || "",
+        report.latestLesson?.date || "",
+      ].join(" ").toLocaleLowerCase();
+      return haystack.includes(normalizedReportSearch);
+    });
+  }, [studentReports, statusFilter, normalizedReportSearch]);
+
+  const filteredTeacherReports = useMemo(() => {
+    return teacherReports.filter((report) => {
+      if (statusFilter !== "all") {
+        const statusCount = statusFilter === AttendanceStatus.PRESENT
+          ? report.present
+          : statusFilter === AttendanceStatus.ABSENT
+            ? report.absent
+            : statusFilter === AttendanceStatus.LEAVE
+              ? report.leave
+              : 0;
+        if (!statusCount) return false;
+      }
+      if (!normalizedReportSearch) return true;
+      const haystack = [
+        report.teacher.name,
+        report.students.map((student) => student.name).join(" "),
+        report.subjects.join(" "),
+      ].join(" ").toLocaleLowerCase();
+      return haystack.includes(normalizedReportSearch);
+    });
+  }, [teacherReports, statusFilter, normalizedReportSearch]);
 
   const topProgressStatus = (counts: Record<string, number>) => {
     const best = Object.entries(counts)
@@ -756,18 +1507,59 @@ const [parentPage, setParentPage] = useState(1);
     return best?.[0] || "";
   };
 
+  const teacherSelectionLabel =
+    selectedTeacherIds.length === 0
+      ? selectedStudentIds.length > 0
+        ? "Teachers of selected students"
+        : hasTimeFilter
+        ? "All teachers in time range"
+        : "All Teachers"
+      : selectedTeacherIds.length === 1
+      ? teacherById.get(String(selectedTeacherIds[0]))?.name || "1 selected teacher"
+      : `${selectedTeacherIds.length} selected teachers`;
+
+  const studentSelectionLabel =
+    selectedStudentIds.length === 0
+      ? selectedTeacherIds.length > 0
+        ? "All students of selected teachers"
+        : hasTimeFilter
+        ? "All students in time range"
+        : "All Students"
+      : selectedStudentIds.length === 1
+      ? studentById.get(String(selectedStudentIds[0]))?.name || "1 selected student"
+      : `${selectedStudentIds.length} selected students`;
+
+  const classTimeRangeLabel = timeRangeText(classTimeStart, classTimeEnd);
+  const exportTimeSuffix = hasTimeFilter
+    ? `_time_${(classTimeStart || "start").replace(":", "-")}_to_${(
+        classTimeEnd || "end"
+      ).replace(":", "-")}`
+    : "";
+  const exportFileBase = `attendance_report_${
+    statusFilter === "all" ? "all" : String(statusFilter).toLowerCase()
+  }_${effectiveRange.start}_to_${effectiveRange.end}${exportTimeSuffix}`;
+
   const exportCSV = () => {
   if (!canExportCsv) {
     showFeatureLocked("CSV Export");
     return;
   }
 
-    if (rows.length === 0) {
+    if (filteredAttendanceRows.length === 0) {
       alert("No rows to export for the current filters.");
       return;
     }
 
-    const headers = ["Date", "Teacher", "Student", "Type", "Status", "Last Updated"];
+    const headers = [
+      "Date",
+      "Class Time",
+      "Teacher",
+      "Student",
+      "Type",
+      "Status",
+      "Marked By",
+      "Marked Date & Time",
+    ];
 
     const escape = (v: string) => {
       const needs = v.includes(",") || v.includes('"') || v.includes("\n");
@@ -775,13 +1567,15 @@ const [parentPage, setParentPage] = useState(1);
       return needs ? `"${safe}"` : safe;
     };
 
-    const lines = rows.map((r) =>
+    const lines = filteredAttendanceRows.map((r) =>
       [
         r.date,
+        r.classTime,
         r.teacherName,
         r.studentName,
         r.entityType,
         r.status,
+        r.markedBy,
         r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "",
       ]
         .map((x) => escape(String(x)))
@@ -792,7 +1586,7 @@ const [parentPage, setParentPage] = useState(1);
     const link = document.createElement("a");
 
     link.href = encodeURI(csvContent);
-    link.download = `attendance_report_${effectiveRange.start}_to_${effectiveRange.end}.csv`;
+    link.download = `${exportFileBase}.csv`;
 
     document.body.appendChild(link);
     link.click();
@@ -805,7 +1599,7 @@ const exportExcel = async () => {
     return;
   }
 
-  if (rows.length === 0) {
+  if (filteredAttendanceRows.length === 0) {
     alert('No rows to export for the current filters.');
     return;
   }
@@ -817,20 +1611,24 @@ const exportExcel = async () => {
 
   worksheet.columns = [
     { header: 'Date', key: 'date', width: 16 },
+    { header: 'Class Time', key: 'classTime', width: 16 },
     { header: 'Teacher', key: 'teacherName', width: 28 },
     { header: 'Student', key: 'studentName', width: 28 },
     { header: 'Type', key: 'entityType', width: 16 },
     { header: 'Status', key: 'status', width: 16 },
-    { header: 'Last Updated', key: 'updatedAt', width: 24 },
+    { header: 'Marked By', key: 'markedBy', width: 24 },
+    { header: 'Marked Date & Time', key: 'updatedAt', width: 24 },
   ];
 
-  rows.forEach((r) => {
+  filteredAttendanceRows.forEach((r) => {
     worksheet.addRow({
       date: r.date,
+      classTime: r.classTime,
       teacherName: r.teacherName,
       studentName: r.studentName,
       entityType: r.entityType,
       status: r.status,
+      markedBy: r.markedBy,
       updatedAt: r.updatedAt ? new Date(r.updatedAt).toLocaleString() : '',
     });
   });
@@ -846,7 +1644,7 @@ const exportExcel = async () => {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `attendance_report_${effectiveRange.start}_to_${effectiveRange.end}.xlsx`;
+  link.download = `${exportFileBase}.xlsx`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -859,7 +1657,7 @@ const exportPDF = async () => {
     return;
   }
 
-  if (rows.length === 0) {
+  if (filteredAttendanceRows.length === 0) {
     alert("No rows to export for the current filters.");
     return;
   }
@@ -894,22 +1692,26 @@ const exportPDF = async () => {
   const TABLE_W = pageWidth - 20;
 
   const TABLE_COLS = {
-    sl: 11,
-    date: 25,
-    teacher: 37,
-    student: 35,
-    type: 17,
-    status: 20,
-    updated: 45,
+    sl: 8,
+    date: 19,
+    time: 16,
+    teacher: 28,
+    student: 26,
+    type: 13,
+    status: 17,
+    markedBy: 28,
+    updated: 35,
   };
 
   const TABLE_WIDTHS = [
     TABLE_COLS.sl,
     TABLE_COLS.date,
+    TABLE_COLS.time,
     TABLE_COLS.teacher,
     TABLE_COLS.student,
     TABLE_COLS.type,
     TABLE_COLS.status,
+    TABLE_COLS.markedBy,
     TABLE_COLS.updated,
   ];
 
@@ -941,21 +1743,15 @@ const exportPDF = async () => {
     hour12: true,
   });
 
-  const teacherName =
-    teacherId !== "all"
-      ? teacherById.get(String(teacherId))?.name || "Selected Teacher"
-      : "All Teachers";
-
-  const studentName =
-    studentId !== "all"
-      ? studentById.get(String(studentId))?.name || "Selected Student"
-      : "All Students";
+  const teacherName = teacherSelectionLabel;
+  const studentName = studentSelectionLabel;
+  const classTimeName = classTimeRangeLabel;
 
   const totalPresent = Number(summary.Present ?? 0);
   const totalAbsent = Number(summary.Absent ?? 0);
   const totalLeave = Number(summary.Leave ?? 0);
   const totalUnmarked = Number(summary.Unmarked ?? 0);
-  const totalRows = rows.length;
+  const totalRows = filteredAttendanceRows.length;
 
   const attendanceScore =
     totalRows > 0 ? Math.round((totalPresent / totalRows) * 100) : 0;
@@ -1021,7 +1817,7 @@ const exportPDF = async () => {
     doc.setTextColor(...MUTED);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7);
-    doc.text("Qur'an Department", 37, 24);
+    doc.text(departmentName, 37, 24);
     doc.text("Attendance Management System", 37, 28);
 
     doc.setTextColor(...MUTED);
@@ -1115,7 +1911,7 @@ const exportPDF = async () => {
 
     doc.text("Teacher", rightCardX + 6, detailsY + 18);
     doc.text("Student", rightCardX + 6, detailsY + 25);
-    doc.text("Period", rightCardX + 6, detailsY + 32);
+    doc.text("Class time", rightCardX + 6, detailsY + 32);
     doc.text("Rows", rightCardX + 6, detailsY + 39);
 
     doc.setTextColor(...TEXT);
@@ -1129,7 +1925,9 @@ const exportPDF = async () => {
       maxWidth: 45,
     });
 
-    doc.text(period.toUpperCase(), rightCardX + 35, detailsY + 32);
+    doc.text(classTimeName, rightCardX + 35, detailsY + 32, {
+      maxWidth: 45,
+    });
     doc.text(String(totalRows), rightCardX + 35, detailsY + 39);
   };
 
@@ -1172,11 +1970,13 @@ const exportPDF = async () => {
     const headers = [
       "SL.",
       "DATE",
+      "CLASS TIME",
       "TEACHER",
       "STUDENT",
       "TYPE",
       "STATUS",
-      "LAST UPDATED",
+      "MARKED BY",
+      "MARKED AT",
     ];
 
     headers.forEach((label, index) => {
@@ -1220,7 +2020,7 @@ const exportPDF = async () => {
     doc.setTextColor(...MUTED);
 
     doc.text("Iqra Virtual School", 15, footerY);
-    doc.text("Qur'an Department Attendance Report", 15, footerY + 5);
+    doc.text(`${departmentName} Attendance Report`, 15, footerY + 5);
 
     const pageNumber = doc.getCurrentPageInfo().pageNumber;
 
@@ -1435,7 +2235,7 @@ const exportPDF = async () => {
 
     doc.text("Teacher", 106, 123);
     doc.text("Student", 106, 133);
-    doc.text("Period", 106, 143);
+    doc.text("Class time", 106, 143);
 
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...TEXT);
@@ -1448,7 +2248,9 @@ const exportPDF = async () => {
       maxWidth: 54,
     });
 
-    doc.text(period.toUpperCase(), 132, 143);
+    doc.text(classTimeName, 132, 143, {
+      maxWidth: 54,
+    });
 
     drawMiniStat(15, 171, 43, "Present", String(totalPresent), GREEN, "present");
     drawMiniStat(63, 171, 43, "Absent", String(totalAbsent), RED, "absent");
@@ -1504,13 +2306,15 @@ const exportPDF = async () => {
     drawFooter();
   };
 
-  const body = rows.map((r, index) => [
+  const body = filteredAttendanceRows.map((r, index) => [
     String(index + 1),
     r.date,
+    r.classTime,
     r.teacherName,
     r.studentName,
     r.entityType,
     r.status,
+    r.markedBy,
     r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "—",
   ]);
 
@@ -1553,20 +2357,27 @@ const exportPDF = async () => {
         halign: "center",
       },
       2: {
-        cellWidth: TABLE_COLS.teacher,
+        cellWidth: TABLE_COLS.time,
+        halign: "center",
       },
       3: {
-        cellWidth: TABLE_COLS.student,
+        cellWidth: TABLE_COLS.teacher,
       },
       4: {
+        cellWidth: TABLE_COLS.student,
+      },
+      5: {
         cellWidth: TABLE_COLS.type,
         halign: "center",
       },
-      5: {
+      6: {
         cellWidth: TABLE_COLS.status,
         halign: "center",
       },
-      6: {
+      7: {
+        cellWidth: TABLE_COLS.markedBy,
+      },
+      8: {
         cellWidth: TABLE_COLS.updated,
         halign: "center",
       },
@@ -1584,28 +2395,34 @@ const exportPDF = async () => {
         data.cell.styles.fontStyle = "bold";
       }
 
-      if (data.column.index === 2 || data.column.index === 3) {
+      if (data.column.index === 3 || data.column.index === 4) {
         data.cell.styles.fontStyle = "bold";
         data.cell.styles.textColor = [15, 23, 42];
       }
 
-      if (data.column.index === 4) {
+      if (data.column.index === 5) {
         data.cell.styles.textColor = [71, 85, 105];
         data.cell.styles.fontStyle = "bold";
       }
 
-      if (data.column.index === 5) {
+      if (data.column.index === 6) {
         data.cell.text = [""];
       }
 
-      if (data.column.index === 6) {
-        data.cell.styles.fontSize = 6.5;
+      if (data.column.index === 7) {
+        data.cell.styles.fontSize = 6.4;
+        data.cell.styles.fontStyle = "bold";
+        data.cell.styles.textColor = [15, 23, 42];
+      }
+
+      if (data.column.index === 8) {
+        data.cell.styles.fontSize = 6.2;
         data.cell.styles.textColor = [71, 85, 105];
       }
     },
     didDrawCell: (data: any) => {
       if (data.section !== "body") return;
-      if (data.column.index !== 5) return;
+      if (data.column.index !== 6) return;
 
       const status = String(data.cell.raw || "");
       const cx = data.cell.x + data.cell.width / 2;
@@ -1666,12 +2483,16 @@ const exportPDF = async () => {
     drawFooter();
   }
 
-  doc.save(`attendance_report_${effectiveRange.start}_to_${effectiveRange.end}.pdf`);
+  doc.save(`${exportFileBase}.pdf`);
 };
   const rangeText = `${effectiveRange.start || "----"} → ${effectiveRange.end || "----"}`;
-  const showUnmarkedTip = includeUnmarked && teacherId === "all" && studentId === "all";
+  const showUnmarkedTip =
+    includeUnmarked &&
+    selectedTeacherIds.length === 0 &&
+    selectedStudentIds.length === 0 &&
+    !hasTimeFilter;
 
-const attendanceRowsForDisplay = useMemo(() => rows.slice().reverse(), [rows]);
+const attendanceRowsForDisplay = useMemo(() => filteredAttendanceRows.slice().reverse(), [filteredAttendanceRows]);
 
 const pagedAttendance = useMemo(
   () => paginate(attendanceRowsForDisplay, attendancePage, REPORT_PAGE_SIZE),
@@ -1679,19 +2500,31 @@ const pagedAttendance = useMemo(
 );
 
 const pagedStudents = useMemo(
-  () => paginate(studentReports, studentPage, CARD_PAGE_SIZE),
-  [studentReports, studentPage]
+  () => paginate(filteredStudentReports, studentPage, CARD_PAGE_SIZE),
+  [filteredStudentReports, studentPage]
 );
 
 const pagedTeachers = useMemo(
-  () => paginate(teacherReports, teacherPage, CARD_PAGE_SIZE),
-  [teacherReports, teacherPage]
+  () => paginate(filteredTeacherReports, teacherPage, CARD_PAGE_SIZE),
+  [filteredTeacherReports, teacherPage]
 );
 
-const pagedParents = useMemo(
-  () => paginate(studentReports, parentPage, CARD_PAGE_SIZE),
-  [studentReports, parentPage]
-);
+  const resetReportFilters = () => {
+    const today = todayStr();
+    setPeriod("weekly");
+    setAnchor(today);
+    setStart(today);
+    setEnd(today);
+    setSelectedTeacherIds([]);
+    setSelectedStudentIds([]);
+    setClassTimeStart("");
+    setClassTimeEnd("");
+    setIncludeTeacherRow(false);
+    setIncludeUnmarked(false);
+    setReportSearch("");
+    setStatusFilter("all");
+    setDateFilterBasis("attendance_date");
+  };
 
   return (
     <div className="w-full max-w-none mx-auto space-y-6">
@@ -1703,7 +2536,7 @@ const pagedParents = useMemo(
           <div>
             <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100 px-3 py-1.5 text-xs font-extrabold">
               <FileText size={14} />
-              Reports & Parent Summary
+              Reports Dashboard
             </div>
 
             <h2 className="mt-4 text-2xl md:text-3xl font-black text-slate-950 tracking-tight">
@@ -1711,7 +2544,7 @@ const pagedParents = useMemo(
             </h2>
 
             <p className="mt-2 text-sm text-slate-500 max-w-2xl">
-              Review attendance, student progress, teacher performance, and parent-ready summaries in one report view.
+              Review attendance, student progress, and teacher performance in one report view.
             </p>
           </div>
 
@@ -1789,181 +2622,323 @@ const pagedParents = useMemo(
         </div>
       )}
 
-      <div className="rounded-[30px] border border-slate-200/70 bg-white/80 backdrop-blur-xl shadow-[0_18px_55px_rgba(15,23,42,0.07)] p-5">
-        <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex items-center gap-2 rounded-2xl bg-white/75 border border-slate-200/70 px-3 py-2 shadow-sm">
-              <span className="h-8 w-8 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-700 flex items-center justify-center">
-                <Filter size={16} />
-              </span>
-
-              <div className="leading-tight">
-                <div className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wide">
-                  Date range
-                </div>
-
-                <div className="mt-1 flex items-center gap-2">
-                  <span className="px-2.5 py-1 rounded-full bg-slate-50 border border-slate-200 text-xs font-extrabold text-slate-900 font-mono">
-                    {effectiveRange.start || "---- -- --"}
-                  </span>
-
-                  <span className="text-slate-400 text-xs font-extrabold">→</span>
-
-                  <span className="px-2.5 py-1 rounded-full bg-slate-50 border border-slate-200 text-xs font-extrabold text-slate-900 font-mono">
-                    {effectiveRange.end || "---- -- --"}
-                  </span>
-                </div>
-              </div>
+      <div className="relative z-50 isolate overflow-visible rounded-[28px] border border-[#DCE5F1] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04),0_24px_56px_-30px_rgba(51,65,85,0.28)]">
+        <div className="p-4 md:p-5">
+          <div className={`flex flex-col gap-3 rounded-[18px] border border-[#E7EDF5] bg-[#F8FAFD] px-3 py-3 sm:flex-row sm:items-center sm:justify-between ${
+            filtersCollapsed ? "" : "mb-1"
+          }`}>
+            <div
+              role="tablist"
+              aria-label="Report view"
+              className="inline-flex w-fit max-w-full items-center overflow-x-auto rounded-[13px] border border-[#DCE5F1] bg-white p-1 shadow-[0_2px_10px_rgba(51,65,85,0.05)]"
+            >
+              {[
+                { value: "attendance", label: "Attendance", icon: <ClipboardList size={14} /> },
+                { value: "students", label: "Student-wise", icon: <GraduationCap size={14} /> },
+                { value: "teachers", label: "Teacher-wise", icon: <Users size={14} /> },
+              ].map((tab) => {
+                const active = isReportView(tab.value);
+                return (
+                  <button
+                    key={tab.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setActiveView(tab.value as typeof activeView)}
+                    className={`inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-lg px-3.5 text-xs font-black transition duration-150 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-indigo-500/10 ${
+                      active
+                        ? "bg-white text-[#5B43E6] shadow-[0_9px_20px_-12px_rgba(79,70,229,0.72),0_1px_2px_rgba(51,65,85,0.06)] ring-1 ring-[#DDD7FF]"
+                        : "text-[#4E5D75] hover:bg-[#F6F8FC] hover:text-[#1F2A44]"
+                    }`}
+                  >
+                    {tab.icon}
+                    {tab.label}
+                  </button>
+                );
+              })}
             </div>
 
-            <Segmented
-              value={period}
-              onChange={(v) => setPeriod(v as Period)}
-              options={[
-                { value: "daily", label: "Daily" },
-                { value: "weekly", label: "Weekly" },
-                { value: "monthly", label: "Monthly" },
-                { value: "yearly", label: "Yearly" },
-                { value: "custom", label: "Custom" },
-              ]}
-            />
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={resetReportFilters}
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-[11px] border border-[#DCE5F1] bg-white px-3.5 text-xs font-bold text-[#4B5B74] shadow-[0_2px_8px_rgba(51,65,85,0.05)] transition duration-150 hover:border-[#BCCBE0] hover:bg-[#F8FAFD] hover:text-[#283A59] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-indigo-500/10"
+              >
+                <RotateCcw size={14} />
+                Reset filters
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setFiltersCollapsed((current) => !current)}
+                aria-expanded={!filtersCollapsed}
+                aria-controls="reports-filter-controls"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-[11px] border border-[#CCD8E8] bg-[#F2F6FB] px-3.5 text-xs font-bold text-[#3E506F] shadow-[0_2px_8px_rgba(51,65,85,0.04)] transition duration-150 hover:border-[#B9C8DD] hover:bg-white hover:text-[#283A59] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-indigo-500/12"
+              >
+                <ChevronDown
+                  size={15}
+                  className={`transition duration-200 ${filtersCollapsed ? "" : "rotate-180"}`}
+                />
+                {filtersCollapsed ? "Open filters" : "Minimize"}
+              </button>
+            </div>
           </div>
 
-          <Segmented
-            value={activeView}
-            onChange={(v) => setActiveView(v as any)}
-            options={[
-              { value: "attendance", label: "Attendance" },
-              { value: "students", label: "Student-wise" },
-              { value: "teachers", label: "Teacher-wise" },
-              { value: "parent", label: "Parent Summary" },
-            ]}
-          />
-        </div>
+          {!filtersCollapsed && (
+            <div id="reports-filter-controls">
+          <section className="border-b border-[#E9EEF5] py-3.5">
+            <FilterSectionHeading
+              title="When"
+              description="Choose the reporting period and optional class-time window."
+              dotClass="bg-indigo-600"
+              icon={<Filter size={15} strokeWidth={2.2} />}
+            />
 
-        <div className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-3 items-end">
-          {period !== "custom" ? (
-            <div className="xl:col-span-3">
-              <div className="text-xs font-extrabold text-slate-700 mb-1">Anchor date</div>
-              <div className="relative">
-                <CalendarDays size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="date"
-                  value={anchor}
-                  onChange={(e) => setAnchor(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2.5 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-emerald-400/50"
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-12 xl:items-end">
+              {isReportView("attendance") && (
+                <div className="xl:col-span-2">
+                  <div className="mb-1.5 text-[10px] font-black uppercase tracking-[0.06em] text-slate-400">
+                    Based on
+                  </div>
+                  <Segmented
+                    value={dateFilterBasis}
+                    onChange={(value) => {
+                      const nextBasis = value as DateFilterBasis;
+                      setDateFilterBasis(nextBasis);
+                      if (nextBasis === "last_updated") setIncludeUnmarked(false);
+                    }}
+                    options={[
+                      { value: "attendance_date", label: "Attendance date" },
+                      { value: "last_updated", label: "Last updated" },
+                    ]}
+                  />
+                </div>
+              )}
+
+              <div className={isReportView("attendance") ? "xl:col-span-3" : "xl:col-span-4"}>
+                <div className="mb-1.5 text-[10px] font-black uppercase tracking-[0.06em] text-slate-400">
+                  {period === "custom"
+                    ? "Date range"
+                    : period === "daily"
+                    ? "Report date"
+                    : period === "weekly"
+                    ? "Week containing"
+                    : period === "monthly"
+                    ? "Month containing"
+                    : "Year containing"}
+                </div>
+
+                {period !== "custom" ? (
+                  <div className="relative">
+                    <CalendarDays
+                      size={14}
+                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                    />
+                    <input
+                      type="date"
+                      value={anchor}
+                      onChange={(event) => setAnchor(event.target.value)}
+                      className="h-10 w-full rounded-[12px] border border-[#D8E2EF] bg-white pl-9 pr-3 text-sm font-bold tabular-nums text-[#1F2A44] shadow-[0_1px_2px_rgba(51,65,85,0.03)] outline-none transition hover:border-[#C5D2E3] focus:border-indigo-300 focus:ring-[3px] focus:ring-indigo-500/10"
+                    />
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
+                    <input
+                      type="date"
+                      aria-label="Start date"
+                      value={start}
+                      onChange={(event) => setStart(event.target.value)}
+                      className="h-10 w-full rounded-[12px] border border-[#D8E2EF] bg-white px-3 text-sm font-bold tabular-nums text-[#1F2A44] shadow-[0_1px_2px_rgba(51,65,85,0.03)] outline-none transition hover:border-[#C5D2E3] focus:border-indigo-300 focus:ring-[3px] focus:ring-indigo-500/10"
+                    />
+                    <span className="hidden text-xs font-black text-slate-300 sm:inline">→</span>
+                    <input
+                      type="date"
+                      aria-label="End date"
+                      value={end}
+                      onChange={(event) => setEnd(event.target.value)}
+                      className="h-10 w-full rounded-[12px] border border-[#D8E2EF] bg-white px-3 text-sm font-bold tabular-nums text-[#1F2A44] shadow-[0_1px_2px_rgba(51,65,85,0.03)] outline-none transition hover:border-[#C5D2E3] focus:border-indigo-300 focus:ring-[3px] focus:ring-indigo-500/10"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className={isReportView("attendance") ? "xl:col-span-3" : "xl:col-span-4"}>
+                <div className="mb-1.5 text-[10px] font-black uppercase tracking-[0.06em] text-slate-400">
+                  Group by
+                </div>
+                <Segmented
+                  value={period}
+                  onChange={(value) => setPeriod(value as Period)}
+                  options={[
+                    { value: "daily", label: "Daily" },
+                    { value: "weekly", label: "Weekly" },
+                    { value: "monthly", label: "Monthly" },
+                    { value: "yearly", label: "Yearly" },
+                    { value: "custom", label: "Custom" },
+                  ]}
                 />
+              </div>
+
+              <div className="xl:col-span-2">
+                <label className="mb-1.5 block text-[11px] font-bold text-slate-700">
+                  Class time from <span className="font-medium text-slate-400">(optional)</span>
+                </label>
+                <div className="relative">
+                  <Clock3
+                    size={14}
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                  />
+                  <input
+                    type="time"
+                    value={classTimeStart}
+                    onChange={(event) => setClassTimeStart(event.target.value)}
+                    className="h-10 w-full rounded-[12px] border border-[#D8E2EF] bg-white pl-9 pr-3 text-sm font-bold tabular-nums text-[#1F2A44] shadow-[0_1px_2px_rgba(51,65,85,0.03)] outline-none transition hover:border-[#C5D2E3] focus:border-indigo-300 focus:ring-[3px] focus:ring-indigo-500/10"
+                  />
+                </div>
+              </div>
+
+              <div className="xl:col-span-2">
+                <label className="mb-1.5 block text-[11px] font-bold text-slate-700">
+                  Class time to <span className="font-medium text-slate-400">(optional)</span>
+                </label>
+                <div className="relative">
+                  <Clock3
+                    size={14}
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                  />
+                  <input
+                    type="time"
+                    value={classTimeEnd}
+                    onChange={(event) => setClassTimeEnd(event.target.value)}
+                    className="h-10 w-full rounded-[12px] border border-[#D8E2EF] bg-white pl-9 pr-3 text-sm font-bold tabular-nums text-[#1F2A44] shadow-[0_1px_2px_rgba(51,65,85,0.03)] outline-none transition hover:border-[#C5D2E3] focus:border-indigo-300 focus:ring-[3px] focus:ring-indigo-500/10"
+                  />
+                </div>
               </div>
             </div>
-          ) : (
-            <>
-              <div className="xl:col-span-3">
-                <div className="text-xs font-extrabold text-slate-700 mb-1">Start</div>
+
+            <p className="mt-2 text-[10.5px] font-medium text-slate-400">
+              Leave both times blank for all class times. Overnight ranges, such as 8:00 PM to 10:00 AM, are supported.
+            </p>
+          </section>
+
+          <section className="relative z-[80] border-b border-[#E9EEF5] py-3.5">
+            <FilterSectionHeading
+              title="Who"
+              description="Select one, several, or all teachers and students."
+              dotClass="bg-emerald-600"
+            />
+
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <MultiSelectFilter
+                label="Teachers"
+                allLabel="All teachers"
+                options={teacherOptions}
+                selectedIds={selectedTeacherIds}
+                onChange={setSelectedTeacherIds}
+                icon={<Users size={14} />}
+              />
+
+              <MultiSelectFilter
+                label="Students"
+                allLabel={
+                  selectedTeacherIds.length > 0
+                    ? "All students of selected teachers"
+                    : "All students"
+                }
+                options={studentOptions}
+                selectedIds={selectedStudentIds}
+                onChange={setSelectedStudentIds}
+                icon={<User size={14} />}
+              />
+            </div>
+          </section>
+
+          <section className="pt-3.5">
+            <FilterSectionHeading
+              title="Refine & search"
+              description="Narrow the current report without changing its scope."
+              dotClass="bg-slate-400"
+            />
+
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
+              <div className="relative min-w-0">
+                <Search
+                  size={16}
+                  className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
+                />
                 <input
-                  type="date"
-                  value={start}
-                  onChange={(e) => setStart(e.target.value)}
-                  className="w-full px-3 py-2.5 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-emerald-400/50"
+                  type="search"
+                  value={reportSearch}
+                  onChange={(event) => setReportSearch(event.target.value)}
+                  placeholder="Teacher, student, date, time, type, or status"
+                  aria-label="Search report"
+                  className="h-11 w-full rounded-[13px] border border-[#D8E2EF] bg-white pl-10 pr-3 text-sm font-medium text-[#1F2A44] shadow-[0_1px_2px_rgba(51,65,85,0.03)] outline-none transition placeholder:text-[#93A0B5] hover:border-[#C5D2E3] focus:border-indigo-300 focus:ring-[3px] focus:ring-indigo-500/10"
                 />
               </div>
 
-              <div className="xl:col-span-3">
-                <div className="text-xs font-extrabold text-slate-700 mb-1">End</div>
-                <input
-                  type="date"
-                  value={end}
-                  onChange={(e) => setEnd(e.target.value)}
-                  className="w-full px-3 py-2.5 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-emerald-400/50"
-                />
+              <select
+                value={statusFilter}
+                aria-label="Attendance status"
+                onChange={(event) =>
+                  setStatusFilter(event.target.value as "all" | ReportStatus)
+                }
+                className="h-11 w-full rounded-[13px] border border-[#D8E2EF] bg-white px-4 text-sm font-bold text-[#1F2A44] shadow-[0_1px_2px_rgba(51,65,85,0.03)] outline-none transition hover:border-[#C5D2E3] focus:border-indigo-300 focus:ring-[3px] focus:ring-indigo-500/10"
+              >
+                <option value="all">All statuses</option>
+                <option value={AttendanceStatus.PRESENT}>Present</option>
+                <option value={AttendanceStatus.ABSENT}>Absent</option>
+                <option value={AttendanceStatus.LEAVE}>Leave</option>
+                <option value="Unmarked">Unmarked</option>
+              </select>
+            </div>
+
+            <div className="mt-4 flex flex-col gap-3 border-t border-[#E9EEF5] pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-10">
+              <FilterToggle
+                checked={includeTeacherRow}
+                onChange={setIncludeTeacherRow}
+                label="Include teacher rows"
+              />
+
+              <FilterToggle
+                checked={includeUnmarked}
+                disabled={dateFilterBasis === "last_updated"}
+                onChange={setIncludeUnmarked}
+                label={
+                  dateFilterBasis === "last_updated"
+                    ? "Unmarked rows have no update timestamp"
+                    : "Include unmarked only when filtering"
+                }
+              />
+            </div>
+
+            {showUnmarkedTip && (
+              <div className="mt-3 flex items-start gap-2 rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+                <Info size={15} className="mt-0.5 shrink-0" />
+                <div>
+                  <span className="font-bold">Choose a smaller scope first. </span>
+                  <span className="font-medium">
+                    Select teachers or students, or apply a class-time filter before including unmarked rows.
+                  </span>
+                </div>
               </div>
-            </>
+            )}
+          </section>
+            </div>
           )}
-
-          <div className="xl:col-span-4">
-            <div className="text-xs font-extrabold text-slate-700 mb-1">Teacher</div>
-            <div className="relative">
-              <Users size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-
-              <select
-                value={teacherId}
-                onChange={(e) => {
-                  setTeacherId(e.target.value);
-                  setStudentId("all");
-                }}
-                className="w-full pl-9 pr-3 py-2.5 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-emerald-400/50"
-              >
-                <option value="all">All Teachers</option>
-                {teachersSorted.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="xl:col-span-5">
-            <div className="text-xs font-extrabold text-slate-700 mb-1">Student</div>
-            <div className="relative">
-              <User size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-
-              <select
-                value={studentId}
-                onChange={(e) => setStudentId(e.target.value)}
-                className="w-full pl-9 pr-3 py-2.5 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-emerald-400/50"
-              >
-                <option value="all">All Students</option>
-                {studentsSorted.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
         </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          <label className="flex items-center gap-2 text-xs font-extrabold text-slate-700 px-3 py-2 rounded-2xl bg-white/75 border border-slate-200/70">
-            <input
-              type="checkbox"
-              checked={includeTeacherRow}
-              onChange={(e) => setIncludeTeacherRow(e.target.checked)}
-            />
-            Include teacher rows
-          </label>
-
-          <label className="flex items-center gap-2 text-xs font-extrabold text-slate-700 px-3 py-2 rounded-2xl bg-white/75 border border-slate-200/70">
-            <input
-              type="checkbox"
-              checked={includeUnmarked}
-              onChange={(e) => setIncludeUnmarked(e.target.checked)}
-            />
-            Include unmarked only when filtering
-          </label>
-        </div>
-
-        {showUnmarkedTip && (
-          <div className="mt-4 flex items-start gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-2xl p-3">
-            <Info size={16} className="mt-0.5" />
-            <div>
-              <div className="font-extrabold">Tip</div>
-              <div className="text-xs">
-                Include unmarked can get very large for the whole school. Select a teacher or a student first.
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
-      {activeView === "attendance" && (
-        <div className="rounded-[30px] border border-slate-200/70 bg-white/80 backdrop-blur-xl shadow-[0_18px_55px_rgba(15,23,42,0.07)] overflow-hidden">
+      {isReportView("attendance") && (
+        <div className="relative z-0 rounded-[30px] border border-slate-200/70 bg-white/80 backdrop-blur-xl shadow-[0_18px_55px_rgba(15,23,42,0.07)] overflow-hidden">
           <div className="px-6 py-4 border-b border-slate-200/60 bg-white/50 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
             <div>
               <div className="text-sm font-extrabold text-slate-900">Attendance Report Rows</div>
               <div className="text-xs text-slate-500">
-                Showing <span className="font-extrabold text-slate-700">{rows.length}</span> row
-                {rows.length === 1 ? "" : "s"} for <span className="font-mono">{rangeText}</span>
+                Showing <span className="font-extrabold text-slate-700">{filteredAttendanceRows.length}</span> filtered row
+                {filteredAttendanceRows.length === 1 ? "" : "s"} for <span className="font-mono">{rangeText}</span>{" "}
+                by <span className="font-extrabold text-slate-700">
+                  {dateFilterBasis === "attendance_date" ? "attendance date" : "last updated date"}
+                </span>
               </div>
             </div>
           </div>
@@ -1973,18 +2948,20 @@ const pagedParents = useMemo(
               <thead className="bg-slate-50/70 border-b border-slate-200 sticky top-0 z-10">
                 <tr>
                   <th className="px-6 py-4 font-extrabold text-slate-700">Date</th>
+                  <th className="px-6 py-4 font-extrabold text-slate-700">Class Time</th>
                   <th className="px-6 py-4 font-extrabold text-slate-700">Teacher</th>
                   <th className="px-6 py-4 font-extrabold text-slate-700">Student</th>
                   <th className="px-6 py-4 font-extrabold text-slate-700">Type</th>
                   <th className="px-6 py-4 font-extrabold text-slate-700">Status</th>
-                  <th className="px-6 py-4 font-extrabold text-slate-700">Last Updated</th>
+                  <th className="px-6 py-4 font-extrabold text-slate-700">Marked By</th>
+                  <th className="px-6 py-4 font-extrabold text-slate-700">Marked Date & Time</th>
                 </tr>
               </thead>
 
               <tbody className="divide-y divide-slate-100">
-                {rows.length === 0 ? (
+                {filteredAttendanceRows.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="p-10">
+                    <td colSpan={8} className="p-10">
                       <div className="max-w-md mx-auto text-center">
                         <div className="mx-auto h-12 w-12 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-500">
                           <Download size={18} />
@@ -1995,7 +2972,7 @@ const pagedParents = useMemo(
                         </div>
 
                         <div className="mt-1 text-xs text-slate-500">
-                          Try changing the date range, or select a teacher/student to narrow the report.
+                          Try changing the date or class-time range, or adjust the selected teachers/students.
                         </div>
                       </div>
                     </td>
@@ -2006,10 +2983,11 @@ pagedAttendance.items.map((r, idx) => {
 
                       return (
                         <tr
-                          key={`${idx}-${r.date}-${r.entityType}-${r.teacherName}-${r.studentName}`}
+                          key={`${idx}-${r.date}-${r.classTime}-${r.entityType}-${r.teacherName}-${r.studentName}`}
                           className="hover:bg-slate-50/60"
                         >
                           <td className="px-6 py-3 text-slate-500 font-mono">{r.date}</td>
+                          <td className="px-6 py-3 text-slate-600 font-semibold whitespace-nowrap">{r.classTime}</td>
                           <td className="px-6 py-3 font-extrabold text-slate-900">{r.teacherName}</td>
                           <td className="px-6 py-3 text-slate-700">{r.studentName}</td>
                           <td className="px-6 py-3 text-slate-500">{r.entityType}</td>
@@ -2019,7 +2997,10 @@ pagedAttendance.items.map((r, idx) => {
                               {pill.label}
                             </span>
                           </td>
-                          <td className="px-6 py-3 text-slate-500">
+                          <td className="px-6 py-3 font-semibold text-slate-700 whitespace-nowrap">
+                            {r.markedBy}
+                          </td>
+                          <td className="px-6 py-3 text-slate-500 whitespace-nowrap">
                             {r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "—"}
                           </td>
                         </tr>
@@ -2040,11 +3021,11 @@ pagedAttendance.items.map((r, idx) => {
         </div>
       )}
 
-      {activeView === "students" && (
+      {isReportView("students") && (
          <div className="space-y-4">
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-          {studentReports.length === 0 ? (
-            <EmptyPanel title="No students found" subtitle="Try changing the teacher or student filter." />
+          {filteredStudentReports.length === 0 ? (
+            <EmptyPanel title="No students found" subtitle="Try changing the teacher, student, date, or class-time filters." />
           ) : (
             pagedStudents.items.map((report) => {
               const mainProgress = topProgressStatus(report.progressCounts);
@@ -2076,7 +3057,7 @@ pagedAttendance.items.map((r, idx) => {
                     </span>
                   </div>
 
-                  <div className="mt-5 grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="mt-5 grid grid-cols-2 lg:grid-cols-4 gap-3">
                     <MiniMetric label="Lessons" value={report.lessons.length} icon={<BookOpen size={15} />} />
                     <MiniMetric label="Attendance" value={`${report.attendancePercent}%`} icon={<TrendingUp size={15} />} />
                     <MiniMetric label="Present" value={report.present} icon={<CheckCircle2 size={15} />} />
@@ -2132,20 +3113,20 @@ pagedAttendance.items.map((r, idx) => {
           <PaginationBar
             page={pagedStudents.safePage}
             totalPages={pagedStudents.totalPages}
-            totalItems={studentReports.length}
+            totalItems={filteredStudentReports.length}
             pageSize={CARD_PAGE_SIZE}
             onPageChange={setStudentPage}
           />
         </div>
       )}
 
-{activeView === "teachers" && (
+{isReportView("teachers") && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-          {teacherReports.length === 0 ? (
+          {filteredTeacherReports.length === 0 ? (
             <EmptyPanel title="No teachers found" subtitle="Try changing the filters." />
           ) : (
-            pagedTeachers.items.map((report) => (
+            pagedTeachers.items.map((report, teacherIndex) => (
               <div
                 key={report.teacher.id}
                 className="rounded-[30px] border border-slate-200/70 bg-white/85 backdrop-blur-xl shadow-[0_18px_55px_rgba(15,23,42,0.07)] p-5"
@@ -2153,7 +3134,7 @@ pagedAttendance.items.map((r, idx) => {
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="h-14 w-14 rounded-3xl bg-slate-900 text-white flex items-center justify-center font-black shadow-lg shadow-slate-200">
-                      {initials(report.teacher.name)}
+                      {teacherReportCode(report.teacher.name, teacherIndex)}
                     </div>
 
                     <div className="min-w-0">
@@ -2172,11 +3153,10 @@ pagedAttendance.items.map((r, idx) => {
                   </span>
                 </div>
 
-                <div className="mt-5 grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <MiniMetric label="Students" value={report.students.length} icon={<GraduationCap size={15} />} />
                   <MiniMetric label="Lessons" value={report.lessonCount} icon={<BookOpen size={15} />} />
                   <MiniMetric label="Attendance" value={report.attendanceRows.length} icon={<ClipboardList size={15} />} />
-                  <MiniMetric label="Subjects" value={report.subjects.length} icon={<Award size={15} />} />
                 </div>
 
                 <div className="mt-4 grid grid-cols-3 gap-3">
@@ -2185,26 +3165,18 @@ pagedAttendance.items.map((r, idx) => {
                   <SmallStatus label="Leave" value={report.leave} tone="bg-amber-50 text-amber-800 border-amber-100" />
                 </div>
 
-                <div className="mt-4 rounded-2xl bg-slate-50 border border-slate-100 p-4">
-                  <div className="text-xs font-black uppercase tracking-widest text-slate-500">
-                    Subjects Covered
-                  </div>
-
+                {report.subjects.length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {report.subjects.length === 0 ? (
-                      <span className="text-xs font-semibold text-slate-400">No subjects covered in this range.</span>
-                    ) : (
-                      report.subjects.slice(0, 8).map((subject) => (
-                        <span
-                          key={subject}
-                          className="rounded-full bg-white border border-slate-200 px-3 py-1 text-xs font-extrabold text-slate-700"
-                        >
-                          {subject}
-                        </span>
-                      ))
-                    )}
+                    {report.subjects.slice(0, 8).map((subject) => (
+                      <span
+                        key={subject}
+                        className="rounded-full bg-slate-50 border border-slate-200 px-3 py-1 text-xs font-extrabold text-slate-700"
+                      >
+                        {subject}
+                      </span>
+                    ))}
                   </div>
-                </div>
+                )}
               </div>
             ))
           )}
@@ -2213,108 +3185,13 @@ pagedAttendance.items.map((r, idx) => {
           <PaginationBar
             page={pagedTeachers.safePage}
             totalPages={pagedTeachers.totalPages}
-            totalItems={teacherReports.length}
+            totalItems={filteredTeacherReports.length}
             pageSize={CARD_PAGE_SIZE}
             onPageChange={setTeacherPage}
           />
         </div>
       )}
 
-{activeView === "parent" && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-          {studentReports.length === 0 ? (
-            <EmptyPanel title="No parent summaries available" subtitle="Try selecting a student or changing the date range." />
-          ) : (
-            pagedParents.items.map((report) => {
-              const mainProgress = topProgressStatus(report.progressCounts);
-
-              return (
-                <div
-                  key={report.student.id}
-                  className="rounded-[30px] border border-slate-200/70 bg-white/90 backdrop-blur-xl shadow-[0_18px_55px_rgba(15,23,42,0.07)] overflow-hidden"
-                >
-                  <div className="p-5 border-b border-slate-100 bg-gradient-to-br from-indigo-50 to-white">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="inline-flex items-center gap-2 rounded-full bg-white border border-indigo-100 px-3 py-1 text-xs font-extrabold text-indigo-700">
-                          <Sparkles size={13} />
-                          Parent Monthly Report
-                        </div>
-
-                        <h3 className="mt-3 text-xl font-black text-slate-950">
-                          {report.student.name}
-                        </h3>
-
-                        <p className="mt-1 text-xs font-semibold text-slate-500">
-                          Teacher: {report.teacher?.name || "Unknown Teacher"} · {rangeText}
-                        </p>
-                      </div>
-
-                      <div className="h-14 w-14 rounded-3xl bg-indigo-600 text-white flex items-center justify-center font-black">
-                        {initials(report.student.name)}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="p-5 space-y-4">
-                    <div className="grid grid-cols-3 gap-3">
-                      <SmallStatus label="Lessons" value={report.lessons.length} tone="bg-indigo-50 text-indigo-700 border-indigo-100" />
-                      <SmallStatus label="Attendance" value={`${report.attendancePercent}%`} tone="bg-emerald-50 text-emerald-700 border-emerald-100" />
-                      <SmallStatus label="Progress" value={progressLabel(mainProgress)} tone={progressTone(mainProgress)} />
-                    </div>
-
-                    <div className="rounded-2xl bg-slate-50 border border-slate-100 p-4">
-                      <div className="text-xs font-black uppercase tracking-widest text-slate-500">
-                        Summary for Parent
-                      </div>
-
-                      <p className="mt-2 text-sm leading-relaxed text-slate-700">
-                        {report.student.name} completed {report.lessons.length} lesson
-                        {report.lessons.length === 1 ? "" : "s"} in this report period.
-                        {report.subjects.length > 0 ? ` Subjects covered include ${report.subjects.join(", ")}.` : ""}
-                        {mainProgress ? ` Overall progress is mostly ${progressLabel(mainProgress).toLowerCase()}.` : " Progress status is not marked yet."}
-                        {report.latestLesson ? ` Latest lesson: ${report.latestLesson.topic_summary || report.latestLesson.title}.` : ""}
-                      </p>
-                    </div>
-
-                    <div className="rounded-2xl bg-white border border-slate-200 p-4">
-                      <div className="text-xs font-black uppercase tracking-widest text-slate-500">
-                        Areas to Review
-                      </div>
-
-                      <p className="mt-2 text-sm text-slate-600 leading-relaxed">
-                        Please continue regular practice at home. Review the latest topics, maintain attendance consistency, and follow the teacher&apos;s remarks for improvement.
-                      </p>
-                    </div>
-
-                    {report.latestLesson?.remarks && (
-                      <div className="rounded-2xl bg-indigo-50 border border-indigo-100 p-4">
-                        <div className="text-xs font-black uppercase tracking-widest text-indigo-600">
-                          Teacher Remark
-                        </div>
-
-                        <p className="mt-2 text-sm text-indigo-800 leading-relaxed">
-                          {report.latestLesson.remarks}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })
-          )}
-          </div>
-
-          <PaginationBar
-            page={pagedParents.safePage}
-            totalPages={pagedParents.totalPages}
-            totalItems={studentReports.length}
-            pageSize={CARD_PAGE_SIZE}
-            onPageChange={setParentPage}
-          />
-        </div>
-      )}
     </div>
   );
 }

@@ -1,0 +1,2067 @@
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  AlertCircle,
+  Award,
+  BarChart3,
+  CalendarDays,
+  CheckCircle2,
+  ClipboardList,
+  Download,
+  FileDown,
+  FileSpreadsheet,
+  FileText,
+  Filter,
+  GraduationCap,
+  Loader2,
+  LockKeyhole,
+  MinusCircle,
+  PauseCircle,
+  RefreshCw,
+  Search,
+  Sparkles,
+  TrendingUp,
+  UserRound,
+  Users,
+  XCircle,,
+  RotateCcw
+} from "lucide-react";
+
+import {
+  getTuitionAttendance,
+  getTuitionSchedulingMatrix,
+  type TuitionAttendanceRecord,
+  type TuitionSchedulingMatrix,
+  type TuitionScheduleRecord,
+} from "../../services/tuitionApiService";
+import { showFeatureLocked } from "../../services/featureAccess";
+
+
+// TUITION_REPORT_COMPLETED_OCCURRENCE_V1
+function tuitionReportLocalDateKey(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function tuitionReportClockMinutes(value: unknown): number | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+
+  const twelveHour = text.match(
+    /^(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]m)$/i,
+  );
+  if (twelveHour) {
+    let hour = Number(twelveHour[1]);
+    const minute = Number(twelveHour[2]);
+    const suffix = twelveHour[3].toLowerCase();
+
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+    if (hour === 12) hour = 0;
+    if (suffix === "pm") hour += 12;
+    return hour * 60 + minute;
+  }
+
+  const twentyFourHour = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!twentyFourHour) return null;
+
+  const hour = Number(twentyFourHour[1]);
+  const minute = Number(twentyFourHour[2]);
+  if (
+    !Number.isFinite(hour) ||
+    !Number.isFinite(minute) ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null;
+  }
+
+  return hour * 60 + minute;
+}
+
+function tuitionReportScheduleEndMinutes(schedule: unknown): number | null {
+  const row = (schedule ?? {}) as Record<string, any>;
+  const slot =
+    (row.slot ??
+      row.time_slot ??
+      row.timeSlot ??
+      row.standard_slot ??
+      row.standardSlot ??
+      {}) as Record<string, any>;
+  const enrollment = (row.enrollment ?? {}) as Record<string, any>;
+
+  const explicitEnd =
+    row.end_time ??
+    row.endTime ??
+    row.slot_end_time ??
+    row.slotEndTime ??
+    row.time_slot_end ??
+    row.timeSlotEnd ??
+    slot.end_time ??
+    slot.endTime ??
+    enrollment.end_time ??
+    enrollment.endTime;
+
+  const parsedEnd = tuitionReportClockMinutes(explicitEnd);
+  if (parsedEnd !== null) return parsedEnd;
+
+  const start = tuitionReportClockMinutes(
+    row.start_time ??
+      row.startTime ??
+      row.slot_start_time ??
+      row.slotStartTime ??
+      slot.start_time ??
+      slot.startTime ??
+      enrollment.start_time ??
+      enrollment.startTime,
+  );
+
+  if (start === null) return null;
+
+  const durationCandidate = Number(
+    row.duration_minutes ??
+      row.durationMinutes ??
+      slot.duration_minutes ??
+      slot.durationMinutes ??
+      enrollment.duration_minutes ??
+      enrollment.durationMinutes ??
+      40,
+  );
+
+  const duration =
+    Number.isFinite(durationCandidate) && durationCandidate > 0
+      ? durationCandidate
+      : 40;
+
+  return start + duration;
+}
+
+function tuitionReportOccurrenceCompleted(
+  schedule: unknown,
+  attendanceDate: string,
+): boolean {
+  const now = new Date();
+  const today = tuitionReportLocalDateKey(now);
+
+  if (attendanceDate < today) return true;
+  if (attendanceDate > today) return false;
+
+  const endMinutes = tuitionReportScheduleEndMinutes(schedule);
+
+  // Strict behavior for today's report: if the end time cannot be identified,
+  // do not create a premature Unmarked row.
+  if (endMinutes === null) return false;
+
+  const currentMinutes =
+    now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+
+  return currentMinutes >= endMinutes;
+}
+
+function tuitionReportDateOnly(value: unknown): string {
+  const text = String(value ?? "").trim();
+  const match = text.match(/^\d{4}-\d{2}-\d{2}/);
+  return match?.[0] ?? "";
+}
+
+function tuitionAttendanceOccurrenceAllowed(
+  schedule: unknown,
+  attendanceDate: string,
+): boolean {
+  const row = (schedule ?? {}) as Record<string, any>;
+  const enrollment = (row.enrollment ?? {}) as Record<string, any>;
+
+  const startCandidates = [
+    row.enrollment_start_date,
+    row.enrollmentStartDate,
+    enrollment.start_date,
+    enrollment.startDate,
+    row.enrollment_created_at,
+    row.enrollmentCreatedAt,
+    enrollment.created_at,
+    enrollment.createdAt,
+  ]
+    .map(tuitionReportDateOnly)
+    .filter(Boolean)
+    .sort();
+
+  // Never create expected attendance before either the declared start date
+  // or the day the enrollment was actually created.
+  const effectiveStart = startCandidates.at(-1) ?? "";
+  const effectiveEnd = tuitionReportDateOnly(
+    row.enrollment_end_date ??
+      row.enrollmentEndDate ??
+      enrollment.end_date ??
+      enrollment.endDate,
+  );
+
+  if (effectiveStart && attendanceDate < effectiveStart) return false;
+  if (effectiveEnd && attendanceDate > effectiveEnd) return false;
+  return true;
+}
+
+type Props = {
+  departmentId: number;
+  features: Record<string, boolean>;
+  generatedBy?: string;
+};
+
+type Period = "daily" | "weekly" | "monthly" | "yearly" | "custom";
+type ReportStatus = "present" | "absent" | "leave" | "unmarked";
+type ActiveView = "attendance" | "students" | "teachers" | "parent";
+type RowType = "Student" | "Teacher";
+
+type ReportRow = {
+  id: string;
+  date: string;
+  teacherId: number;
+  teacherName: string;
+  studentId?: number;
+  studentName: string;
+  className: string;
+  subjectName: string;
+  time: string;
+  type: RowType;
+  status: ReportStatus;
+  updatedAt: string;
+  schedule?: TuitionScheduleRecord;
+};
+
+type StudentSummary = {
+  id: number;
+  name: string;
+  className: string;
+  teacherNames: string[];
+  subjects: string[];
+  rows: ReportRow[];
+  present: number;
+  absent: number;
+  leave: number;
+  unmarked: number;
+  percent: number;
+};
+
+type TeacherSummary = {
+  id: number;
+  name: string;
+  students: string[];
+  subjects: string[];
+  rows: ReportRow[];
+  present: number;
+  absent: number;
+  leave: number;
+  unmarked: number;
+  percent: number;
+};
+
+const REPORT_PAGE_SIZE = 20;
+const CARD_PAGE_SIZE = 10;
+
+const emptyMatrix: TuitionSchedulingMatrix = {
+  weekdays: [],
+  countries: [],
+  duration_minutes: 40,
+  teachers: [],
+  enrollments: [],
+  standard_slots: [],
+  availability: [],
+  schedules: [],
+};
+
+function todayStr() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function toDate(value: string) {
+  const [y, m, d] = String(value || todayStr()).split("-").map((item) => parseInt(item, 10));
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+
+function fmt(date: Date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function addDays(date: Date, days: number) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
+
+function clampRange(start: string, end: string) {
+  if (!start || !end) return { start, end };
+  return start <= end ? { start, end } : { start: end, end: start };
+}
+
+function getRangeForPeriod(period: Period, anchorDate: string, customStart: string, customEnd: string) {
+  const a = toDate(anchorDate);
+
+  if (period === "daily") {
+    const d = fmt(a);
+    return { start: d, end: d };
+  }
+
+  if (period === "weekly") {
+    // TUITION_OPERATIONAL_WEEK_SUNDAY_THURSDAY_V1
+    // Tuition's operational week begins on Sunday and ends on Thursday.
+    const day = a.getDay();
+    const start = addDays(a, -day);
+    const end = addDays(start, 4);
+    return { start: fmt(start), end: fmt(end) };
+  }
+
+  if (period === "monthly") {
+    const start = new Date(a.getFullYear(), a.getMonth(), 1);
+    const end = new Date(a.getFullYear(), a.getMonth() + 1, 0);
+    return { start: fmt(start), end: fmt(end) };
+  }
+
+  if (period === "yearly") {
+    const start = new Date(a.getFullYear(), 0, 1);
+    const end = new Date(a.getFullYear(), 11, 31);
+    return { start: fmt(start), end: fmt(end) };
+  }
+
+  return clampRange(customStart, customEnd);
+}
+
+function dateListInclusive(start: string, end: string, maxDays = 370): string[] {
+  if (!start || !end) return [];
+  const { start: s, end: e } = clampRange(start, end);
+  const out: string[] = [];
+  let cur = toDate(s);
+  const last = toDate(e);
+  let guard = 0;
+
+  while (cur <= last && guard < maxDays) {
+    out.push(fmt(cur));
+    cur = addDays(cur, 1);
+    guard += 1;
+  }
+
+  return out;
+}
+
+function capRangeToToday(range: { start: string; end: string }) {
+  const today = todayStr();
+  if (!range.start || !range.end) return range;
+
+  const normalized = clampRange(range.start, range.end);
+
+  if (normalized.start > today) {
+    return { start: today, end: today };
+  }
+
+  return {
+    start: normalized.start,
+    end: normalized.end > today ? today : normalized.end,
+  };
+}
+
+function weekdayCode(value: string) {
+  return toDate(value).toLocaleDateString("en-US", { weekday: "long" }).toLowerCase();
+}
+
+function formatDate(value: string) {
+  if (!value) return "-";
+
+  try {
+    return new Date(`${value}T00:00:00`).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return value;
+  }
+}
+
+function formatDateShort(value: string) {
+  if (!value) return "-";
+
+  try {
+    return new Date(`${value}T00:00:00`).toLocaleDateString("en-US", {
+      month: "2-digit",
+      day: "2-digit",
+      year: "numeric",
+    });
+  } catch {
+    return value;
+  }
+}
+
+function formatTime(value: string) {
+  const [hours, minutes] = String(value || "00:00").slice(0, 5).split(":").map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return value;
+  const suffix = hours >= 12 ? "PM" : "AM";
+  const hour = hours % 12 || 12;
+  return `${String(hour).padStart(2, "0")}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
+function statusMeta(status: ReportStatus) {
+  if (status === "present") {
+    return {
+      label: "Present",
+      cls: "bg-emerald-50 text-emerald-700 border-emerald-100",
+      icon: <CheckCircle2 size={14} />,
+    };
+  }
+
+  if (status === "absent") {
+    return {
+      label: "Absent",
+      cls: "bg-rose-50 text-rose-700 border-rose-100",
+      icon: <XCircle size={14} />,
+    };
+  }
+
+  if (status === "leave") {
+    return {
+      label: "Leave",
+      cls: "bg-amber-50 text-amber-800 border-amber-100",
+      icon: <PauseCircle size={14} />,
+    };
+  }
+
+  return {
+    label: "Unmarked",
+    cls: "bg-slate-50 text-slate-700 border-slate-200",
+    icon: <MinusCircle size={14} />,
+  };
+}
+
+function initials(name: string) {
+  return (
+    String(name || "U")
+      .split(" ")
+      .filter(Boolean)
+      .map((part) => part[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "U"
+  );
+}
+
+function uniq(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function calcPercent(present: number, absent: number, leave: number) {
+  const marked = present + absent + leave;
+  return marked ? Math.round((present / marked) * 100) : 0;
+}
+
+function paginate<T>(items: T[], page: number, pageSize: number) {
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.min(Math.max(page, 1), totalPages);
+  const startIndex = (safePage - 1) * pageSize;
+  return {
+    totalPages,
+    safePage,
+    startIndex,
+    items: items.slice(startIndex, startIndex + pageSize),
+  };
+}
+
+function Segmented({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <div className="inline-flex max-w-full overflow-x-auto rounded-2xl border border-slate-200/70 bg-white/70 p-1 shadow-sm">
+      {options.map((option) => {
+        const active = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            className={`whitespace-nowrap rounded-xl px-3 py-2 text-xs font-extrabold transition ${
+              active
+                ? "border border-slate-200/70 bg-white text-indigo-700 shadow-[0_10px_22px_rgba(15,23,42,0.08)]"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function IconButton({
+  onClick,
+  icon,
+  label,
+  tone,
+  enabled = true,
+  lockedMessage,
+}: {
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  tone: string;
+  enabled?: boolean;
+  lockedMessage?: string;
+}) {
+  const handleClick = () => {
+    if (!enabled) {
+      showFeatureLocked(
+        label,
+        lockedMessage || `${label} is disabled by Main Admin.`,
+      );
+      return;
+    }
+    onClick();
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      className={`inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-xs font-extrabold transition active:scale-[0.99] ${
+        enabled
+          ? tone
+          : "border border-slate-200 bg-slate-100 text-slate-400 grayscale shadow-none"
+      }`}
+      type="button"
+      title={enabled ? label : `${label} locked by Main Admin`}
+    >
+      {enabled ? icon : <LockKeyhole size={15} />}
+      {label}
+    </button>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: number | string;
+  icon: React.ReactNode;
+  tone: string;
+}) {
+  return (
+    <div className={`rounded-3xl border p-5 shadow-[0_14px_34px_rgba(15,23,42,0.06)] ${tone}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-extrabold uppercase tracking-wide opacity-80">{label}</div>
+          <div className="mt-2 text-3xl font-black">{value}</div>
+        </div>
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/70 bg-white/70 shadow-sm">
+          {icon}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type ExportMeta = {
+  rangeLabel: string;
+  period: string;
+  teacherName: string;
+  studentName: string;
+};
+
+function safeExportCell(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+
+function safePdfText(value: unknown) {
+  return String(value ?? "")
+    .replace(/\u00a0/g, " ")
+    .replace(/→/g, " to ")
+    .replace(/[–—]/g, "-")
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/·/g, "-")
+    .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function csvEscape(value: unknown) {
+  const text = String(value ?? "");
+  const safe = text.replace(/"/g, '""');
+  return /[",\n\r]/.test(safe) ? `"${safe}"` : safe;
+}
+
+function reportFileStem(meta: ExportMeta) {
+  const range = (meta.rangeLabel || todayStr()).replace(/\s*→\s*/g, "_to_").replace(/[^0-9A-Za-z_-]+/g, "_");
+  return `tuition_attendance_report_${range}`;
+}
+
+function rowStatusLabel(row: ReportRow) {
+  return statusMeta(row.status).label;
+}
+
+function rowStudentScope(row: ReportRow) {
+  if (isTeacherReportRow(row)) return "—";
+  const details = [row.className, row.subjectName, row.time].filter(Boolean).join(" · ");
+  return details ? `${row.studentName} (${details})` : row.studentName;
+}
+
+function isTeacherReportRow(row: ReportRow) {
+  return String(row?.type || "").toLowerCase() === "teacher";
+}
+
+function cleanReportDate(value: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return "-";
+  const iso = raw.match(/\d{4}-\d{2}-\d{2}/)?.[0];
+  return iso || raw;
+}
+
+function reportStudentPrimary(row: ReportRow) {
+  if (isTeacherReportRow(row)) return "—";
+  return String(row.studentName || "—").trim() || "—";
+}
+
+function reportStudentSubline(row: ReportRow) {
+  if (isTeacherReportRow(row)) return "";
+  return [row.className, row.subjectName, row.time]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function reportUpdatedAt(row: ReportRow) {
+  return row.updatedAt && row.updatedAt !== "-" ? row.updatedAt : "-";
+}
+
+async function exportRows(rows: ReportRow[], generatedBy: string, format: "csv" | "excel", meta: ExportMeta) {
+  if (rows.length === 0) {
+    alert("No rows to export for the current filters.");
+    return;
+  }
+
+  const headers = ["Date", "Teacher", "Student", "Class", "Subject", "Time", "Type", "Status", "Last Updated", "Generated By"];
+  const tableRows = rows.map((row) => [
+    row.date,
+    row.teacherName,
+    isTeacherReportRow(row) ? "—" : row.studentName,
+    isTeacherReportRow(row) ? "" : row.className,
+    isTeacherReportRow(row) ? "" : row.subjectName,
+    isTeacherReportRow(row) ? "" : row.time,
+    row.type,
+    rowStatusLabel(row),
+    row.updatedAt || "-",
+    generatedBy || "Tuition Coordinator",
+  ]);
+
+  if (format === "csv") {
+    const csv = [headers, ...tableRows]
+      .map((line) => line.map((cell) => csvEscape(cell)).join(","))
+      .join("\n");
+
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${reportFileStem(meta)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    return;
+  }
+
+  const ExcelJS = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Iqra Virtual School";
+  workbook.created = new Date();
+  workbook.modified = new Date();
+
+  const sheet = workbook.addWorksheet("Attendance Report", {
+    views: [{ state: "frozen", ySplit: 8 }],
+    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+
+  sheet.mergeCells("A1:J1");
+  sheet.getCell("A1").value = "IQRA VIRTUAL SCHOOL";
+  sheet.getCell("A1").font = { bold: true, size: 18, color: { argb: "FF0F172A" } };
+  sheet.getCell("A1").alignment = { vertical: "middle" };
+
+  sheet.mergeCells("A2:J2");
+  sheet.getCell("A2").value = "Tuition Department Attendance Report";
+  sheet.getCell("A2").font = { bold: true, size: 12, color: { argb: "FF475569" } };
+
+  const generatedAt = new Date().toLocaleString();
+  const metaRows = [
+    ["Report #", `ATT-${todayStr().replace(/-/g, "")}`, "Teacher", meta.teacherName],
+    ["Generated by", generatedBy || "Tuition Coordinator", "Student", meta.studentName],
+    ["Generated at", generatedAt, "Period", meta.period.toUpperCase()],
+    ["Date range", meta.rangeLabel, "Rows", rows.length],
+  ];
+
+  metaRows.forEach((line, index) => {
+    const rowNumber = 3 + index;
+    line.forEach((value, colIndex) => {
+      const cell = sheet.getCell(rowNumber, colIndex + 1);
+      cell.value = value;
+      cell.alignment = { vertical: "middle", wrapText: true };
+      if (colIndex === 0 || colIndex === 2) {
+        cell.font = { bold: true, color: { argb: "FF64748B" } };
+      } else {
+        cell.font = { bold: true, color: { argb: "FF0F172A" } };
+      }
+    });
+  });
+
+  const counts = rows.reduce(
+    (acc, row) => {
+      acc[row.status] = (acc[row.status] || 0) + 1;
+      return acc;
+    },
+    { present: 0, absent: 0, leave: 0, unmarked: 0 } as Record<ReportStatus, number>
+  );
+
+  const summaryLabels = [
+    ["Present", counts.present, "FFDCFCE7", "FF047857"],
+    ["Absent", counts.absent, "FFFFE4E6", "FFBE123C"],
+    ["Leave", counts.leave, "FFFEF3C7", "FFB45309"],
+    ["Unmarked", counts.unmarked, "FFF1F5F9", "FF334155"],
+  ];
+
+  summaryLabels.forEach((item, index) => {
+    const startCol = 1 + index * 2;
+    const labelCell = sheet.getCell(7, startCol);
+    const valueCell = sheet.getCell(7, startCol + 1);
+    labelCell.value = item[0] as string;
+    valueCell.value = item[1] as number;
+    [labelCell, valueCell].forEach((cell) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: item[2] as string } };
+      cell.font = { bold: true, color: { argb: item[3] as string } };
+      cell.border = {
+        top: { style: "thin", color: { argb: "FFE2E8F0" } },
+        bottom: { style: "thin", color: { argb: "FFE2E8F0" } },
+        left: { style: "thin", color: { argb: "FFE2E8F0" } },
+        right: { style: "thin", color: { argb: "FFE2E8F0" } },
+      };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+    });
+  });
+
+  const headerRow = sheet.getRow(9);
+  headerRow.values = ["", ...headers];
+  headerRow.height = 24;
+  headerRow.eachCell((cell) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F172A" } };
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.border = {
+      top: { style: "thin", color: { argb: "FFCBD5E1" } },
+      bottom: { style: "thin", color: { argb: "FFCBD5E1" } },
+      left: { style: "thin", color: { argb: "FFCBD5E1" } },
+      right: { style: "thin", color: { argb: "FFCBD5E1" } },
+    };
+  });
+
+  tableRows.forEach((data, index) => {
+    const row = sheet.addRow(data);
+    row.height = 22;
+    row.eachCell((cell) => {
+      cell.alignment = { vertical: "middle", wrapText: true };
+      cell.border = {
+        top: { style: "thin", color: { argb: "FFE2E8F0" } },
+        bottom: { style: "thin", color: { argb: "FFE2E8F0" } },
+        left: { style: "thin", color: { argb: "FFE2E8F0" } },
+        right: { style: "thin", color: { argb: "FFE2E8F0" } },
+      };
+      if (index % 2 === 0) {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
+      }
+    });
+  });
+
+  const headerIndex = 9;
+  sheet.autoFilter = {
+    from: { row: headerIndex, column: 1 },
+    to: { row: headerIndex + tableRows.length, column: headers.length },
+  };
+
+  sheet.columns = [
+    { width: 15 },
+    { width: 28 },
+    { width: 28 },
+    { width: 18 },
+    { width: 22 },
+    { width: 14 },
+    { width: 14 },
+    { width: 16 },
+    { width: 24 },
+    { width: 22 },
+  ];
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${reportFileStem(meta)}.xlsx`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+async function exportPdf(rows: ReportRow[], generatedBy: string, meta: ExportMeta) {
+  if (rows.length === 0) {
+    alert("No rows to export for the current filters.");
+    return;
+  }
+
+  const { default: jsPDF } = await import("jspdf");
+  const autoTable = (await import("jspdf-autotable")).default;
+
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+
+  const BLUE: [number, number, number] = [0, 163, 224];
+  const BLUE_DARK: [number, number, number] = [0, 109, 170];
+  const BLUE_SOFT: [number, number, number] = [232, 248, 255];
+  const INDIGO: [number, number, number] = [79, 70, 229];
+  const DARK: [number, number, number] = [29, 33, 42];
+  const TEXT: [number, number, number] = [24, 31, 42];
+  const MUTED: [number, number, number] = [92, 104, 121];
+  const LIGHT_BG: [number, number, number] = [247, 250, 253];
+  const CARD: [number, number, number] = [255, 255, 255];
+  const LINE: [number, number, number] = [220, 229, 240];
+  const GREEN: [number, number, number] = [22, 163, 74];
+  const RED: [number, number, number] = [220, 38, 38];
+  const AMBER: [number, number, number] = [180, 83, 9];
+
+  const TABLE_X = 10;
+  const TABLE_W = pageWidth - 20;
+  const TABLE_COLS = { sl: 11, date: 24, teacher: 34, student: 42, type: 16, status: 25, updated: 38 };
+  const TABLE_WIDTHS = [TABLE_COLS.sl, TABLE_COLS.date, TABLE_COLS.teacher, TABLE_COLS.student, TABLE_COLS.type, TABLE_COLS.status, TABLE_COLS.updated];
+
+  const tableCenterX = (index: number) => {
+    const before = TABLE_WIDTHS.slice(0, index).reduce((sum, value) => sum + value, 0);
+    return TABLE_X + before + TABLE_WIDTHS[index] / 2;
+  };
+
+  const generatedAt = new Date();
+  const reportNo = `ATT-${todayStr().replace(/-/g, "")}`;
+  const generatedDate = generatedAt.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "2-digit" });
+  const generatedTime = generatedAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
+
+
+  const cleanGeneratedBy = safePdfText(generatedBy || "Tuition Coordinator") || "Tuition Coordinator";
+  const cleanRangeLabel = safePdfText(meta.rangeLabel || "").replace(/\s+-\s+/g, " to ");
+  const cleanTeacherName = safePdfText(meta.teacherName || "All Teachers") || "All Teachers";
+  const cleanStudentName = safePdfText(meta.studentName || "All Students") || "All Students";
+  const cleanPeriod = safePdfText(meta.period || "").toUpperCase();
+  const counts = rows.reduce(
+    (acc, row) => {
+      acc[row.status] = (acc[row.status] || 0) + 1;
+      return acc;
+    },
+    { present: 0, absent: 0, leave: 0, unmarked: 0 } as Record<ReportStatus, number>
+  );
+  const markedRows = counts.present + counts.absent + counts.leave;
+  const attendanceScore = markedRows > 0 ? Math.round((counts.present / markedRows) * 100) : 0;
+
+  const loadImageAsDataUrl = async (url: string): Promise<string | null> => {
+    try {
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = url;
+      });
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+      ctx.drawImage(image, 0, 0);
+      return canvas.toDataURL("image/png");
+    } catch {
+      return null;
+    }
+  };
+
+  const logoDataUrl = await loadImageAsDataUrl("/tuition-logo.png");
+
+  const drawBackground = () => {
+    doc.setFillColor(...LIGHT_BG);
+    doc.rect(0, 0, pageWidth, pageHeight, "F");
+    doc.setFillColor(235, 248, 255);
+    doc.circle(pageWidth - 24, 24, 34, "F");
+    doc.setFillColor(241, 245, 255);
+    doc.circle(16, pageHeight - 34, 44, "F");
+    doc.setFillColor(248, 250, 252);
+    doc.circle(pageWidth - 38, pageHeight - 58, 28, "F");
+  };
+
+  const drawBrand = () => {
+    if (logoDataUrl) {
+      doc.addImage(logoDataUrl, "PNG", 15, 13, 18, 18);
+    } else {
+      doc.setFillColor(...BLUE);
+      doc.roundedRect(15, 13, 18, 18, 4, 4, "F");
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8);
+      doc.text("IVS", 24, 24, { align: "center" });
+    }
+    doc.setTextColor(...TEXT);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.text("IQRA VIRTUAL SCHOOL", 37, 19);
+    doc.setTextColor(...MUTED);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.text("Tuition Department", 37, 24);
+    doc.text("Attendance Management System", 37, 28);
+    doc.setTextColor(...MUTED);
+    doc.text("www.iqravirtualschool.com", pageWidth - 15, 20, { align: "right" });
+  };
+
+  const drawInfoCard = (x: number, y: number, w: number, h: number, title: string) => {
+    doc.setFillColor(...CARD);
+    doc.roundedRect(x, y, w, h, 5, 5, "F");
+    doc.setDrawColor(...LINE);
+    doc.setLineWidth(0.25);
+    doc.roundedRect(x, y, w, h, 5, 5, "S");
+    doc.setFillColor(...BLUE_SOFT);
+    doc.roundedRect(x + 4, y + 4, 30, 7, 2, 2, "F");
+    doc.setTextColor(...BLUE);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(6.8);
+    doc.text(title.toUpperCase(), x + 7, y + 9);
+    doc.setFillColor(...BLUE);
+    doc.circle(x + w - 9, y + 8, 1.2, "F");
+    doc.setFillColor(...INDIGO);
+    doc.circle(x + w - 14, y + 8, 1.2, "F");
+  };
+
+  const drawReportDetails = () => {
+    const y = 74;
+    const cardH = 46;
+    const leftX = 15;
+    const rightX = 108;
+    const cardW = 87;
+    drawInfoCard(leftX, y, cardW, cardH, "Report Info");
+    drawInfoCard(rightX, y, cardW, cardH, "Scope");
+
+    doc.setFontSize(7.3);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...MUTED);
+    doc.text("Report #", leftX + 6, y + 18);
+    doc.text("Generated by", leftX + 6, y + 25);
+    doc.text("Generated at", leftX + 6, y + 32);
+    doc.text("Date range", leftX + 6, y + 39);
+    doc.setTextColor(...TEXT);
+    doc.setFont("helvetica", "bold");
+    doc.text(reportNo, leftX + 36, y + 18, { maxWidth: 43 });
+    doc.text(cleanGeneratedBy, leftX + 36, y + 25, { maxWidth: 50 });
+    doc.text(`${generatedDate}, ${generatedTime}`, leftX + 36, y + 32, { maxWidth: 45 });
+    doc.text(cleanRangeLabel, leftX + 36, y + 39, { maxWidth: 50 });
+
+    doc.setFontSize(7.3);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...MUTED);
+    doc.text("Teacher", rightX + 6, y + 18);
+    doc.text("Student", rightX + 6, y + 25);
+    doc.text("Period", rightX + 6, y + 32);
+    doc.text("Rows", rightX + 6, y + 39);
+    doc.setTextColor(...TEXT);
+    doc.setFont("helvetica", "bold");
+    doc.text(cleanTeacherName, rightX + 35, y + 18, { maxWidth: 45 });
+    doc.text(cleanStudentName, rightX + 35, y + 25, { maxWidth: 45 });
+    doc.text(cleanPeriod, rightX + 35, y + 32);
+    doc.text(String(rows.length), rightX + 35, y + 39);
+  };
+
+  const drawTableHeader = () => {
+    const barY = 132;
+    const barH = 14;
+    doc.setFillColor(...DARK);
+    doc.roundedRect(TABLE_X, barY, 73, barH, 3, 3, "F");
+    doc.setFillColor(...BLUE);
+    doc.roundedRect(TABLE_X + 64, barY, TABLE_W - 64, barH, 3, 3, "F");
+    doc.setFillColor(...BLUE_DARK);
+    doc.triangle(TABLE_X + 61, barY, TABLE_X + 84, barY, TABLE_X + 72, barY + barH, "F");
+    doc.setFillColor(0, 130, 195);
+    doc.triangle(TABLE_X + 76, barY, TABLE_X + 99, barY, TABLE_X + 87, barY + barH, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(6.8);
+    ["SL.", "DATE", "TEACHER", "STUDENT", "TYPE", "STATUS", "LAST UPDATED"].forEach((label, index) => {
+      doc.text(label, tableCenterX(index), barY + 9, { align: "center" });
+    });
+  };
+
+  const drawTablePageHeader = () => {
+    drawBackground();
+    drawBrand();
+    doc.setTextColor(...DARK);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(25);
+    doc.text("ATTENDANCE", 15, 48);
+    doc.text("REPORT", 15, 59);
+    doc.setDrawColor(...BLUE);
+    doc.setLineWidth(1.4);
+    doc.line(15, 64, 66, 64);
+    doc.setDrawColor(...INDIGO);
+    doc.setLineWidth(0.5);
+    doc.line(15, 66, 48, 66);
+    drawReportDetails();
+    drawTableHeader();
+  };
+
+  const drawFooter = () => {
+    const footerY = pageHeight - 28;
+    doc.setDrawColor(...LINE);
+    doc.setLineWidth(0.3);
+    doc.line(15, footerY - 7, pageWidth - 15, footerY - 7);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(...MUTED);
+    doc.text("Iqra Virtual School", 15, footerY);
+    doc.text("Tuition Department Attendance Report", 15, footerY + 5);
+    doc.text(`Page ${doc.getCurrentPageInfo().pageNumber}`, pageWidth - 15, footerY, { align: "right" });
+    doc.setFillColor(...DARK);
+    doc.rect(0, pageHeight - 13, 68, 13, "F");
+    doc.setFillColor(...BLUE);
+    doc.rect(68, pageHeight - 13, pageWidth - 68, 13, "F");
+    doc.setFillColor(...BLUE_DARK);
+    doc.triangle(58, pageHeight - 13, 80, pageHeight - 13, 69, pageHeight, "F");
+    doc.setFillColor(0, 130, 195);
+    doc.triangle(72, pageHeight - 13, 94, pageHeight - 13, 83, pageHeight, "F");
+  };
+
+  const drawStatIcon = (cx: number, cy: number, color: [number, number, number], icon: "present" | "absent" | "leave" | "total") => {
+    doc.setDrawColor(...color);
+    doc.setTextColor(...color);
+    doc.setLineWidth(0.62);
+    if (icon === "present") {
+      doc.circle(cx, cy, 2.25, "S");
+      doc.line(cx - 0.9, cy + 0.05, cx - 0.2, cy + 0.85);
+      doc.line(cx - 0.2, cy + 0.85, cx + 1.15, cy - 0.95);
+      return;
+    }
+    if (icon === "absent") {
+      doc.circle(cx, cy, 2.25, "S");
+      doc.line(cx - 1, cy - 1, cx + 1, cy + 1);
+      doc.line(cx + 1, cy - 1, cx - 1, cy + 1);
+      return;
+    }
+    if (icon === "leave") {
+      doc.circle(cx, cy, 2.25, "S");
+      doc.line(cx, cy, cx, cy - 1.15);
+      doc.line(cx, cy, cx + 1, cy + 0.55);
+      return;
+    }
+    doc.roundedRect(cx - 2, cy - 2.45, 4.1, 5, 0.55, 0.55, "S");
+    doc.line(cx - 0.95, cy - 0.9, cx + 1.1, cy - 0.9);
+    doc.line(cx - 0.95, cy + 0.3, cx + 1.1, cy + 0.3);
+    doc.line(cx - 0.95, cy + 1.5, cx + 0.7, cy + 1.5);
+  };
+
+  const drawMiniStat = (x: number, y: number, w: number, title: string, value: string, color: [number, number, number], icon: "present" | "absent" | "leave" | "total") => {
+    const softColor: [number, number, number] = icon === "present" ? [236, 253, 245] : icon === "absent" ? [254, 242, 242] : icon === "leave" ? [255, 251, 235] : [232, 248, 255];
+    const accentColor: [number, number, number] = icon === "present" ? [187, 247, 208] : icon === "absent" ? [254, 205, 211] : icon === "leave" ? [253, 230, 138] : [186, 230, 253];
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(x, y, w, 29, 6, 6, "F");
+    doc.setDrawColor(...LINE);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(x, y, w, 29, 6, 6, "S");
+    doc.setFillColor(...accentColor);
+    doc.roundedRect(x + 3, y + 2.6, w - 6, 1.3, 1, 1, "F");
+    doc.setFillColor(...softColor);
+    doc.circle(x + 10.5, y + 14.5, 4.8, "F");
+    doc.setFillColor(255, 255, 255);
+    doc.circle(x + 10.5, y + 14.5, 3.35, "F");
+    drawStatIcon(x + 10.5, y + 14.5, color, icon);
+    doc.setTextColor(...MUTED);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(6.2);
+    doc.text(title.toUpperCase(), x + 19, y + 11);
+    doc.setTextColor(...TEXT);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.text(value, x + 19, y + 21.5);
+    doc.setDrawColor(...accentColor);
+    doc.setLineWidth(0.45);
+    doc.line(x + 19, y + 24.5, x + w - 6, y + 24.5);
+  };
+
+  const drawSummaryPage = () => {
+    doc.addPage();
+    drawBackground();
+    drawBrand();
+    doc.setFillColor(...DARK);
+    doc.roundedRect(15, 43, pageWidth - 30, 42, 8, 8, "F");
+    doc.setFillColor(...BLUE);
+    doc.roundedRect(pageWidth - 88, 43, 73, 42, 8, 8, "F");
+    doc.setFillColor(...BLUE_DARK);
+    doc.triangle(pageWidth - 102, 43, pageWidth - 70, 43, pageWidth - 88, 85, "F");
+    doc.setFillColor(0, 130, 195);
+    doc.triangle(pageWidth - 84, 43, pageWidth - 52, 43, pageWidth - 70, 85, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(24);
+    doc.text("REPORT", 24, 59);
+    doc.text("SUMMARY", 24, 72);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Report # ${reportNo}`, pageWidth - 24, 58, { align: "right" });
+    doc.text(cleanRangeLabel, pageWidth - 24, 66, { align: "right" });
+    doc.text(`Generated by ${cleanGeneratedBy}`, pageWidth - 24, 74, { align: "right" });
+
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(15, 98, 74, 58, 7, 7, "F");
+    doc.setDrawColor(...LINE);
+    doc.roundedRect(15, 98, 74, 58, 7, 7, "S");
+    doc.setTextColor(...BLUE);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text("Attendance Score", 24, 111);
+    doc.setTextColor(...TEXT);
+    doc.setFontSize(31);
+    doc.text(`${attendanceScore}%`, 24, 134);
+    doc.setTextColor(...MUTED);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.text("Present rows compared with marked Tuition attendance rows.", 24, 145, { maxWidth: 54 });
+
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(97, 98, 98, 58, 7, 7, "F");
+    doc.setDrawColor(...LINE);
+    doc.roundedRect(97, 98, 98, 58, 7, 7, "S");
+    doc.setTextColor(...BLUE);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text("Report Scope", 106, 111);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...MUTED);
+    doc.text("Teacher", 106, 123);
+    doc.text("Student", 106, 133);
+    doc.text("Period", 106, 143);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...TEXT);
+    doc.text(cleanTeacherName, 132, 123, { maxWidth: 54 });
+    doc.text(cleanStudentName, 132, 133, { maxWidth: 54 });
+    doc.text(cleanPeriod, 132, 143);
+
+    drawMiniStat(15, 171, 43, "Present", String(counts.present), GREEN, "present");
+    drawMiniStat(63, 171, 43, "Absent", String(counts.absent), RED, "absent");
+    drawMiniStat(111, 171, 43, "Leave", String(counts.leave), AMBER, "leave");
+    drawMiniStat(159, 171, 36, "Rows", String(rows.length), BLUE, "total");
+
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(15, 212, 85, 38, 7, 7, "F");
+    doc.setDrawColor(...LINE);
+    doc.roundedRect(15, 212, 85, 38, 7, 7, "S");
+    doc.setTextColor(...BLUE);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text("Report Notes", 24, 225);
+    doc.setTextColor(...MUTED);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.text("This report is generated from Tuition schedules and Tuition attendance records only.", 24, 235, { maxWidth: 64 });
+    doc.text("Please verify data before sharing with parents or staff.", 24, 243, { maxWidth: 64 });
+
+    const sigX = 120;
+    const sigY = 226;
+    doc.setTextColor(...DARK);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.text("Coordinator Signature", sigX + 37, sigY, { align: "center" });
+    doc.setDrawColor(...DARK);
+    doc.setLineWidth(0.35);
+    doc.line(sigX, sigY + 14, sigX + 74, sigY + 14);
+    doc.setTextColor(...MUTED);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.text("Authorized Signature", sigX + 37, sigY + 22, { align: "center" });
+    drawFooter();
+  };
+
+  const body = rows.map((row, index) => [
+    String(index + 1),
+    safePdfText(row.date),
+    safePdfText(row.teacherName),
+    safePdfText(rowStudentScope(row)),
+    safePdfText(row.type),
+    safePdfText(rowStatusLabel(row)),
+    safePdfText(row.updatedAt || "-"),
+  ]);
+
+  autoTable(doc, {
+    body,
+    startY: 146,
+    margin: { left: TABLE_X, right: TABLE_X, top: 146, bottom: 40 },
+    showHead: "never",
+    theme: "plain",
+    tableWidth: TABLE_W,
+    styles: {
+      font: "helvetica",
+      fontSize: 6.8,
+      textColor: TEXT,
+      cellPadding: { top: 3.8, right: 2.2, bottom: 3.8, left: 2.2 },
+      overflow: "linebreak",
+      lineWidth: 0.25,
+      lineColor: [255, 255, 255],
+      minCellHeight: 11.5,
+      valign: "middle",
+    },
+    columnStyles: {
+      0: { cellWidth: TABLE_COLS.sl, halign: "center", fontStyle: "bold" },
+      1: { cellWidth: TABLE_COLS.date, halign: "center" },
+      2: { cellWidth: TABLE_COLS.teacher },
+      3: { cellWidth: TABLE_COLS.student },
+      4: { cellWidth: TABLE_COLS.type, halign: "center" },
+      5: { cellWidth: TABLE_COLS.status, halign: "center" },
+      6: { cellWidth: TABLE_COLS.updated, halign: "center" },
+    },
+    didParseCell: (data: any) => {
+      if (data.section !== "body") return;
+      const rowIndex = data.row.index;
+      data.cell.styles.fillColor = rowIndex % 2 === 0 ? [248, 250, 252] : [235, 239, 245];
+      if (data.column.index === 0) {
+        data.cell.styles.textColor = [71, 85, 105];
+        data.cell.styles.fontStyle = "bold";
+      }
+      if (data.column.index === 2 || data.column.index === 3) {
+        data.cell.styles.fontStyle = "bold";
+        data.cell.styles.textColor = [15, 23, 42];
+      }
+      if (data.column.index === 4) {
+        data.cell.styles.textColor = [71, 85, 105];
+        data.cell.styles.fontStyle = "bold";
+      }
+      if (data.column.index === 5) {
+        data.cell.text = [""];
+      }
+      if (data.column.index === 6) {
+        data.cell.styles.fontSize = 6.4;
+        data.cell.styles.textColor = [71, 85, 105];
+      }
+    },
+    didDrawCell: (data: any) => {
+      if (data.section !== "body" || data.column.index !== 5) return;
+      const status = safePdfText(data.cell.raw || "");
+      const cx = data.cell.x + data.cell.width / 2;
+      const cy = data.cell.y + data.cell.height / 2;
+      let pillColor: [number, number, number] = [100, 116, 139];
+      let pillBg: [number, number, number] = [241, 245, 249];
+      let label = status || "-";
+      if (status === "Present") {
+        pillColor = GREEN;
+        pillBg = [236, 253, 245];
+      } else if (status === "Absent") {
+        pillColor = RED;
+        pillBg = [254, 242, 242];
+      } else if (status === "Leave") {
+        pillColor = AMBER;
+        pillBg = [255, 251, 235];
+      }
+      const pillW = status === "Unmarked" ? 21.5 : 18;
+      const pillH = 6.2;
+      const pillX = cx - pillW / 2;
+      const pillY = cy - pillH / 2;
+      doc.setFillColor(...pillBg);
+      doc.roundedRect(pillX, pillY, pillW, pillH, 2.8, 2.8, "F");
+      doc.setDrawColor(...pillColor);
+      doc.setLineWidth(0.18);
+      doc.roundedRect(pillX, pillY, pillW, pillH, 2.8, 2.8, "S");
+      doc.setTextColor(...pillColor);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(5.2);
+      doc.text(label, cx, pillY + 4.2, { align: "center" });
+    },
+    willDrawPage: () => drawTablePageHeader(),
+    didDrawPage: () => drawFooter(),
+  });
+
+  drawSummaryPage();
+
+  doc.save(`${reportFileStem(meta)}.pdf`);
+}
+
+export default function TuitionReports({ departmentId, features, generatedBy = "Tuition Coordinator" }: Props) {
+  const canExportCsv = features.tuition_csv_export === true;
+  const canExportExcel = features.tuition_excel_export === true;
+  const canExportPdf = features.tuition_pdf_reports === true;
+
+  const [matrix, setMatrix] = useState<TuitionSchedulingMatrix>(emptyMatrix);
+  const [attendance, setAttendance] = useState<TuitionAttendanceRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [period, setPeriod] = useState<Period>("weekly");
+  const [anchor, setAnchor] = useState(todayStr());
+  const [start, setStart] = useState(todayStr());
+  const [end, setEnd] = useState(todayStr());
+  const [teacherId, setTeacherId] = useState("all");
+  const [studentId, setStudentId] = useState("all");
+  const [includeStudentRows, setIncludeStudentRows] = useState(true);
+  const [includeTeacherRows, setIncludeTeacherRows] = useState(true);
+  const [includeUnmarkedOnly, setIncludeUnmarkedOnly] = useState(false);
+  const [reportSearch, setReportSearch] = useState("");
+  const [attendanceStatusFilter, setAttendanceStatusFilter] = useState<ReportStatus | "all">("all");
+  const [activeView, setActiveView] = useState<ActiveView>("attendance");
+  const [attendancePage, setAttendancePage] = useState(1);
+  const [studentPage, setStudentPage] = useState(1);
+  const [teacherPage, setTeacherPage] = useState(1);
+  const [parentPage, setParentPage] = useState(1);
+
+  const loadData = async () => {
+    setLoading(true);
+    setMessage("");
+    try {
+      const [matrixPayload, attendancePayload] = await Promise.all([
+        getTuitionSchedulingMatrix({ department_id: departmentId }),
+        getTuitionAttendance({ department_id: departmentId }),
+      ]);
+      setMatrix(matrixPayload);
+      setAttendance(attendancePayload.results || []);
+    } catch (error: any) {
+      setMessage(error?.message || "Unable to load Tuition reports.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [departmentId]);
+
+  useEffect(() => {
+    setAttendancePage(1);
+    setStudentPage(1);
+    setTeacherPage(1);
+    setParentPage(1);
+  }, [activeView, period, anchor, start, end, teacherId, studentId, includeStudentRows, includeTeacherRows, includeUnmarkedOnly, reportSearch, attendanceStatusFilter]);
+
+  const effectiveRange = useMemo(
+    () => getRangeForPeriod(period, anchor, start, end),
+    [period, anchor, start, end]
+  );
+
+  const cappedRange = useMemo(
+    () => capRangeToToday(effectiveRange),
+    [effectiveRange]
+  );
+
+  const dates = useMemo(() => dateListInclusive(cappedRange.start, cappedRange.end), [cappedRange.start, cappedRange.end]);
+
+  const activeSchedules = useMemo(
+    () => matrix.schedules.filter((schedule) => schedule.is_active),
+    [matrix.schedules]
+  );
+
+  const teachersSorted = useMemo(
+    () => matrix.teachers.slice().sort((a, b) => a.name.localeCompare(b.name)),
+    [matrix.teachers]
+  );
+
+  const uniqueStudents = useMemo(() => {
+    const map = new Map<number, { id: number; name: string; className: string }>();
+    activeSchedules.forEach((schedule) => {
+      map.set(schedule.student_id, {
+        id: schedule.student_id,
+        name: schedule.student_name,
+        className: schedule.class_name,
+      });
+    });
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [activeSchedules]);
+
+  const filteredTeachers = useMemo(() => {
+    const allowedTeacherIds = new Set<number>();
+
+    if (studentId !== "all") {
+      activeSchedules.forEach((schedule) => {
+        if (String(schedule.student_id) === String(studentId)) {
+          allowedTeacherIds.add(schedule.teacher_id);
+        }
+      });
+    }
+
+    return teachersSorted.filter((teacher) => studentId === "all" || allowedTeacherIds.has(teacher.id));
+  }, [teachersSorted, activeSchedules, studentId]);
+
+  const filteredStudents = useMemo(() => {
+    const map = new Map<number, { id: number; name: string; className: string }>();
+
+    activeSchedules.forEach((schedule) => {
+      if (teacherId !== "all" && String(schedule.teacher_id) !== String(teacherId)) return;
+
+      map.set(schedule.student_id, {
+        id: schedule.student_id,
+        name: schedule.student_name,
+        className: schedule.class_name,
+      });
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [activeSchedules, teacherId]);
+
+  useEffect(() => {
+    if (teacherId !== "all" && !filteredTeachers.some((teacher) => String(teacher.id) === String(teacherId))) {
+      setTeacherId("all");
+    }
+  }, [filteredTeachers, teacherId]);
+
+  useEffect(() => {
+    if (studentId !== "all" && !filteredStudents.some((student) => String(student.id) === String(studentId))) {
+      setStudentId("all");
+    }
+  }, [filteredStudents, studentId]);
+
+
+  const attendanceMaps = useMemo(() => {
+    const student = new Map<string, TuitionAttendanceRecord>();
+    const teacher = new Map<string, TuitionAttendanceRecord>();
+
+    attendance.forEach((item) => {
+      if (item.entity_type === "student") {
+        student.set(`${item.schedule_id || item.student_id}:${item.date}`, item);
+      } else {
+        const key = `${item.teacher_id}:${item.date}:${item.class_key || item.classKey || ""}`;
+        teacher.set(key, item);
+      }
+    });
+
+    return { student, teacher };
+  }, [attendance]);
+
+  const rows = useMemo<ReportRow[]>(() => {
+    const result: ReportRow[] = [];
+
+    dates.forEach((date) => {
+      const day = weekdayCode(date);
+      const schedulesForDay = activeSchedules.filter((schedule) => schedule.weekday === day);
+
+      schedulesForDay.forEach((schedule) => {
+        if (!tuitionReportOccurrenceCompleted(schedule, date)) return;
+        if (!tuitionAttendanceOccurrenceAllowed(schedule, date)) return;
+        const record = attendanceMaps.student.get(`${schedule.id}:${date}`);
+        if (includeStudentRows) {
+          result.push({
+          id: `student:${schedule.id}:${date}`,
+          date,
+          teacherId: schedule.teacher_id,
+          teacherName: schedule.teacher_name,
+          studentId: schedule.student_id,
+          studentName: schedule.student_name,
+          className: schedule.class_name,
+          subjectName: schedule.subject_name,
+          time: formatTime(schedule.start_time),
+          type: "Student",
+          status: (record?.status || "unmarked") as ReportStatus,
+          updatedAt: record?.updated_at ? new Date(record.updated_at).toLocaleString() : "-",
+          schedule,
+          });
+        }
+
+        if (includeTeacherRows) {
+          const classKey = `schedule:${schedule.id}`;
+          const teacherRecord = attendanceMaps.teacher.get(`${schedule.teacher_id}:${date}:${classKey}`);
+          result.push({
+            id: `teacher:${schedule.teacher_id}:${schedule.id}:${date}`,
+            date,
+            teacherId: schedule.teacher_id,
+            teacherName: schedule.teacher_name,
+            studentName: "—",
+            className: "",
+            subjectName: "",
+            time: formatTime(schedule.start_time),
+            type: "Teacher",
+            status: (teacherRecord?.status || "unmarked") as ReportStatus,
+            updatedAt: teacherRecord?.updated_at ? new Date(teacherRecord.updated_at).toLocaleString() : "-",
+            schedule,
+          });
+        }
+      });
+    });
+
+    return result.sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+  }, [activeSchedules, attendanceMaps, dates, includeStudentRows, includeTeacherRows]);
+
+  const filtersAreActive = teacherId !== "all" || studentId !== "all";
+
+  const normalizedReportSearch = reportSearch.trim().toLocaleLowerCase();
+
+  const filteredRows = useMemo(() => {
+    return rows.filter((row) => {
+      const rowStudentId = row.studentId || row.schedule?.student_id || "";
+
+      if (teacherId !== "all" && String(row.teacherId) !== String(teacherId)) return false;
+      if (studentId !== "all" && String(rowStudentId) !== String(studentId)) return false;
+      if (includeUnmarkedOnly && filtersAreActive && row.status !== "unmarked") return false;
+      if (attendanceStatusFilter !== "all" && row.status !== attendanceStatusFilter) return false;
+
+      if (normalizedReportSearch) {
+        const searchable = [
+          row.date,
+          cleanReportDate(row.date),
+          row.teacherName,
+          row.studentName,
+          row.className,
+          row.subjectName,
+          row.type,
+          row.status,
+          statusMeta(row.status).label,
+          row.time,
+          row.updatedAt,
+          reportUpdatedAt(row),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLocaleLowerCase();
+
+        if (!searchable.includes(normalizedReportSearch)) return false;
+      }
+
+      return true;
+    });
+  }, [rows, teacherId, studentId, includeUnmarkedOnly, filtersAreActive, attendanceStatusFilter, normalizedReportSearch]);
+
+  const counts = useMemo(() => {
+    const present = filteredRows.filter((row) => row.status === "present").length;
+    const absent = filteredRows.filter((row) => row.status === "absent").length;
+    const leave = filteredRows.filter((row) => row.status === "leave").length;
+    const unmarked = filteredRows.filter((row) => row.status === "unmarked").length;
+    return { present, absent, leave, unmarked };
+  }, [filteredRows]);
+
+  const studentReports = useMemo<StudentSummary[]>(() => {
+    const map = new Map<number, StudentSummary>();
+
+    filteredRows.filter((row) => row.type === "Student" && row.studentId).forEach((row) => {
+      const id = Number(row.studentId);
+      const current = map.get(id) || {
+        id,
+        name: row.studentName,
+        className: row.className,
+        teacherNames: [],
+        subjects: [],
+        rows: [],
+        present: 0,
+        absent: 0,
+        leave: 0,
+        unmarked: 0,
+        percent: 0,
+      };
+
+      current.teacherNames = uniq([...current.teacherNames, row.teacherName]);
+      current.subjects = uniq([...current.subjects, row.subjectName]);
+      current.rows.push(row);
+      if (row.status === "present") current.present += 1;
+      if (row.status === "absent") current.absent += 1;
+      if (row.status === "leave") current.leave += 1;
+      if (row.status === "unmarked") current.unmarked += 1;
+      current.percent = calcPercent(current.present, current.absent, current.leave);
+      map.set(id, current);
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [filteredRows]);
+
+  const teacherReports = useMemo<TeacherSummary[]>(() => {
+    const map = new Map<number, TeacherSummary>();
+
+    filteredRows.forEach((row) => {
+      const current = map.get(row.teacherId) || {
+        id: row.teacherId,
+        name: row.teacherName,
+        students: [],
+        subjects: [],
+        rows: [],
+        present: 0,
+        absent: 0,
+        leave: 0,
+        unmarked: 0,
+        percent: 0,
+      };
+
+      current.students = uniq([...current.students, row.studentName]);
+      current.subjects = uniq([...current.subjects, row.subjectName]);
+      current.rows.push(row);
+      if (row.status === "present") current.present += 1;
+      if (row.status === "absent") current.absent += 1;
+      if (row.status === "leave") current.leave += 1;
+      if (row.status === "unmarked") current.unmarked += 1;
+      current.percent = calcPercent(current.present, current.absent, current.leave);
+      map.set(row.teacherId, current);
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [filteredRows]);
+
+  const attendancePagination = paginate(filteredRows, attendancePage, REPORT_PAGE_SIZE);
+  const studentPagination = paginate(studentReports, studentPage, CARD_PAGE_SIZE);
+  const teacherPagination = paginate(teacherReports, teacherPage, CARD_PAGE_SIZE);
+  const parentPagination = paginate(studentReports, parentPage, CARD_PAGE_SIZE);
+
+  const rangeLabel = `${cappedRange.start} → ${cappedRange.end}`;
+
+  const selectedTeacherName = useMemo(() => {
+    if (teacherId === "all") return "All Teachers";
+    return matrix.teachers.find((teacher) => String(teacher.id) === String(teacherId))?.name || "Selected Teacher";
+  }, [teacherId, matrix.teachers]);
+
+  const selectedStudentName = useMemo(() => {
+    if (studentId === "all") return "All Students";
+    return uniqueStudents.find((student) => String(student.id) === String(studentId))?.name || "Selected Student";
+  }, [studentId, uniqueStudents]);
+
+  const exportMeta = useMemo(
+    () => ({
+      rangeLabel,
+      period,
+      teacherName: selectedTeacherName,
+      studentName: selectedStudentName,
+    }),
+    [rangeLabel, period, selectedTeacherName, selectedStudentName]
+  );
+
+  if (loading) {
+    return (
+      <div className="rounded-[30px] border border-slate-200/80 bg-white p-10 text-center shadow-[0_18px_48px_rgba(15,23,42,0.07)]">
+        <Loader2 className="mx-auto animate-spin text-indigo-600" size={28} />
+        <div className="mt-3 text-sm font-black text-slate-700">Loading Tuition reports...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {message && (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900">
+          <AlertCircle className="mt-0.5 shrink-0" size={18} />
+          <span>{message}</span>
+        </div>
+      )}
+
+      <section className="relative overflow-hidden rounded-[34px] border border-white/80 bg-white/85 p-6 shadow-[0_18px_55px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.14),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(99,102,241,0.10),transparent_34%)]" />
+        <div className="relative flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-[11px] font-black text-emerald-700">
+              <FileText size={14} /> Reports Dashboard
+            </div>
+            <h1 className="mt-4 text-3xl font-black text-slate-950">Reports Dashboard</h1>
+            <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-slate-500">
+              Review attendance, student progress, and teacher performance in one Tuition report view.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <IconButton
+              label="CSV"
+              icon={<FileDown size={15} />}
+              tone="bg-slate-950 text-white shadow-[0_12px_24px_rgba(15,23,42,0.18)] hover:bg-slate-800"
+              enabled={canExportCsv}
+              lockedMessage="Tuition CSV export is disabled by Main Admin."
+              onClick={() => void exportRows(filteredRows, generatedBy, "csv", exportMeta)}
+            />
+            <IconButton
+              label="Excel"
+              icon={<FileSpreadsheet size={15} />}
+              tone="bg-blue-600 text-white shadow-[0_12px_24px_rgba(37,99,235,0.20)] hover:bg-blue-700"
+              enabled={canExportExcel}
+              lockedMessage="Tuition Excel export is disabled by Main Admin."
+              onClick={() => void exportRows(filteredRows, generatedBy, "excel", exportMeta)}
+            />
+            <IconButton
+              label="PDF"
+              icon={<FileText size={15} />}
+              tone="bg-emerald-600 text-white shadow-[0_12px_24px_rgba(5,150,105,0.20)] hover:bg-emerald-700"
+              enabled={canExportPdf}
+              lockedMessage="Tuition PDF export is disabled by Main Admin."
+              onClick={() => void exportPdf(filteredRows, generatedBy, exportMeta)}
+            />
+            <IconButton
+              label="Refresh Lessons"
+              icon={<RefreshCw size={15} />}
+              tone="border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50"
+              onClick={() => void loadData()}
+            />
+          </div>
+        </div>
+
+        <div className="relative mt-7 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <StatCard label="Present" value={counts.present} icon={<CheckCircle2 size={19} />} tone="border-emerald-100 bg-emerald-50/70 text-emerald-700" />
+          <StatCard label="Absent" value={counts.absent} icon={<XCircle size={19} />} tone="border-rose-100 bg-rose-50/70 text-rose-700" />
+          <StatCard label="Leave" value={counts.leave} icon={<PauseCircle size={19} />} tone="border-amber-100 bg-amber-50/70 text-amber-800" />
+          <StatCard label="Unmarked" value={counts.unmarked} icon={<MinusCircle size={19} />} tone="border-slate-200 bg-slate-50/80 text-slate-700" />
+        </div>
+      </section>
+
+      <section className="rounded-[30px] border border-slate-200/80 bg-white p-5 shadow-[0_18px_48px_rgba(15,23,42,0.07)]">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <Filter size={17} className="text-indigo-600" />
+              <div>
+                <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">Date Range</div>
+                <div className="mt-1 flex items-center gap-2 text-xs font-black text-slate-700">
+                  <span className="rounded-full bg-white px-3 py-1">{cappedRange.start}</span>
+                  <span className="text-slate-400">→</span>
+                  <span className="rounded-full bg-white px-3 py-1">{cappedRange.end}</span>
+                </div>
+              </div>
+            </div>
+
+            <Segmented
+              value={period}
+              onChange={(value) => setPeriod(value as Period)}
+              options={[
+                { value: "daily", label: "Daily" },
+                { value: "weekly", label: "Weekly" },
+                { value: "monthly", label: "Monthly" },
+                { value: "yearly", label: "Yearly" },
+                { value: "custom", label: "Custom" },
+              ]}
+            />
+          </div>
+
+          <Segmented
+            value={activeView}
+            onChange={(value) => setActiveView(value as ActiveView)}
+            options={[
+              { value: "attendance", label: "Attendance" },
+              { value: "students", label: "Student-wise" },
+              { value: "teachers", label: "Teacher-wise" },
+            ]}
+          />
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-3 xl:grid-cols-3">
+          {period === "custom" ? (
+            <>
+              <label className="block">
+                <span className="mb-2 block text-[11px] font-black text-slate-600">Start date</span>
+                <input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 outline-none" />
+              </label>
+              <label className="block">
+                <span className="mb-2 block text-[11px] font-black text-slate-600">End date</span>
+                <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 outline-none" />
+              </label>
+            </>
+          ) : (
+            <label className="block">
+              <span className="mb-2 block text-[11px] font-black text-slate-600">Anchor date</span>
+              <input type="date" value={anchor} onChange={(e) => setAnchor(e.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 outline-none" />
+            </label>
+          )}
+
+          <label className="block">
+            <span className="mb-2 block text-[11px] font-black text-slate-600">Teacher</span>
+            <select value={teacherId} onChange={(e) => setTeacherId(e.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 outline-none">
+              <option value="all">All Teachers</option>
+              {filteredTeachers.map((teacher) => (
+                <option key={teacher.id} value={teacher.id}>{teacher.name}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-[11px] font-black text-slate-600">Student</span>
+            <select value={studentId} onChange={(e) => setStudentId(e.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 outline-none">
+              <option value="all">All Students</option>
+              {filteredStudents.map((student) => (
+                <option key={student.id} value={student.id}>{student.name}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_320px_auto] xl:items-end">
+          <label className="block">
+            <span className="mb-2 block text-[11px] font-black uppercase tracking-[0.12em] text-slate-500">Search reports</span>
+            <div className="relative">
+              <Search size={17} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                value={reportSearch}
+                onChange={(e) => setReportSearch(e.target.value)}
+                placeholder="Search teacher, student, date, status, type, subject or modified time..."
+                className="w-full rounded-2xl border border-slate-200 bg-white py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+              />
+            </div>
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-[11px] font-black uppercase tracking-[0.12em] text-slate-500">Attendance status</span>
+            <select
+              value={attendanceStatusFilter}
+              onChange={(e) => setAttendanceStatusFilter(e.target.value as ReportStatus | "all")}
+              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+            >
+              <option value="all">All statuses</option>
+              <option value="present">Present</option>
+              <option value="absent">Absent</option>
+              <option value="leave">Leave</option>
+              <option value="unmarked">Unmarked</option>
+            </select>
+          </label>
+
+          <button
+            type="button"
+            onClick={() => {
+              setReportSearch("");
+              setAttendanceStatusFilter("all");
+              setTeacherId("all");
+              setStudentId("all");
+              setIncludeUnmarkedOnly(false);
+            }}
+            className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-600 shadow-sm transition hover:bg-slate-50"
+          >
+            <RotateCcw size={16} /> Reset filters
+          </button>
+        </div>
+
+        <div className="mt-3 flex flex-col gap-2 rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-xs font-bold text-blue-800 sm:flex-row sm:items-center sm:justify-between">
+          <span>Attendance Date is the class date. Record Last Modified is when that saved attendance record was created or most recently edited.</span>
+          <span className="shrink-0 font-black">Showing {filteredRows.length} of {rows.length} attendance rows</span>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-3">
+          <label className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700">
+            <input
+              type="checkbox"
+              checked={includeStudentRows}
+              onChange={(e) => {
+                const next = e.target.checked;
+                if (!next && !includeTeacherRows) return;
+                setIncludeStudentRows(next);
+              }}
+            />
+            Include student rows
+          </label>
+          <label className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700">
+            <input
+              type="checkbox"
+              checked={includeTeacherRows}
+              onChange={(e) => {
+                const next = e.target.checked;
+                if (!next && !includeStudentRows) return;
+                setIncludeTeacherRows(next);
+              }}
+            />
+            Include teacher rows
+          </label>
+          <label className={`inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold ${filtersAreActive ? "text-slate-700" : "text-slate-400"}`}>
+            <input
+              type="checkbox"
+              checked={includeUnmarkedOnly}
+              disabled={!filtersAreActive}
+              onChange={(e) => setIncludeUnmarkedOnly(e.target.checked)}
+            />
+            Include unmarked only when Teacher/Student filter is selected
+          </label>
+        </div>
+      </section>
+
+      {activeView === "attendance" && (
+        <section className="overflow-hidden rounded-[30px] border border-slate-200/80 bg-white shadow-[0_18px_48px_rgba(15,23,42,0.07)]">
+          <div className="border-b border-slate-200 px-5 py-4">
+            <h2 className="text-lg font-black text-slate-950">Attendance Report Rows</h2>
+            <p className="mt-1 text-sm font-semibold text-slate-500">
+              Showing {filteredRows.length} rows for {rangeLabel}
+            </p>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="min-w-[980px] w-full text-left text-sm">
+              <thead className="bg-slate-50 text-[11px] font-black uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-5 py-4">Date</th>
+                  <th className="px-5 py-4">Teacher</th>
+                  <th className="px-5 py-4">Student</th>
+                  <th className="px-5 py-4">Type</th>
+                  <th className="px-5 py-4">Status</th>
+                  <th className="px-5 py-4">Last Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {attendancePagination.items.length ? attendancePagination.items.map((row) => {
+                  const meta = statusMeta(row.status);
+                  return (
+                    <tr key={row.id} className="border-t border-slate-100">
+                      <td className="px-5 py-4 font-extrabold text-slate-700">{cleanReportDate(row.date)}</td>
+                      <td className="px-5 py-4 font-bold text-slate-700">{row.teacherName}</td>
+                      <td className="px-5 py-4">
+                        {isTeacherReportRow(row) ? (
+                          <span className="text-lg font-bold text-slate-400">—</span>
+                        ) : (
+                          <div>
+                            <div className="font-black text-slate-950">{reportStudentPrimary(row)}</div>
+                            {reportStudentSubline(row) && (
+                              <div className="mt-1 text-xs font-bold text-slate-500">{reportStudentSubline(row)}</div>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-5 py-4 font-bold text-slate-700">{row.type}</td>
+                      <td className="px-5 py-4"><span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-black ${meta.cls}`}>{meta.icon}{meta.label}</span></td>
+                      <td className="px-5 py-4 text-xs font-bold text-slate-500">{reportUpdatedAt(row)}</td>
+                    </tr>
+                  );
+                }) : (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-12 text-center text-sm font-bold text-slate-400">
+                      <FileSpreadsheet className="mx-auto mb-3 text-slate-300" size={34} />
+                      No report rows found for this filter.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <Pagination page={attendancePagination.safePage} total={attendancePagination.totalPages} onPage={setAttendancePage} />
+        </section>
+      )}
+
+      {activeView === "students" && (
+        <CardGrid title="Student-wise Progress" page={studentPagination.safePage} total={studentPagination.totalPages} onPage={setStudentPage}>
+          {studentPagination.items.map((student) => (
+            <SummaryCard
+              key={student.id}
+              icon={<GraduationCap size={22} />}
+              title={student.name}
+              subtitle={student.className || "Tuition Student"}
+              meta={`${student.subjects.length} subjects · ${student.teacherNames.length} teachers`}
+              percent={student.percent}
+              present={student.present}
+              absent={student.absent}
+              leave={student.leave}
+              unmarked={student.unmarked}
+              tags={student.subjects}
+            />
+          ))}
+        </CardGrid>
+      )}
+
+      {activeView === "teachers" && (
+        <CardGrid title="Teacher-wise Performance" page={teacherPagination.safePage} total={teacherPagination.totalPages} onPage={setTeacherPage}>
+          {teacherPagination.items.map((teacher) => (
+            <SummaryCard
+              key={teacher.id}
+              icon={<UserRound size={22} />}
+              title={teacher.name}
+              subtitle={`${teacher.students.length} students`}
+              meta={`${teacher.subjects.length} subjects · ${teacher.rows.length} report rows`}
+              percent={teacher.percent}
+              present={teacher.present}
+              absent={teacher.absent}
+              leave={teacher.leave}
+              unmarked={teacher.unmarked}
+              tags={teacher.subjects}
+            />
+          ))}
+        </CardGrid>
+      )}
+    </div>
+  );
+}
+
+function Pagination({ page, total, onPage }: { page: number; total: number; onPage: (page: number) => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-4 text-sm font-bold text-slate-500">
+      <span>Page {page} of {total}</span>
+      <div className="flex gap-2">
+        <button type="button" onClick={() => onPage(Math.max(1, page - 1))} className="rounded-xl border border-slate-200 bg-white px-3 py-2 disabled:opacity-50" disabled={page <= 1}>Prev</button>
+        <button type="button" onClick={() => onPage(Math.min(total, page + 1))} className="rounded-xl border border-slate-200 bg-white px-3 py-2 disabled:opacity-50" disabled={page >= total}>Next</button>
+      </div>
+    </div>
+  );
+}
+
+function CardGrid({ title, page, total, onPage, children }: { title: string; page: number; total: number; onPage: (page: number) => void; children: React.ReactNode }) {
+  return (
+    <section className="rounded-[30px] border border-slate-200/80 bg-white p-5 shadow-[0_18px_48px_rgba(15,23,42,0.07)]">
+      <div className="mb-5 flex items-center justify-between gap-3">
+        <h2 className="text-lg font-black text-slate-950">{title}</h2>
+        <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-black text-slate-600">Page {page} / {total}</div>
+      </div>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">{children}</div>
+      <Pagination page={page} total={total} onPage={onPage} />
+    </section>
+  );
+}
+
+function SummaryCard({
+  icon,
+  title,
+  subtitle,
+  meta,
+  percent,
+  present,
+  absent,
+  leave,
+  unmarked,
+  tags,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+  meta: string;
+  percent: number;
+  present: number;
+  absent: number;
+  leave: number;
+  unmarked: number;
+  tags: string[];
+}) {
+  return (
+    <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
+      <div className="flex items-start gap-4">
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-3xl bg-indigo-50 text-indigo-700">{icon}</div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h3 className="truncate text-lg font-black text-slate-950">{title}</h3>
+              <p className="mt-1 truncate text-sm font-bold text-slate-500">{subtitle}</p>
+            </div>
+            <div className="rounded-2xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm font-black text-indigo-700">{percent}%</div>
+          </div>
+
+          <p className="mt-3 text-xs font-bold text-slate-500">{meta}</p>
+          <div className="mt-4 grid grid-cols-4 gap-2 text-center text-xs font-black">
+            <div className="rounded-2xl bg-emerald-50 px-2 py-2 text-emerald-700">{present}<br />Present</div>
+            <div className="rounded-2xl bg-rose-50 px-2 py-2 text-rose-700">{absent}<br />Absent</div>
+            <div className="rounded-2xl bg-amber-50 px-2 py-2 text-amber-800">{leave}<br />Leave</div>
+            <div className="rounded-2xl bg-slate-50 px-2 py-2 text-slate-600">{unmarked}<br />Unmarked</div>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {tags.slice(0, 5).map((tag) => (
+              <span key={tag} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-bold text-slate-600">{tag}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -58,6 +58,14 @@ class AcademyConsumer(AsyncWebsocketConsumer):
         """Generic update pushed to clients."""
         await self.send(text_data=json.dumps(event))
 
+    async def maintenance_updated(self, event):
+        """Notify connected portals to refresh their maintenance status."""
+        await self.send(text_data=json.dumps(event))
+
+    async def notice_updated(self, event):
+        """Notify connected portals that a targeted notice changed."""
+        await self.send(text_data=json.dumps(event))
+
     async def lesson_saved(self, event):
         await self.send(text_data=json.dumps(event))
 

@@ -1,4 +1,5 @@
 import { clearSession, loadSession, saveSession, type Session } from "./sessionService";
+import { authenticatedRequest } from "./authenticatedRequest";
 
 const DJANGO_API_BASE =
   (import.meta as any).env?.VITE_DJANGO_API_BASE_URL || "http://127.0.0.1:8000";
@@ -119,6 +120,113 @@ export type DashboardAttendance = {
 
   created_at?: string | null;
   updated_at?: string | null;
+};
+
+/** API payload returned by the Academy attendance endpoints. */
+export type AttendanceApiResponse = DashboardAttendance;
+
+/** Input accepted by the Academy attendance create endpoint. */
+export type CreateAttendanceInput = {
+  entity_type: "teacher" | "student";
+  teacher_id?: number | null;
+  student_id?: number | null;
+  date: string;
+  status: "present" | "absent" | "leave";
+  classKey?: string;
+  class_key?: string;
+};
+
+
+export type QuranTeacherSessionStudentStatus =
+  | "present"
+  | "absent"
+  | "leave"
+  | "not_marked";
+
+export type QuranTeacherSessionCoverage = {
+  id: number;
+  student_id: number;
+  student_name: string;
+  date: string;
+  class_key: string;
+
+  teacher_status: "present" | "absent" | "leave";
+  student_status: QuranTeacherSessionStudentStatus;
+
+  coverage_status:
+    | "unresolved"
+    | "assigned"
+    | "not_required"
+    | "cancelled";
+
+  original_teacher_id: number;
+  original_teacher_name: string;
+
+  substitute_teacher_id: number | null;
+  substitute_teacher_name: string;
+
+  original_teacher_rate: string;
+  substitute_rate: string;
+
+  schedule_id: number | null;
+  teacher_attendance_id: number | null;
+};
+
+export type QuranTeacherSessionStudent = {
+  student_id: number;
+  student_name: string;
+  schedule_id: number;
+
+  student_attendance_id: number | null;
+  student_status: QuranTeacherSessionStudentStatus;
+
+  requires_substitute: boolean;
+
+  coverage: QuranTeacherSessionCoverage | null;
+};
+
+export type QuranTeacherSessionSubstitute = {
+  id: number;
+  name: string;
+};
+
+export type QuranTeacherSessionPayload = {
+  department: {
+    id: number;
+    name: string;
+  };
+
+  teacher: {
+    id: number;
+    name: string;
+  };
+
+  date: string;
+  class_key: string;
+
+  teacher_attendance: {
+    id: number;
+    status: "present" | "absent" | "leave";
+    marked_by_id: number | null;
+    updated_at: string | null;
+  } | null;
+
+  students: QuranTeacherSessionStudent[];
+
+  available_substitutes: QuranTeacherSessionSubstitute[];
+};
+
+export type SaveQuranTeacherSessionInput = {
+  teacher_id: number;
+  date: string;
+  class_key: string;
+
+  status: "present" | "absent" | "leave";
+
+  coverage_assignments?: Array<{
+    student_id: number;
+    substitute_teacher_id: number;
+  }>;
 };
 
 // ============================================================
@@ -416,6 +524,7 @@ export type CreateMonthlyLessonPlanInput = {
   year: number;
   subject: string;
 
+  plan_data?: Record<string, any>;
   plan_text: string;
   target_summary?: string;
   notes?: string;
@@ -423,6 +532,7 @@ export type CreateMonthlyLessonPlanInput = {
 };
 
 export type UpdateMonthlyLessonPlanInput = Partial<{
+  plan_data?: Record<string, any>;
   plan_text: string;
   target_summary: string;
   notes: string;
@@ -574,53 +684,7 @@ export type DashboardResponse = {
 // ============================================================
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const session = loadSession();
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-
-  if (options.headers) {
-    Object.entries(options.headers as Record<string, string>).forEach(([key, value]) => {
-      headers[key] = value;
-    });
-  }
-
-  if (session?.access) {
-    headers.Authorization = `Bearer ${session.access}`;
-  }
-
-  const res = await fetch(`${DJANGO_API_BASE}${path}`, {
-    ...options,
-    headers,
-  });
-
-  const data = await res.json().catch(() => null);
-
-  if (res.status === 401) {
-    clearSession();
-    throw new Error("Your session expired. Please log in again.");
-  }
-
-  if (!res.ok) {
-    const message =
-      data?.detail ||
-      data?.error ||
-      (typeof data === "string" ? data : "") ||
-      (data && typeof data === "object"
-        ? Object.entries(data)
-            .map(([key, value]) => {
-              if (Array.isArray(value)) return `${key}: ${value.join(", ")}`;
-              return `${key}: ${String(value)}`;
-            })
-            .join(" | ")
-        : "") ||
-      `Request failed with status ${res.status}`;
-
-    throw new Error(message);
-  }
-
-  return data as T;
+  return authenticatedRequest<T>(path, options);
 }
 
 function buildQuery(params?: Record<string, string | number | boolean | null | undefined>) {
@@ -680,6 +744,7 @@ export type AuthContextResponse = {
   institution: PlatformInstitution | null;
   department: PlatformDepartment | null;
   features: Record<string, boolean>;
+  coordinator_tabs: Record<string, boolean>;
   roles: Array<{
     id: number;
     role: string;
@@ -695,10 +760,11 @@ export type AuthContextResponse = {
       department_type: string;
     } | null;
   }>;
+  maintenance: PlatformMaintenanceStatus;
 };
 
 export async function getAuthContext(): Promise<AuthContextResponse> {
-  return request<AuthContextResponse>("/api/auth/context/");
+  return request<AuthContextResponse>("/api/auth/context/", { cache: "no-store" });
 }
 
 
@@ -728,6 +794,7 @@ export type PlatformFeature = {
   name: string;
   description: string;
   is_active: boolean;
+  department_type: "quran" | "tuition" | "general";
   sort_order: number;
   is_enabled?: boolean;
 };
@@ -786,6 +853,37 @@ export async function updatePlatformInstitution(
   });
 }
 
+export type PlatformPermanentDeleteInput = {
+  confirmation_name: string;
+  current_password: string;
+};
+
+export type PlatformPermanentDeleteResponse = {
+  detail: string;
+  deleted: {
+    id: number;
+    name: string;
+    institution_id?: number;
+    departments_deleted?: number;
+    academy_rows_deleted: number;
+    accounts_deleted: number;
+    accounts_preserved: number;
+  };
+};
+
+export async function deletePlatformInstitution(
+  institutionId: number,
+  input: PlatformPermanentDeleteInput
+): Promise<PlatformPermanentDeleteResponse> {
+  return request<PlatformPermanentDeleteResponse>(
+    `/api/auth/platform/institutions/${institutionId}/`,
+    {
+      method: "DELETE",
+      body: JSON.stringify(input),
+    }
+  );
+}
+
 export async function createPlatformDepartment(
   input: PlatformDepartmentInput
 ): Promise<PlatformDepartment> {
@@ -803,6 +901,19 @@ export async function updatePlatformDepartment(
     method: "PATCH",
     body: JSON.stringify(input),
   });
+}
+
+export async function deletePlatformDepartment(
+  departmentId: number,
+  input: PlatformPermanentDeleteInput
+): Promise<PlatformPermanentDeleteResponse> {
+  return request<PlatformPermanentDeleteResponse>(
+    `/api/auth/platform/departments/${departmentId}/`,
+    {
+      method: "DELETE",
+      body: JSON.stringify(input),
+    }
+  );
 }
 
 export async function getPlatformDepartments(): Promise<PlatformDepartmentsResponse> {
@@ -840,6 +951,291 @@ export async function updateDepartmentFeature(
 
 export function logoutFromDjango() {
   clearSession();
+}
+
+
+// ============================================================
+// Main Admin administration tools
+// ============================================================
+
+export type PlatformPortalAdministrator = {
+  id: number;
+  full_name: string;
+  first_name: string;
+  last_name: string;
+  username: string;
+  email: string;
+  role: "institution_admin" | "department_admin" | "coordinator";
+  role_label: string;
+  is_active: boolean;
+  last_login: string | null;
+  date_joined: string | null;
+  institution: PlatformInstitution | null;
+  department: {
+    id: number;
+    name: string;
+    code: string;
+    department_type: string;
+  } | null;
+};
+
+export type PlatformPortalAdministratorsResponse = {
+  administrators: PlatformPortalAdministrator[];
+  departments: PlatformDepartment[];
+};
+
+export type PlatformPortalAdministratorInput = {
+  full_name: string;
+  username: string;
+  email?: string;
+  role: "department_admin" | "coordinator" | "institution_admin";
+  department_id: number;
+  is_active?: boolean;
+  current_password: string;
+  new_password?: string;
+};
+
+// IVS_PORTAL_ADMIN_RESET_LIST_FIX_V26
+export async function getPlatformPortalAdministrators(params?: {
+  search?: string;
+  department_id?: number | string;
+  role?: string;
+}): Promise<PlatformPortalAdministratorsResponse> {
+  return request<PlatformPortalAdministratorsResponse>(
+    `/api/auth/platform/administrators/${buildQuery(params)}`,
+    { cache: "no-store" }
+  );
+}
+
+export async function createPlatformPortalAdministrator(
+  input: PlatformPortalAdministratorInput
+): Promise<PlatformPortalAdministrator> {
+  return request<PlatformPortalAdministrator>("/api/auth/platform/administrators/", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updatePlatformPortalAdministrator(
+  userId: number,
+  input: Partial<PlatformPortalAdministratorInput>
+): Promise<PlatformPortalAdministrator> {
+  return request<PlatformPortalAdministrator>(`/api/auth/platform/administrators/${userId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function resetPlatformPortalAdministratorPassword(
+  userId: number,
+  input: { current_password: string; new_password?: string }
+): Promise<{
+  detail: string;
+  administrator: PlatformPortalAdministrator;
+  temporary_password: string | null;
+}> {
+  return request(`/api/auth/platform/administrators/${userId}/reset-password/`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export type PlatformBackupItem = {
+  id: number;
+  filename: string;
+  original_filename: string;
+  source: "generated" | "uploaded" | "pre_restore";
+  status: "ready" | "validated" | "failed";
+  size_bytes: number;
+  checksum_sha256: string;
+  database_name: string;
+  postgres_version: string;
+  validation_message: string;
+  created_at: string | null;
+  created_by: { id: number; username: string; full_name: string } | null;
+  file_exists: boolean;
+  download_ready: boolean;
+};
+
+export type PlatformBackupCapabilities = {
+  pg_dump_available: boolean;
+  pg_restore_available: boolean;
+  pg_dump_version: string;
+  pg_restore_version: string;
+  retention_count: number;
+  restore_mode: "terminal_command";
+};
+
+export async function getPlatformBackups(): Promise<{
+  backups: PlatformBackupItem[];
+  capabilities: PlatformBackupCapabilities;
+}> {
+  return request("/api/auth/platform/backups/");
+}
+
+export async function createPlatformBackup(currentPassword: string): Promise<PlatformBackupItem> {
+  return request("/api/auth/platform/backups/", {
+    method: "POST",
+    body: JSON.stringify({ current_password: currentPassword }),
+  });
+}
+
+export async function uploadPlatformBackup(
+  file: File,
+  currentPassword: string
+): Promise<PlatformBackupItem> {
+  const formData = new FormData();
+  formData.append("backup", file);
+  formData.append("current_password", currentPassword);
+  return request("/api/auth/platform/backups/upload/", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export async function deletePlatformBackup(
+  backupId: number,
+  input: { current_password: string; confirmation_filename: string }
+): Promise<{ detail: string }> {
+  return request(`/api/auth/platform/backups/${backupId}/`, {
+    method: "DELETE",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function downloadPlatformBackup(backup: PlatformBackupItem): Promise<void> {
+  const session = loadSession();
+  const response = await fetch(`${DJANGO_API_BASE}/api/auth/platform/backups/${backup.id}/download/`, {
+    headers: session?.access ? { Authorization: `Bearer ${session.access}` } : undefined,
+  });
+  if (response.status === 401) {
+    clearSession();
+    throw new Error("Your session expired. Please log in again.");
+  }
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(data?.detail || "Could not download the backup.");
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = backup.filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+export type PlatformApplicationSettings = {
+  cors_allowed_origins: string[];
+  gemini_model: string;
+  gemini_api_key_configured: boolean;
+  gemini_api_key_hint: string;
+  gemini_api_key_source: "database" | "environment" | "missing";
+  backup_retention_count: number;
+};
+
+export async function getPlatformApplicationSettings(): Promise<PlatformApplicationSettings> {
+  return request("/api/auth/platform/settings/");
+}
+
+export async function updatePlatformApplicationSettings(
+  input: Partial<PlatformApplicationSettings> & {
+    current_password: string;
+    gemini_api_key?: string;
+    clear_gemini_api_key?: boolean;
+  }
+): Promise<PlatformApplicationSettings> {
+  return request("/api/auth/platform/settings/", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function testPlatformGeminiConnection(): Promise<{
+  detail: string;
+  model: string;
+  source: string;
+  latency_ms: number;
+}> {
+  return request("/api/auth/platform/settings/test-gemini/", { method: "POST" });
+}
+
+export type PlatformSystemHealth = {
+  environment: {
+    debug: boolean;
+    mode: string;
+    secret_key_configured: boolean;
+    secret_key_length: number;
+    allowed_hosts: string[];
+  };
+  database: {
+    connected: boolean;
+    latency_ms: number | null;
+    error: string;
+    engine: string;
+    name: string;
+    host: string;
+    port: string;
+    username_masked: string;
+    password_configured: boolean;
+  };
+  network: {
+    api_base_url: string;
+    websocket_base_url: string;
+    cors_allowed_origins: string[];
+  };
+  channels: {
+    mode: string;
+    production_ready: boolean;
+  };
+  gemini: {
+    configured: boolean;
+    model: string;
+    key_source: string;
+  };
+  backups: PlatformBackupCapabilities & {
+    backup_count: number;
+    total_size_bytes: number;
+  };
+  platform: {
+    institutions: number;
+    departments: number;
+    users: number;
+    active_users: number;
+  };
+};
+
+export async function getPlatformSystemHealth(): Promise<PlatformSystemHealth> {
+  return request("/api/auth/platform/health/");
+}
+
+export type PlatformAuditLog = {
+  id: number;
+  category: string;
+  action: string;
+  summary: string;
+  target_type: string;
+  target_id: string;
+  target_label: string;
+  details: Record<string, unknown>;
+  ip_address: string | null;
+  created_at: string;
+  actor: { id: number; username: string; full_name: string } | null;
+};
+
+export async function getPlatformAuditLogs(params?: {
+  search?: string;
+  category?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<{
+  logs: PlatformAuditLog[];
+  categories: string[];
+  pagination: { page: number; page_size: number; total_items: number; total_pages: number };
+}> {
+  return request(`/api/auth/platform/audit-logs/${buildQuery(params)}`);
 }
 
 // ============================================================
@@ -1104,7 +1500,7 @@ export async function markAttendanceInDjango(
     method: "POST",
     body: JSON.stringify({
       ...input,
-      class_key: input.classKey || "",
+      class_key: input.class_key || input.classKey || "",
     }),
   });
 }
@@ -1113,6 +1509,50 @@ export async function deleteAttendanceInDjango(attendanceId: number) {
   return request<{ detail: string }>(`/api/academy/attendance/${attendanceId}/`, {
     method: "DELETE",
   });
+}
+
+
+export async function getQuranTeacherSessionAttendance(params: {
+  teacher_id: number;
+  date: string;
+  class_key: string;
+}): Promise<QuranTeacherSessionPayload> {
+  const suffix = buildQuery(params);
+
+  return request<QuranTeacherSessionPayload>(
+    `/api/academy/teacher-session-attendance-v2/${suffix}`
+  );
+}
+
+export async function saveQuranTeacherSessionAttendance(
+  input: SaveQuranTeacherSessionInput
+): Promise<QuranTeacherSessionPayload> {
+  return request<QuranTeacherSessionPayload>(
+    "/api/academy/teacher-session-attendance-v2/",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...input,
+        coverage_assignments:
+          input.coverage_assignments || [],
+      }),
+    }
+  );
+}
+
+export async function deleteQuranTeacherSessionAttendance(params: {
+  teacher_id: number;
+  date: string;
+  class_key: string;
+}): Promise<QuranTeacherSessionPayload> {
+  const suffix = buildQuery(params);
+
+  return request<QuranTeacherSessionPayload>(
+    `/api/academy/teacher-session-attendance-v2/${suffix}`,
+    {
+      method: "DELETE",
+    }
+  );
 }
 
 // ============================================================
@@ -1130,6 +1570,7 @@ export type CoordinatorCoordinatorAccount = {
   is_active: boolean;
   is_staff: boolean;
   is_superuser: boolean;
+  tab_access?: Record<string, boolean>;
 };
 
 export type CoordinatorTeacherAccount = {
@@ -1185,6 +1626,22 @@ export type CoordinatorStudentAccount = {
     }[];
 
     assigned_subjects?: AssignedSubject[];
+    student_type?: string;
+    student_type_label?: string;
+    class_status?: string;
+    class_status_label?: string;
+    speaking_language?: string;
+    speaking_language_label?: string;
+    first_fee_paid?: boolean;
+    referral_teacher_id?: number | null;
+    referral_teacher_name?: string;
+    referral_student_id?: number | null;
+    referral_student_name?: string;
+    status_effective_date?: string;
+    salary_class_mode?: string;
+    salary_class_mode_label?: string;
+    half_month_salary_amount?: string | number;
+    is_night_class?: boolean;
   } | null;
 };
 
@@ -1214,6 +1671,15 @@ export type CreateAccountInput = {
   duration_minutes?: number;
   class_days?: string[];
   assigned_subjects?: AssignedSubject[];
+  student_type?: string;
+  class_status?: string;
+  speaking_language?: string;
+  first_fee_paid?: boolean;
+  referral_teacher_id?: number | null;
+  referral_student_id?: number | null;
+  previous_teacher_id?: number | null;
+  transfer_to_teacher_id?: number | null;
+  not_counted_class?: boolean;
 };
 
 export type UpdateAccountInput = Partial<CreateAccountInput> & {
@@ -1250,3 +1716,479 @@ export async function disableCoordinatorAccount(userId: number) {
     method: "DELETE",
   });
 }
+
+export type CoordinatorTabAccessOption = {
+  key: string;
+  label: string;
+  description: string;
+  is_allowed: boolean;
+  main_admin_enabled: boolean;
+};
+
+export type CoordinatorTabAccessResponse = {
+  user_id: number;
+  department: {
+    id: number;
+    name: string;
+    code: string;
+    department_type: string;
+  };
+  tabs: Record<string, boolean>;
+  options: CoordinatorTabAccessOption[];
+};
+
+export async function getCoordinatorTabAccess(userId: number) {
+  return request<CoordinatorTabAccessResponse>(
+    `/api/auth/coordinator-tab-access/${userId}/`
+  );
+}
+
+export async function updateCoordinatorTabAccess(
+  userId: number,
+  tabs: Record<string, boolean>
+) {
+  return request<CoordinatorTabAccessResponse>(
+    `/api/auth/coordinator-tab-access/${userId}/`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ tabs }),
+    }
+  );
+}
+// ============================================================
+// Signed-in account profile
+// ============================================================
+
+export type SelfProfile = {
+  id: number;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  role:
+    | "platform_admin"
+    | "institution_admin"
+    | "department_admin"
+    | "coordinator"
+    | "teacher"
+    | "student";
+  is_staff: boolean;
+  is_superuser: boolean;
+  institution_id?: number | null;
+  department_id?: number | null;
+  password_changed?: boolean;
+};
+
+export type UpdateMyProfileInput = Partial<{
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  current_password: string;
+  new_password: string;
+  // Legacy field kept for existing department settings screens.
+  password: string;
+}>;
+
+export async function getMyProfile(): Promise<SelfProfile> {
+  return request<SelfProfile>("/api/auth/profile/");
+}
+
+export async function updateMyProfile(
+  input: UpdateMyProfileInput
+): Promise<SelfProfile> {
+  return request<SelfProfile>("/api/auth/profile/", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+
+
+// ============================================================
+// Maintenance, notices, and platform analytics
+// ============================================================
+
+export type PlatformMaintenanceStatus = {
+  active: boolean;
+  id?: number;
+  scope_type?: "platform" | "institution" | "department";
+  title?: string;
+  message?: string;
+  target_label?: string;
+  starts_at?: string | null;
+  ends_at?: string | null;
+};
+
+export type PlatformMaintenanceWindow = PlatformMaintenanceStatus & {
+  id: number;
+  is_active: boolean;
+  status_label?: "Active" | "Paused" | "Scheduled" | "Expired";
+  created_at: string | null;
+  updated_at: string | null;
+  institution: PlatformInstitution | null;
+  department: {
+    id: number;
+    name: string;
+    code: string;
+    department_type: string;
+  } | null;
+};
+
+export type PlatformNotice = {
+  id: number;
+  title: string;
+  message: string;
+  severity: "info" | "success" | "warning" | "critical";
+  audience: "all" | "portal_admin" | "coordinator" | "teacher" | "student";
+  delivery_mode: "once" | "one_day" | "custom";
+  scope_type: "platform" | "institution" | "department";
+  target_label: string;
+  starts_at: string | null;
+  ends_at: string | null;
+  is_active?: boolean;
+  status_label?: "Active" | "Paused" | "Scheduled" | "Expired";
+  created_at?: string | null;
+  updated_at?: string | null;
+  dismissed_count?: number;
+  institution?: PlatformInstitution | null;
+  department?: { id: number; name: string; code: string; department_type: string } | null;
+};
+
+export async function getPlatformMaintenanceWindows(): Promise<{ maintenance_windows: PlatformMaintenanceWindow[] }> {
+  return request("/api/auth/platform/maintenance/");
+}
+
+export async function createPlatformMaintenanceWindow(input: {
+  scope_type: "platform" | "institution" | "department";
+  institution_id?: number;
+  department_id?: number;
+  title: string;
+  message: string;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  is_active?: boolean;
+  current_password: string;
+}): Promise<PlatformMaintenanceWindow> {
+  return request("/api/auth/platform/maintenance/", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updatePlatformMaintenanceWindow(
+  id: number,
+  input: { is_active?: boolean; title?: string; message?: string; ends_at?: string | null; current_password: string }
+): Promise<PlatformMaintenanceWindow> {
+  return request(`/api/auth/platform/maintenance/${id}/`, { method: "PATCH", body: JSON.stringify(input) });
+}
+
+export async function deletePlatformMaintenanceWindow(id: number, currentPassword: string): Promise<{ detail: string }> {
+  return request(`/api/auth/platform/maintenance/${id}/`, {
+    method: "DELETE",
+    body: JSON.stringify({ current_password: currentPassword }),
+  });
+}
+
+export async function getPlatformNotices(): Promise<{ notices: PlatformNotice[] }> {
+  return request("/api/auth/platform/notices/");
+}
+
+export async function createPlatformNotice(input: {
+  title: string;
+  message: string;
+  severity: PlatformNotice["severity"];
+  audience: PlatformNotice["audience"];
+  delivery_mode: PlatformNotice["delivery_mode"];
+  scope_type: PlatformNotice["scope_type"];
+  institution_id?: number;
+  department_id?: number;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  current_password: string;
+}): Promise<PlatformNotice> {
+  return request("/api/auth/platform/notices/", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updatePlatformNotice(
+  id: number,
+  input: { is_active?: boolean; title?: string; message?: string; current_password: string }
+): Promise<PlatformNotice> {
+  return request(`/api/auth/platform/notices/${id}/`, { method: "PATCH", body: JSON.stringify(input) });
+}
+
+export async function deletePlatformNotice(id: number, currentPassword: string): Promise<{ detail: string }> {
+  return request(`/api/auth/platform/notices/${id}/`, {
+    method: "DELETE",
+    body: JSON.stringify({ current_password: currentPassword }),
+  });
+}
+
+export async function getMyActiveNotices(): Promise<{ notices: PlatformNotice[] }> {
+  return request("/api/auth/notices/active/");
+}
+
+export async function dismissMyNotice(id: number): Promise<{ detail: string; dismissed_permanently: boolean }> {
+  return request(`/api/auth/notices/${id}/dismiss/`, { method: "POST" });
+}
+
+export type PlatformAnalytics = {
+  generated_at: string;
+  summary: {
+    institutions: number; active_institutions: number; departments: number; active_departments: number;
+    users: number; active_users: number; teachers: number; students: number; quran_schedules: number;
+    tuition_schedules: number; quran_lessons: number; tuition_enrollments: number; attendance_records: number;
+    attendance_rate: number; feature_enablement_rate: number; backups: number; active_notices: number; active_maintenance: number;
+  };
+  users_by_role: Array<{ key: string; label: string; value: number }>;
+  department_types: Array<{ key: string; label: string; value: number }>;
+  attendance_status: Array<{ status: string; quran: number; tuition: number; total: number }>;
+  activity_timeline: Array<{ date: string; label: string; quran_attendance: number; tuition_attendance: number; lessons: number; admin_activity: number }>;
+  top_departments: Array<{ id: number; name: string; institution: string; department_type: string; users: number }>;
+  feature_health: Array<{ key: string; label: string; enabled: number; total: number; rate: number }>;
+};
+
+export async function getPlatformAnalytics(): Promise<PlatformAnalytics> {
+  return request("/api/auth/platform/analytics/");
+}
+
+// ============================================================
+// Quran Dropped / Leave and Teacher Salary Management
+// ============================================================
+
+export type QuranDroppedLeaveItem = {
+  student_id: number;
+  student_name: string;
+  username: string;
+  teacher_id: number;
+  teacher_name: string;
+  flag_type: "leave" | "dropped";
+  attendance_status: "leave" | "absent";
+  days_count: number;
+  streak_start: string;
+  last_marked_date: string;
+  student_type: string;
+  student_type_label: string;
+  class_status: string;
+  class_status_label: string;
+  class_days: string[];
+  time_slots: string[];
+  class_days_count: number;
+};
+
+export type QuranDroppedLeaveResponse = {
+  results: QuranDroppedLeaveItem[];
+  summary: { total: number; on_leave: number; dropped: number };
+  generated_at: string;
+};
+
+export async function getQuranDroppedLeave(): Promise<QuranDroppedLeaveResponse> {
+  return request<QuranDroppedLeaveResponse>("/api/academy/dropped-leave/");
+}
+
+export type SalaryMoney = number | string;
+export type SalaryTier = { min: number; max: number | null; rate: SalaryMoney };
+export type AchievementPayout = { min_points: number; max_points: number; amount: SalaryMoney };
+export type QuranSalaryConfiguration = {
+  id: number;
+  department_id: number;
+  standard_tiers: SalaryTier[];
+  three_day_tiers: SalaryTier[];
+  bonus_rates: { english: SalaryMoney; lesson_filled: SalaryMoney; night: SalaryMoney; reference: SalaryMoney };
+  achievement_payouts: AchievementPayout[];
+  night_start: string;
+  night_end: string;
+  updated_at?: string | null;
+};
+
+export type SalaryDeductions = {
+  food?: SalaryMoney;
+  drop_leave?: SalaryMoney;
+  fine?: SalaryMoney;
+  imam_hadya?: SalaryMoney;
+  advance?: SalaryMoney;
+  manual?: Array<{ reason: string; amount: SalaryMoney }>;
+};
+
+export type QuranTeacherSalarySlip = {
+  id: number;
+  teacher_id: number;
+  teacher_name: string;
+  teacher_username: string;
+  month: number;
+  year: number;
+  behavior_good: boolean;
+  half_class_overrides: Array<{ student_id: number; amount: SalaryMoney; note?: string }>;
+  other_bonuses: Array<{ reason: string; amount: SalaryMoney }>;
+  deductions: SalaryDeductions;
+  override_values: Record<string, SalaryMoney>;
+  calculated_snapshot: Record<string, any>;
+  calculated_total: SalaryMoney;
+  gross_total: SalaryMoney;
+  deduction_total: SalaryMoney;
+  final_total: SalaryMoney;
+  net_total: SalaryMoney;
+  status: "draft" | "processed";
+  admin_note: string;
+  processed_at?: string | null;
+  updated_at?: string | null;
+  pdf_generated_at?: string | null;
+  pdf_download_count?: number;
+  pdf_last_downloaded_at?: string | null;
+};
+
+export type QuranSalaryPagination = {
+  page: number;
+  page_size: number;
+  total_items: number;
+  total_pages: number;
+  has_next: boolean;
+  has_previous: boolean;
+};
+
+export type QuranSalaryDashboardResponse = {
+  month: number;
+  year: number;
+  access_mode: "administrator" | "teacher";
+  department: { id: number; name: string };
+  configuration: QuranSalaryConfiguration | null;
+  teachers: QuranTeacherSalarySlip[];
+  pagination: QuranSalaryPagination;
+  summary: {
+    teachers: number;
+    page_teachers: number;
+    draft: number;
+    processed: number;
+    total_payout: SalaryMoney;
+    page_payout: SalaryMoney;
+  };
+};
+
+export type QuranSalaryAuditAttendanceDay = {
+  date: string;
+  status: "present" | "absent" | "leave" | "not_marked";
+  scheduled: boolean;
+  assigned?: boolean;
+  lesson_logged: boolean;
+};
+
+export type QuranSalaryAuditRow = {
+  student_id: number;
+  student_name: string;
+  username: string;
+  enrollment_date: string;
+  student_type: string;
+  student_type_label: string;
+  class_status: string;
+  class_status_label: string;
+  assignment_start: string;
+  assignment_end: string;
+  class_days: string[];
+  time_slots: string[];
+  active_sessions: number;
+  full_month_sessions: number;
+  attendance_summary: { present: number; absent: number; leave: number; marked: number };
+  lesson_summary?: {
+    report_count: number;
+    expected_sessions: number;
+    logged_expected_sessions: number;
+    missing_sessions: number;
+    unexpected_sessions?: number;
+    attendance_marked_sessions?: number;
+    present_sessions?: number;
+    started: boolean;
+    completed: boolean;
+    month_closed: boolean;
+    bonus_eligible: boolean;
+  };
+  attendance: QuranSalaryAuditAttendanceDay[];
+};
+
+export type QuranSalaryAuditResponse = {
+  metric: string;
+  label: string;
+  count: number;
+  month: number;
+  year: number;
+  teacher: { id: number; name: string; username: string };
+  rows: QuranSalaryAuditRow[];
+  calculation_audit?: Array<Record<string, any>>;
+  achievement_point_proofs?: Array<Record<string, any>>;
+  achievement_points?: number;
+  automatic_achievement_points?: number;
+  calculation_inputs?: Record<string, any>;
+};
+
+export async function getQuranSalaryDashboard(
+  month: number,
+  year: number,
+  page = 1,
+  pageSize = 12
+): Promise<QuranSalaryDashboardResponse> {
+  const query = new URLSearchParams({
+    month: String(month),
+    year: String(year),
+    page: String(page),
+    page_size: String(pageSize),
+    _ts: String(Date.now()),
+  });
+  return request<QuranSalaryDashboardResponse>(`/api/academy/teacher-salary/?${query.toString()}`, {
+    cache: "no-store",
+  });
+}
+
+export async function getQuranSalaryAudit(input: {
+  teacher_id: number;
+  metric: string;
+  month: number;
+  year: number;
+}): Promise<QuranSalaryAuditResponse> {
+  const query = new URLSearchParams({
+    teacher_id: String(input.teacher_id),
+    metric: input.metric,
+    month: String(input.month),
+    year: String(input.year),
+    _ts: String(Date.now()),
+  });
+  return request<QuranSalaryAuditResponse>(`/api/academy/teacher-salary/audit/?${query.toString()}`, {
+    cache: "no-store",
+  });
+}
+
+export async function updateQuranSalarySlip(
+  slipId: number,
+  input: Partial<{
+    behavior_good: boolean;
+    half_class_overrides: Array<{ student_id: number; amount: SalaryMoney; note?: string }>;
+    other_bonuses: Array<{ reason: string; amount: SalaryMoney }>;
+    deductions: SalaryDeductions;
+    override_values: Record<string, SalaryMoney>;
+    admin_note: string;
+    status: "draft" | "processed";
+  }>
+): Promise<QuranTeacherSalarySlip> {
+  return request<QuranTeacherSalarySlip>("/api/academy/teacher-salary/", {
+    method: "PATCH",
+    body: JSON.stringify({ slip_id: slipId, ...input }),
+  });
+}
+
+
+export async function markQuranSalaryPdfDownload(slipId: number): Promise<QuranTeacherSalarySlip> {
+  return request<QuranTeacherSalarySlip>("/api/academy/teacher-salary/pdf-download/", {
+    method: "POST",
+    body: JSON.stringify({ slip_id: slipId }),
+  });
+}
+
+export async function getQuranSalarySettings(): Promise<QuranSalaryConfiguration> {
+  return request<QuranSalaryConfiguration>("/api/academy/teacher-salary/settings/", { cache: "no-store" });
+}
+
+export async function updateQuranSalarySettings(
+  input: Partial<QuranSalaryConfiguration>
+): Promise<QuranSalaryConfiguration> {
+  return request<QuranSalaryConfiguration>("/api/academy/teacher-salary/settings/", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+

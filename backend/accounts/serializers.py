@@ -1,7 +1,15 @@
+import calendar
+from django.utils import timezone
 from rest_framework import serializers
 
-from .models import User
-from academy.models import TeacherProfile, StudentProfile, StudentSubject, ClassSchedule
+from .models import User, UserDepartmentRole
+from academy.models import (
+    TeacherProfile,
+    StudentProfile,
+    StudentSubject,
+    ClassSchedule,
+    StudentClassHistory,
+)
 
 
 SUBJECT_CHOICES = [
@@ -202,6 +210,58 @@ def sync_student_schedules(student, teacher, time_slot, class_days, duration_min
             is_active=True,
         )
 
+def _is_night_time(value):
+    raw = str(value or "")[:5]
+    if not raw or ":" not in raw:
+        return False
+    try:
+        hours, minutes = [int(part) for part in raw.split(":", 1)]
+    except (TypeError, ValueError):
+        return False
+    total = hours * 60 + minutes
+    return total >= (22 * 60) or total <= (8 * 60 + 30)
+
+
+def _student_history(
+    *,
+    student,
+    event_type,
+    actor=None,
+    previous_teacher=None,
+    new_teacher=None,
+    previous_student_type="",
+    new_student_type="",
+    previous_class_status="",
+    new_class_status="",
+    notes="",
+    effective_date=None,
+):
+    StudentClassHistory.objects.create(
+        institution=student.institution or getattr(student.user, "institution", None),
+        department=student.department or getattr(student.user, "department", None),
+        student=student,
+        event_type=event_type,
+        effective_date=effective_date or timezone.localdate(),
+        previous_teacher=previous_teacher,
+        new_teacher=new_teacher,
+        previous_student_type=previous_student_type or "",
+        new_student_type=new_student_type or "",
+        previous_class_status=previous_class_status or "",
+        new_class_status=new_class_status or "",
+        notes=str(notes or "").strip(),
+        created_by=actor,
+    )
+
+
+def _sync_schedule_activity_for_status(student):
+    dropped_statuses = {
+        StudentProfile.ClassStatus.OLD_DROPPED,
+        StudentProfile.ClassStatus.TRIAL_DROPPED,
+        StudentProfile.ClassStatus.OLD_DROPPED_OTHER,
+    }
+    student.schedules.update(is_active=student.class_status not in dropped_statuses)
+
+
 def student_account_payload(student):
     user = student.user
 
@@ -242,6 +302,22 @@ def student_account_payload(student):
             "class_days": schedule_data["class_days"],
             "time_slot": schedule_data["time_slot"],
             "duration_minutes": schedule_data["duration_minutes"],
+            "student_type": student.student_type,
+            "student_type_label": student.get_student_type_display(),
+            "class_status": student.class_status,
+            "class_status_label": student.get_class_status_display(),
+            "speaking_language": student.speaking_language,
+            "speaking_language_label": student.get_speaking_language_display(),
+            "first_fee_paid": student.first_fee_paid,
+            "referral_teacher_id": student.referral_teacher_id,
+            "referral_teacher_name": str(student.referral_teacher) if student.referral_teacher else "",
+            "referral_student_id": student.referral_student_id,
+            "referral_student_name": str(student.referral_student) if student.referral_student else "",
+            "status_effective_date": str(student.status_effective_date) if student.status_effective_date else "",
+            "salary_class_mode": student.salary_class_mode,
+            "salary_class_mode_label": student.get_salary_class_mode_display(),
+            "half_month_salary_amount": str(student.half_month_salary_amount or 0),
+            "is_night_class": any(_is_night_time(item.get("time_slot")) for item in schedule_data["schedules"]),
         },
     }
 
@@ -354,6 +430,27 @@ class CreateAccountSerializer(serializers.Serializer):
         required=False,
         allow_empty=True,
     )
+    student_type = serializers.ChoiceField(
+        choices=StudentProfile.StudentType.choices,
+        required=False,
+        default=StudentProfile.StudentType.TRIAL_STUDENT,
+    )
+    class_status = serializers.ChoiceField(
+        choices=StudentProfile.ClassStatus.choices,
+        required=False,
+        default=StudentProfile.ClassStatus.RUNNING,
+    )
+    speaking_language = serializers.ChoiceField(
+        choices=StudentProfile.SpeakingLanguage.choices,
+        required=False,
+        default=StudentProfile.SpeakingLanguage.URDU,
+    )
+    first_fee_paid = serializers.BooleanField(required=False, default=False)
+    # referral_teacher_id remains accepted for backward compatibility only.
+    referral_teacher_id = serializers.IntegerField(required=False, allow_null=True)
+    referral_student_id = serializers.IntegerField(required=False, allow_null=True)
+    previous_teacher_id = serializers.IntegerField(required=False, allow_null=True)
+    not_counted_class = serializers.BooleanField(required=False, allow_null=True)
 
     def validate_username(self, value):
         value = value.strip()
@@ -387,10 +484,67 @@ class CreateAccountSerializer(serializers.Serializer):
                     "teacher_id": "Selected teacher does not exist."
                 })
 
+            request_user = self.context.get("request_user")
+            department = getattr(request_user, "department", None) if request_user else None
+
+            referral_student_id = attrs.get("referral_student_id")
+            if referral_student_id:
+                referral_students = StudentProfile.objects.select_related("teacher", "user").filter(
+                    id=referral_student_id,
+                    user__is_active=True,
+                )
+                if department:
+                    referral_students = referral_students.filter(department=department)
+                if not referral_students.exists():
+                    raise serializers.ValidationError({
+                        "referral_student_id": "Selected referring student does not exist in this department."
+                    })
+
+            previous_teacher_id = attrs.get("previous_teacher_id")
+            if attrs.get("student_type") == StudentProfile.StudentType.TRANSFERRED_FROM_TEACHER:
+                if not previous_teacher_id:
+                    raise serializers.ValidationError({
+                        "previous_teacher_id": "Select the teacher this student was transferred from."
+                    })
+                previous_teachers = TeacherProfile.objects.filter(id=previous_teacher_id)
+                if department:
+                    previous_teachers = previous_teachers.filter(department=department)
+                if not previous_teachers.exists():
+                    raise serializers.ValidationError({
+                        "previous_teacher_id": "Selected previous teacher does not exist in this department."
+                    })
+                if int(previous_teacher_id) == int(teacher_id):
+                    raise serializers.ValidationError({
+                        "previous_teacher_id": "Previous teacher and assigned teacher must be different."
+                    })
+
+            # New students always begin as Running unless the dedicated
+            # Not Counted Class rule applies. Class Status is intentionally not
+            # exposed in the Add Student card.
+            attrs["class_status"] = StudentProfile.ClassStatus.RUNNING
+
+            if (
+                attrs.get("first_fee_paid")
+                and attrs.get("student_type", StudentProfile.StudentType.TRIAL_STUDENT)
+                == StudentProfile.StudentType.TRIAL_STUDENT
+            ):
+                attrs["student_type"] = StudentProfile.StudentType.OLD_STUDENT
+
+            today = timezone.localdate()
+            last_day = calendar.monthrange(today.year, today.month)[1]
+            auto_not_counted = (last_day - today.day) <= 4
+            requested_not_counted = attrs.get("not_counted_class")
+            if requested_not_counted is True or (requested_not_counted is None and auto_not_counted):
+                attrs["class_status"] = StudentProfile.ClassStatus.NOT_COUNTED
+
         return attrs
 
     def create(self, validated_data):
         role = validated_data["role"]
+
+        creator = self.context.get("request_user")
+        institution = getattr(creator, "institution", None) if creator else None
+        department = getattr(creator, "department", None) if creator else None
 
         user = User.objects.create(
             username=validated_data["username"].strip(),
@@ -398,10 +552,21 @@ class CreateAccountSerializer(serializers.Serializer):
             first_name=validated_data.get("first_name", "").strip(),
             last_name=validated_data.get("last_name", "").strip(),
             role=role,
+            institution=institution,
+            department=department,
             is_active=True,
         )
         user.set_password(validated_data["password"])
         user.save()
+
+        if institution and department:
+            UserDepartmentRole.objects.get_or_create(
+                user=user,
+                institution=institution,
+                department=department,
+                role=role,
+                defaults={"is_active": True},
+            )
 
         if role == "coordinator":
             return account_payload_for_user(user)
@@ -409,6 +574,8 @@ class CreateAccountSerializer(serializers.Serializer):
         if role == "teacher":
             teacher = TeacherProfile.objects.create(
                 user=user,
+                institution=institution,
+                department=department,
                 father_name=validated_data.get("father_name", "").strip(),
                 phone=validated_data.get("phone", "").strip(),
                 address=validated_data.get("address", "").strip(),
@@ -420,12 +587,68 @@ class CreateAccountSerializer(serializers.Serializer):
 
         teacher = TeacherProfile.objects.get(id=validated_data["teacher_id"])
 
+        referral_student = None
+        referral_teacher = None
+        referral_student_id = validated_data.get("referral_student_id")
+        if referral_student_id:
+            referral_student = StudentProfile.objects.select_related("teacher").get(id=referral_student_id)
+            # Salary credit is frozen to the referring student's teacher at the
+            # time of enrollment, while the visible referral source remains the
+            # student selected by the administrator.
+            referral_teacher = referral_student.teacher
+        elif validated_data.get("referral_teacher_id"):
+            # Backward-compatible API support. New frontend requests use
+            # referral_student_id instead.
+            referral_teacher = TeacherProfile.objects.get(id=validated_data["referral_teacher_id"])
+
+        previous_teacher = None
+        previous_teacher_id = validated_data.get("previous_teacher_id")
+        if previous_teacher_id:
+            previous_teacher = TeacherProfile.objects.get(id=previous_teacher_id)
+
         student = StudentProfile.objects.create(
             user=user,
+            institution=institution,
+            department=department,
             teacher=teacher,
             phone=validated_data.get("phone", "").strip(),
             notes=validated_data.get("notes", "").strip(),
+            student_type=validated_data.get("student_type", StudentProfile.StudentType.TRIAL_STUDENT),
+            class_status=validated_data.get("class_status", StudentProfile.ClassStatus.RUNNING),
+            speaking_language=validated_data.get("speaking_language", StudentProfile.SpeakingLanguage.URDU),
+            first_fee_paid=bool(validated_data.get("first_fee_paid", False)),
+            referral_teacher=referral_teacher,
+            referral_student=referral_student,
+            status_effective_date=timezone.localdate(),
+            salary_class_mode=StudentProfile.SalaryClassMode.STANDARD,
+            half_month_salary_amount=0,
         )
+
+        _student_history(
+            student=student,
+            event_type=StudentClassHistory.EventType.ENROLLED,
+            actor=creator,
+            new_teacher=teacher,
+            new_student_type=student.student_type,
+            new_class_status=student.class_status,
+            notes="Student account created.",
+            effective_date=timezone.localdate(),
+        )
+
+        if previous_teacher and previous_teacher.id != teacher.id:
+            _student_history(
+                student=student,
+                event_type=StudentClassHistory.EventType.TEACHER_TRANSFER,
+                actor=creator,
+                previous_teacher=previous_teacher,
+                new_teacher=teacher,
+                previous_student_type=StudentProfile.StudentType.OLD_STUDENT,
+                new_student_type=StudentProfile.StudentType.TRANSFERRED_FROM_TEACHER,
+                previous_class_status=StudentProfile.ClassStatus.RUNNING,
+                new_class_status=student.class_status,
+                notes=f"Student transferred from {previous_teacher} during enrollment.",
+                effective_date=timezone.localdate(),
+            )
 
         sync_student_subjects(student, validated_data.get("assigned_subjects", []))
 
@@ -436,6 +659,7 @@ class CreateAccountSerializer(serializers.Serializer):
             class_days=validated_data.get("class_days", []),
             duration_minutes=validated_data.get("duration_minutes", 30),
         )
+        _sync_schedule_activity_for_status(student)
 
         return account_payload_for_user(student.user)
 
@@ -456,6 +680,7 @@ class UpdateAccountSerializer(serializers.Serializer):
     zoom_link = serializers.URLField(required=False, allow_blank=True)
 
     teacher_id = serializers.IntegerField(required=False, allow_null=True)
+    transfer_to_teacher_id = serializers.IntegerField(required=False, allow_null=True)
 
     time_slot = serializers.TimeField(required=False, allow_null=True)
     duration_minutes = serializers.IntegerField(required=False, min_value=30, max_value=60)
@@ -470,6 +695,33 @@ class UpdateAccountSerializer(serializers.Serializer):
         required=False,
         allow_empty=True,
     )
+    student_type = serializers.ChoiceField(choices=StudentProfile.StudentType.choices, required=False)
+    class_status = serializers.ChoiceField(choices=StudentProfile.ClassStatus.choices, required=False)
+    speaking_language = serializers.ChoiceField(choices=StudentProfile.SpeakingLanguage.choices, required=False)
+    first_fee_paid = serializers.BooleanField(required=False)
+
+    def validate(self, attrs):
+        transfer_to_teacher_id = attrs.get("transfer_to_teacher_id")
+        if transfer_to_teacher_id:
+            user = self.context["user"]
+            student = getattr(user, "student_profile", None)
+            queryset = TeacherProfile.objects.filter(id=transfer_to_teacher_id)
+            if student and student.department_id:
+                queryset = queryset.filter(department_id=student.department_id)
+            target = queryset.first()
+            if not target:
+                raise serializers.ValidationError({
+                    "transfer_to_teacher_id": "Selected target teacher does not exist in this department."
+                })
+            if student and target.id == student.teacher_id:
+                raise serializers.ValidationError({
+                    "transfer_to_teacher_id": "Select a different teacher for the transfer."
+                })
+        if attrs.get("student_type") == StudentProfile.StudentType.TRANSFERRED_TO_TEACHER and not transfer_to_teacher_id:
+            raise serializers.ValidationError({
+                "transfer_to_teacher_id": "Select the teacher who will receive this student."
+            })
+        return attrs
 
     def validate_username(self, value):
         value = value.strip()
@@ -532,11 +784,27 @@ class UpdateAccountSerializer(serializers.Serializer):
 
         if user.role == User.Role.STUDENT:
             student = user.student_profile
+            actor = self.context.get("request_user")
+            previous_teacher = student.teacher
+            previous_student_type = student.student_type
+            previous_class_status = student.class_status
+            previous_fee_paid = student.first_fee_paid
             teacher = student.teacher
+            transfer_to_teacher_id = validated_data.pop("transfer_to_teacher_id", None)
 
-            if "teacher_id" in validated_data and validated_data["teacher_id"]:
+            if transfer_to_teacher_id:
+                teacher = TeacherProfile.objects.get(id=transfer_to_teacher_id)
+                student.teacher = teacher
+                # The destination teacher sees this class as Transferred In.
+                # The source teacher receives a distinct Transferred Out outcome
+                # through the teacher-transfer history event.
+                validated_data.pop("student_type", None)
+                student.student_type = StudentProfile.StudentType.TRANSFERRED_FROM_TEACHER
+            elif "teacher_id" in validated_data and validated_data["teacher_id"]:
                 teacher = TeacherProfile.objects.get(id=validated_data["teacher_id"])
                 student.teacher = teacher
+                if teacher.id != previous_teacher.id and "student_type" not in validated_data:
+                    student.student_type = StudentProfile.StudentType.TRANSFERRED_FROM_TEACHER
 
             if "phone" in validated_data:
                 student.phone = validated_data["phone"].strip()
@@ -544,7 +812,105 @@ class UpdateAccountSerializer(serializers.Serializer):
             if "notes" in validated_data:
                 student.notes = validated_data["notes"].strip()
 
+            for field in [
+                "student_type",
+                "class_status",
+                "speaking_language",
+                "first_fee_paid",
+            ]:
+                if field in validated_data:
+                    value = validated_data[field]
+                    if field == "student_type" and value == StudentProfile.StudentType.TRANSFERRED_TO_TEACHER:
+                        continue
+                    setattr(student, field, value)
+
+            if (
+                validated_data.get("first_fee_paid")
+                and student.student_type == StudentProfile.StudentType.TRIAL_STUDENT
+            ):
+                student.student_type = StudentProfile.StudentType.OLD_STUDENT
+
+            if (
+                previous_class_status == StudentProfile.ClassStatus.ON_LEAVE
+                and student.class_status == StudentProfile.ClassStatus.RUNNING
+                and "student_type" not in validated_data
+            ):
+                student.student_type = StudentProfile.StudentType.RETURNED_FROM_LEAVE
+
+            if (
+                teacher.id != previous_teacher.id
+                or student.class_status != previous_class_status
+                or student.student_type != previous_student_type
+            ):
+                student.status_effective_date = timezone.localdate()
+
+            student.institution = student.institution or getattr(user, "institution", None)
+            student.department = student.department or getattr(user, "department", None)
             student.save()
+
+            if teacher.id != previous_teacher.id:
+                _student_history(
+                    student=student,
+                    event_type=StudentClassHistory.EventType.TEACHER_TRANSFER,
+                    actor=actor,
+                    previous_teacher=previous_teacher,
+                    new_teacher=teacher,
+                    previous_student_type=previous_student_type,
+                    new_student_type=student.student_type,
+                    previous_class_status=previous_class_status,
+                    new_class_status=student.class_status,
+                    notes="Class transferred to another teacher.",
+                    effective_date=timezone.localdate(),
+                )
+
+            if student.class_status != previous_class_status:
+                event_type = (
+                    StudentClassHistory.EventType.RETURNED_FROM_LEAVE
+                    if previous_class_status == StudentProfile.ClassStatus.ON_LEAVE
+                    and student.class_status == StudentProfile.ClassStatus.RUNNING
+                    else StudentClassHistory.EventType.STATUS_CHANGED
+                )
+                _student_history(
+                    student=student,
+                    event_type=event_type,
+                    actor=actor,
+                    previous_teacher=previous_teacher,
+                    new_teacher=teacher,
+                    previous_student_type=previous_student_type,
+                    new_student_type=student.student_type,
+                    previous_class_status=previous_class_status,
+                    new_class_status=student.class_status,
+                    effective_date=timezone.localdate(),
+                )
+
+            if student.student_type != previous_student_type:
+                _student_history(
+                    student=student,
+                    event_type=StudentClassHistory.EventType.STUDENT_TYPE_CHANGED,
+                    actor=actor,
+                    previous_teacher=previous_teacher,
+                    new_teacher=teacher,
+                    previous_student_type=previous_student_type,
+                    new_student_type=student.student_type,
+                    previous_class_status=previous_class_status,
+                    new_class_status=student.class_status,
+                    effective_date=timezone.localdate(),
+                )
+
+            if student.first_fee_paid and not previous_fee_paid:
+                _student_history(
+                    student=student,
+                    event_type=StudentClassHistory.EventType.FIRST_FEE_RECEIVED,
+                    actor=actor,
+                    new_teacher=teacher,
+                    previous_student_type=previous_student_type,
+                    new_student_type=student.student_type,
+                    previous_class_status=previous_class_status,
+                    new_class_status=student.class_status,
+                    effective_date=timezone.localdate(),
+                )
+
+            _sync_schedule_activity_for_status(student)
 
             if "assigned_subjects" in validated_data:
                 sync_student_subjects(student, validated_data.get("assigned_subjects", []))

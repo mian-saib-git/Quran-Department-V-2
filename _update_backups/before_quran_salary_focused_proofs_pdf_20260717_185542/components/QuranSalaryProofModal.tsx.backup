@@ -1,0 +1,262 @@
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Calculator,
+  CalendarDays,
+  CheckCircle2,
+  CircleDollarSign,
+  Loader2,
+  SearchCheck,
+  Sparkles,
+  X,
+  XCircle,
+} from "lucide-react";
+
+import {
+  getQuranSalaryAudit,
+  type QuranSalaryAuditResponse,
+} from "../services/djangoApiService";
+
+const STATUS_STYLE: Record<string, string> = {
+  present: "bg-emerald-100 text-emerald-700",
+  absent: "bg-rose-100 text-rose-700",
+  leave: "bg-amber-100 text-amber-700",
+  not_marked: "bg-slate-100 text-slate-400",
+};
+
+function formatDate(value: string) {
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime())
+    ? value
+    : parsed.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
+}
+
+function formatTime12(value: string) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return value;
+  const hour = Number(match[1]);
+  const minute = match[2];
+  if (!Number.isFinite(hour)) return value;
+  const suffix = hour >= 12 ? "PM" : "AM";
+  const displayHour = hour % 12 || 12;
+  return `${String(displayHour).padStart(2, "0")}:${minute} ${suffix}`;
+}
+
+function formatAuditValue(step: any, value: unknown) {
+  if (step?.value_kind === "count") return String(value ?? 0);
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? `Rs ${number.toLocaleString("en-PK", { maximumFractionDigits: 2 })}` : String(value ?? "—");
+}
+
+function prettyInput(value: unknown) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+export default function QuranSalaryProofModal({
+  teacherId,
+  metric,
+  month,
+  year,
+  onClose,
+}: {
+  teacherId: number;
+  metric: string;
+  month: number;
+  year: number;
+  onClose: () => void;
+}) {
+  const [data, setData] = useState<QuranSalaryAuditResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    getQuranSalaryAudit({ teacher_id: teacherId, metric, month, year })
+      .then((response) => {
+        if (!cancelled) setData(response);
+      })
+      .catch((reason: any) => {
+        if (!cancelled) setError(reason?.message || "Could not load calculation proof.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [teacherId, metric, month, year]);
+
+  const awardedPoints = useMemo(
+    () => (data?.achievement_point_proofs || []).filter((row: any) => row.awarded),
+    [data]
+  );
+
+  return (
+    <div className="fixed inset-0 z-[140] flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+      <div className="flex max-h-[94vh] w-full flex-col overflow-hidden rounded-t-[30px] border border-white/70 bg-slate-50 shadow-2xl sm:max-w-6xl sm:rounded-[32px]">
+        <header className="shrink-0 flex items-start justify-between gap-4 border-b border-slate-200 bg-white p-5 sm:p-6">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.15em] text-indigo-600">
+              <SearchCheck size={16} /> Verified calculation audit
+            </div>
+            <h3 className="mt-1 break-words text-xl font-black text-slate-950 sm:text-2xl">
+              {data?.label || "Loading proof..."}
+            </h3>
+            <p className="mt-1 text-sm font-semibold text-slate-500">
+              {data
+                ? `${data.teacher.name} · ${new Date(data.year, data.month - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" })} · ${data.count} result${data.count === 1 ? "" : "s"}`
+                : "Student sources, formulas, attendance and lesson logs."}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 hover:bg-slate-50">
+            <X size={20} />
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 [scrollbar-gutter:stable]">
+          {loading && (
+            <div className="flex min-h-[260px] items-center justify-center rounded-[26px] border border-slate-200 bg-white text-sm font-bold text-slate-500">
+              <Loader2 className="mr-2 animate-spin" size={18} /> Loading verified source records...
+            </div>
+          )}
+          {error && <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">{error}</div>}
+
+          {!loading && !error && data && (
+            <div className="space-y-5">
+              {(data.achievement_point_proofs || []).length > 0 && (
+                <section className={`rounded-[26px] border p-4 sm:p-5 ${metric === "achievement_points" ? "border-violet-300 bg-violet-50 ring-4 ring-violet-100" : "border-slate-200 bg-white"}`}>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 font-black text-slate-950"><Sparkles size={18} className="text-violet-600" /> Achievement Points Proof</div>
+                      <p className="mt-1 text-xs font-semibold text-slate-500">Every awarded and missed point is shown below.</p>
+                    </div>
+                    <div className="rounded-2xl bg-violet-600 px-4 py-2 text-center text-white">
+                      <div className="text-[10px] font-black uppercase tracking-wider">Effective points</div>
+                      <div className="text-2xl font-black">{data.achievement_points || 0}/10</div>
+                    </div>
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-2 lg:grid-cols-2">
+                    {(data.achievement_point_proofs || []).map((row: any) => (
+                      <article key={row.key} className={`rounded-2xl border p-3 ${row.awarded ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-slate-50"}`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-start gap-2">
+                            {row.awarded ? <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-emerald-600" /> : <XCircle size={18} className="mt-0.5 shrink-0 text-slate-400" />}
+                            <div className="min-w-0">
+                              <div className="font-black text-slate-900">{row.label}</div>
+                              <div className="mt-1 text-xs font-bold text-slate-500">Actual: {prettyInput(row.actual)} · Rule: {row.rule}</div>
+                            </div>
+                          </div>
+                          <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black ${row.awarded ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-500"}`}>{row.awarded ? "+" : ""}{row.points} pt{row.points === 1 ? "" : "s"}</span>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                  <div className="mt-3 text-xs font-bold text-slate-500">Awarded criteria: {awardedPoints.length} of {(data.achievement_point_proofs || []).length}</div>
+                </section>
+              )}
+
+              <section className="rounded-[26px] border border-slate-200 bg-white p-4 sm:p-5">
+                <div className="flex items-center gap-2 font-black text-slate-950"><Calculator size={18} className="text-indigo-600" /> Full Calculation Audit</div>
+                <p className="mt-1 text-xs font-semibold text-slate-500">The step connected to the proof you clicked is highlighted. Automatic and effective values are both visible.</p>
+                <div className="mt-4 space-y-2">
+                  {(data.calculation_audit || []).map((step: any, index: number) => (
+                    <article key={step.id || index} className={`rounded-2xl border p-3 transition ${step.highlighted ? "border-indigo-400 bg-indigo-50 ring-4 ring-indigo-100" : "border-slate-200 bg-slate-50"}`}>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-slate-500">{step.group}</span>
+                            {step.highlighted && <span className="rounded-full bg-indigo-600 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-white">Selected proof</span>}
+                            {step.overridden && <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-amber-700">Adjusted</span>}
+                          </div>
+                          <h4 className="mt-2 font-black text-slate-950">{step.label}</h4>
+                          <p className="mt-1 text-xs font-semibold text-slate-500">{step.formula}</p>
+                          {step.note && <p className="mt-1 text-xs font-bold text-indigo-600">{step.note}</p>}
+                        </div>
+                        <div className="grid shrink-0 grid-cols-2 gap-2 text-right">
+                          <div className="rounded-xl bg-white px-3 py-2"><div className="text-[9px] font-black uppercase text-slate-400">Automatic</div><div className="font-black text-slate-900">{formatAuditValue(step, step.automatic_value)}</div></div>
+                          <div className="rounded-xl bg-slate-950 px-3 py-2 text-white"><div className="text-[9px] font-black uppercase text-slate-400">Effective</div><div className="font-black">{formatAuditValue(step, step.effective_value)}</div></div>
+                        </div>
+                      </div>
+                      {(Object.keys(step.automatic_inputs || {}).length > 0 || Object.keys(step.effective_inputs || {}).length > 0) && (
+                        <div className="mt-3 grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
+                          <div className="rounded-xl bg-white p-2.5"><b className="text-slate-700">Automatic inputs:</b> <span className="break-words text-slate-500">{Object.entries(step.automatic_inputs || {}).map(([key, value]) => `${key.replaceAll("_", " ")}: ${prettyInput(value)}`).join(" · ")}</span></div>
+                          <div className="rounded-xl bg-white p-2.5"><b className="text-slate-700">Effective inputs:</b> <span className="break-words text-slate-500">{Object.entries(step.effective_inputs || {}).map(([key, value]) => `${key.replaceAll("_", " ")}: ${prettyInput(value)}`).join(" · ")}</span></div>
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              {data.rows.length === 0 ? (
+                <div className="rounded-[26px] border border-slate-200 bg-white p-10 text-center text-sm font-bold text-slate-500">
+                  This proof is formula-based and does not require a student list.
+                </div>
+              ) : (
+                <section className="space-y-3">
+                  <div className="flex items-center gap-2 px-1 font-black text-slate-950"><CircleDollarSign size={18} className="text-emerald-600" /> Student Source Records</div>
+                  {data.rows.map((row) => {
+                    const open = expanded === row.student_id;
+                    return (
+                      <article key={row.student_id} className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
+                        <button type="button" onClick={() => setExpanded(open ? null : row.student_id)} className="grid w-full grid-cols-1 gap-3 p-4 text-left sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] sm:items-center">
+                          <div className="min-w-0">
+                            <div className="break-words font-black text-slate-950">{row.student_name}</div>
+                            <div className="mt-1 break-all text-xs font-bold text-slate-500">@{row.username} · Joined {row.enrollment_date}</div>
+                          </div>
+                          <div className="flex flex-wrap gap-2 text-[11px] font-black">
+                            <span className="rounded-full bg-indigo-50 px-3 py-1.5 text-indigo-700">{row.student_type_label}</span>
+                            <span className="rounded-full bg-slate-100 px-3 py-1.5 text-slate-700">{row.class_status_label}</span>
+                            <span className="rounded-full bg-cyan-50 px-3 py-1.5 text-cyan-700">{row.active_sessions}/{row.full_month_sessions} sessions</span>
+                          </div>
+                          <span className="text-xs font-black text-indigo-600">{open ? "Hide logs" : "View logs"}</span>
+                        </button>
+
+                        {open && (
+                          <div className="border-t border-slate-200 bg-slate-50/70 p-4">
+                            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                              <div className="rounded-2xl bg-white p-3 text-xs font-bold text-slate-600"><b className="block text-base text-emerald-600">{row.attendance_summary.present}</b>Present</div>
+                              <div className="rounded-2xl bg-white p-3 text-xs font-bold text-slate-600"><b className="block text-base text-rose-600">{row.attendance_summary.absent}</b>Absent</div>
+                              <div className="rounded-2xl bg-white p-3 text-xs font-bold text-slate-600"><b className="block text-base text-amber-600">{row.attendance_summary.leave}</b>Leave</div>
+                              <div className="rounded-2xl bg-white p-3 text-xs font-bold text-slate-600"><b className="block text-base text-indigo-600">{row.attendance_summary.marked}</b>Marked days</div>
+                            </div>
+
+                            <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-slate-600">
+                              <span className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1.5"><CalendarDays size={14} /> {row.class_days.join(", ") || "No schedule days"}</span>
+                              <span className="rounded-full bg-white px-3 py-1.5">{row.time_slots.map(formatTime12).join(", ") || "No time recorded"}</span>
+                              <span className="rounded-full bg-white px-3 py-1.5">Assigned {row.assignment_start} to {row.assignment_end}</span>
+                            </div>
+
+                            <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-3">
+                              <div className="flex min-w-max gap-2">
+                                {row.attendance.map((day) => (
+                                  <div key={day.date} className="w-[72px] shrink-0 text-center">
+                                    <div className={`rounded-xl px-1 py-2 text-[10px] font-black uppercase ${STATUS_STYLE[day.status] || STATUS_STYLE.not_marked}`}>
+                                      {day.status === "not_marked" ? "—" : day.status.slice(0, 3)}
+                                    </div>
+                                    <div className="mt-1 text-[10px] font-bold text-slate-500">{formatDate(day.date)}</div>
+                                    <div className="mt-1 flex items-center justify-center gap-1 text-[9px] font-bold text-slate-400">
+                                      {day.scheduled ? "Class" : ""}{day.lesson_logged ? <CheckCircle2 size={10} className="text-emerald-500" /> : null}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })}
+                </section>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

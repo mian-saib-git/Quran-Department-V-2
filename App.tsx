@@ -1,15 +1,42 @@
+// IVS_QURAN_PORTAL_ROLE_RECOVERY_V31
+// IVS_PERMANENT_FEATURE_CONTEXT_FIX_V23
+// IVS_ATTENDANCE_FRONTEND_RESPONSIVENESS_V16
 import { connectAcademyWS, disconnectAcademyWS, useAcademyWS } from "././hooks/useAcademyWS";
 import React, { useState, useEffect, useMemo, lazy, Suspense, useRef, startTransition, useCallback } from "react";
 import Lottie from "lottie-react";
-import { loadSession, saveSession, clearSession, type Session } from "./services/sessionService";
-import { FEATURE_LOCK_EVENT, showFeatureLocked, type FeatureLockDetail } from "./services/featureAccess";
+import {
+  loadSession,
+  saveSession,
+  clearSession,
+  SESSION_UPDATED_EVENT,
+  SESSION_EXPIRED_EVENT,
+  type Session,
+} from "./services/sessionService";
+import {
+  FEATURE_LOCK_EVENT,
+  FEATURES_UPDATED_CHANNEL,
+  FEATURES_UPDATED_EVENT,
+  FEATURES_UPDATED_STORAGE_KEY,
+  showFeatureLocked,
+  type FeatureLockDetail,
+  type FeaturesUpdatedDetail,
+} from "./services/featureAccess";
 import { FeatureLockedModal } from "./components/FeatureLockedModal";
+import MaintenanceScreen from "./components/MaintenanceScreen";
+import GlobalNoticeCenter from "./components/GlobalNoticeCenter";
 import {
   loginToDjango,
   markAttendanceInDjango,
   deleteAttendanceInDjango,
+  saveQuranTeacherSessionAttendance,
+  deleteQuranTeacherSessionAttendance,
   updateCoordinatorAccount,
+  updateMyProfile,
   getAuthContext,
+  getMyActiveNotices,
+  dismissMyNotice,
+  type PlatformNotice,
+  type PlatformMaintenanceStatus,
 } from "./services/djangoApiService";
 
 import {
@@ -19,6 +46,12 @@ import {
 import { INITIAL_STATE, TIME_SLOTS } from "./constants";
 import { loadState, saveState } from "./services/storageService";
 import { ClassCard } from "./components/ClassCard";
+// IVS_QURAN_LIVE_CARD_TUITION_UI_V17
+// IVS_QURAN_LIVE_UPNEXT_SPLIT_LAYOUT_V18
+// IVS_COMPACT_INDEPENDENT_LIVE_COLUMNS_V19
+// IVS_QURAN_LIVE_CARDS_ULTRA_COMPACT_NO_SHADOW_V20
+// IVS_QURAN_MOBILE_SIDEBAR_SHADOW_FIX_V21
+// IVS_QURAN_MOBILE_SIDEBAR_FULLY_HIDDEN_V22
 import { SchedulingTab } from "./components/SchedulingTab";
 const AssistantChat = lazy(() =>
   import("./components/AssistantChat").then((m) => ({ default: m.AssistantChat }))
@@ -33,10 +66,16 @@ const AttendanceEditor = lazy(() =>
 
 const CoordinatorAccounts = lazy(() => import("./components/CoordinatorAccounts"));
 const CoordinatorLessons = lazy(() => import("./components/CoordinatorLessons"));
+const QuranDroppedLeave = lazy(() => import("./components/QuranDroppedLeave"));
+const TeacherSalaryManagement = lazy(() => import("./components/TeacherSalaryManagement"));
 const PlatformAdmin = lazy(() => import("./components/PlatformAdmin"));
+const TuitionCoordinatorPortal = lazy(() => import("./components/tuition/TuitionCoordinatorPortal"));
+const TuitionPendingPortal = lazy(() => import("./components/tuition/TuitionPendingPortal"));
+const TuitionStudentPortal = lazy(() => import("./components/tuition/TuitionStudentPortal"));
+const TuitionTeacherPortal = lazy(() => import("./components/tuition/TuitionTeacherPortal"));
 import { TeacherPortal } from "./components/TeacherPortal";
 import { StudentPortal } from "./components/StudentPortal";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 
 
 
@@ -46,12 +85,13 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, Cartes
 import {
 Users, Calendar, BarChart3, LogOut,
 LayoutDashboard, Plus, Trash2, Edit2,
-ChevronRight, Menu, X, CalendarDays,
-Settings, BookOpen, ShieldCheck, Sun, Moon
+ChevronRight, Menu, X, CalendarDays, CalendarClock,
+Settings, BookOpen, ShieldCheck, Sun, Moon, LockKeyhole, UserMinus, CircleDollarSign
 } from "lucide-react";
 
 import { Users2 } from "lucide-react";
 
+import { PageSkeleton } from "./components/ui/SkeletonLoaders";
 // ---------------- Helpers ----------------
 
 type TabId =
@@ -61,11 +101,13 @@ type TabId =
   | "scheduling"
   | "accounts"
   | "lessons"
+  | "dropped-leave"
+  | "teacher-salary"
   | "platform-admin";
 
 const NAV_META: Record<TabId, { label: string; icon: any }> = {
   dashboard: {
-    label: "Daily Classes",
+    label: "Dashboard",
     icon: LayoutDashboard,
   },
   accounts: {
@@ -82,7 +124,7 @@ const NAV_META: Record<TabId, { label: string; icon: any }> = {
   },
   scheduling: {
     label: "Scheduling",
-    icon: CalendarDays,
+    icon: CalendarClock,
   },
   
   attendance: {
@@ -92,6 +134,14 @@ const NAV_META: Record<TabId, { label: string; icon: any }> = {
   reports: {
     label: "Reports",
     icon: BarChart3,
+  },
+  "dropped-leave": {
+    label: "Dropped & Leave",
+    icon: UserMinus,
+  },
+  "teacher-salary": {
+    label: "Teacher Salary",
+    icon: CircleDollarSign,
   },
 };
 
@@ -186,131 +236,44 @@ function TopbarClock() {
   const [now, setNow] = useState(new Date());
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setNow(new Date());
-    }, 1000);
-
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
-  const h = now.getHours();
-  const m = now.getMinutes();
-  const s = now.getSeconds();
 
-  const hourDeg = ((h % 12) + m / 60) * 30;
-  const minDeg = (m + s / 60) * 6;
-  const secDeg = s * 6;
-
+  const second = now.getSeconds();
+  const minute = now.getMinutes() + second / 60;
+  const hour = (now.getHours() % 12) + minute / 60;
   const timeText = now.toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
     hour12: true,
   });
   const dayText = now.toLocaleDateString(undefined, { weekday: "long" });
-  const dateText = now.toLocaleDateString(undefined, { day: "2-digit", month: "long" });
+  const dateText = now.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 
   return (
-    <div className="flex items-center gap-4">
-      {/* Roman Dial */}
-      <div className="relative h-[62px] w-[62px] rounded-full">
-        {/* soft outer */}
-        <div
-          className="
-            absolute inset-0 rounded-full
-            bg-white/60 backdrop-blur
-            border border-white/70
-            shadow-[14px_14px_30px_rgba(15,23,42,0.12),-14px_-14px_28px_rgba(255,255,255,0.9)]
-          "
-        />
-
-        {/* inner face */}
-        <div
-          className="
-            absolute inset-[8px] rounded-full
-            bg-gradient-to-b from-white/95 to-slate-50/80
-            shadow-[inset_0_1px_0_rgba(255,255,255,0.95),inset_0_-10px_18px_rgba(15,23,42,0.06)]
-          "
-        />
-
-        {/* ultra soft vignette */}
-        <div className="absolute inset-[8px] rounded-full pointer-events-none">
-          <div className="absolute inset-0 rounded-full bg-slate-200/20 blur-[10px]" />
-        </div>
-
-        {/* Roman numerals (exact positions like your image) */}
-        <div className="absolute inset-0 pointer-events-none select-none">
-          <span className="absolute left-1/2 top-[6px] -translate-x-1/2 text-[10px] font-semibold text-slate-300">
-            XII
-          </span>
-          <span className="absolute right-[7px] top-1/2 -translate-y-1/2 text-[10px] font-semibold text-slate-300">
-            III
-          </span>
-          <span className="absolute left-1/2 bottom-[6px] -translate-x-1/2 text-[10px] font-semibold text-slate-300">
-            VI
-          </span>
-          <span className="absolute left-[7px] top-1/2 -translate-y-1/2 text-[10px] font-semibold text-slate-300">
-            IX
-          </span>
-        </div>
-
-        {/* hour hand */}
-        <div
-          className="absolute left-1/2 top-1/2 origin-bottom rounded-full"
-          style={{
-            width: 3,
-            height: 18,
-            transform: `translate(-50%, -100%) rotate(${hourDeg}deg)`,
-            background: "rgba(30,41,59,0.75)",
-            boxShadow: "0 8px 18px rgba(15,23,42,0.14)",
-          }}
-        />
-
-        {/* minute hand */}
-        <div
-          className="absolute left-1/2 top-1/2 origin-bottom rounded-full"
-          style={{
-            width: 2,
-            height: 24,
-            transform: `translate(-50%, -100%) rotate(${minDeg}deg)`,
-            background: "rgba(15,23,42,0.65)",
-            boxShadow: "0 10px 20px rgba(15,23,42,0.12)",
-          }}
-        />
-
-        {/* seconds hand (thin, subtle) */}
-        <div
-          className="absolute left-1/2 top-1/2 origin-bottom rounded-full"
-          style={{
-            width: 1.5,
-            height: 26,
-            transform: `translate(-50%, -100%) rotate(${secDeg}deg)`,
-            background: "rgba(239,68,68,0.75)",
-            boxShadow: "0 0 8px rgba(239,68,68,0.25)",
-          }}
-        />
-
-        {/* center dot (tiny red like your picture) */}
-        <div
-          className="absolute left-1/2 top-1/2 h-[6px] w-[6px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-          style={{
-            background: "rgba(239,68,68,0.85)",
-            boxShadow: "0 6px 16px rgba(239,68,68,0.18)",
-          }}
-        />
+    <div className="flex h-[54px] items-center gap-3">
+      <div className="relative h-[46px] w-[46px] shrink-0 rounded-full border border-white bg-gradient-to-br from-white to-slate-100 shadow-[0_8px_22px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)]">
+        <span className="absolute left-1/2 top-[2px] -translate-x-1/2 text-[6px] font-black text-slate-400">12</span>
+        <span className="absolute right-[4px] top-1/2 -translate-y-1/2 text-[6px] font-black text-slate-400">3</span>
+        <span className="absolute bottom-[2px] left-1/2 -translate-x-1/2 text-[6px] font-black text-slate-400">6</span>
+        <span className="absolute left-[4px] top-1/2 -translate-y-1/2 text-[6px] font-black text-slate-400">9</span>
+        <span className="absolute left-1/2 top-1/2 h-[13px] w-[3px] origin-bottom rounded-full bg-slate-800" style={{ transform: `translate(-50%, -100%) rotate(${hour * 30}deg)` }} />
+        <span className="absolute left-1/2 top-1/2 h-[17px] w-[2px] origin-bottom rounded-full bg-indigo-600" style={{ transform: `translate(-50%, -100%) rotate(${minute * 6}deg)` }} />
+        <span className="absolute left-1/2 top-1/2 h-[19px] w-px origin-bottom rounded-full bg-rose-500" style={{ transform: `translate(-50%, -100%) rotate(${second * 6}deg)` }} />
+        <span className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-indigo-600 shadow-sm" />
       </div>
-
-      {/* text - always visible */}
-      <div className="leading-tight">
-        <div className="text-[13px] font-extrabold text-slate-900">{timeText}</div>
-        <div className="text-[11px] font-semibold text-slate-500">{dayText}</div>
-        <div className="text-[11px] text-slate-400">{dateText}</div>
+      <div className="min-w-[150px] leading-tight">
+        <div className="text-[18px] font-black tabular-nums text-slate-950">{timeText}</div>
+        <div className="mt-1 flex items-center gap-2 text-[11px] font-extrabold text-slate-500">
+          <span>{dayText}</span>
+          <span className="h-1 w-1 rounded-full bg-indigo-500" />
+          <span>{dateText}</span>
+        </div>
       </div>
     </div>
   );
 }
-
-
-
-
 
 
 //Dash Board//
@@ -443,8 +406,8 @@ function TimePill({ text }: { text: string }) {
 }
 function TabLoading() {
   return (
-    <div className="min-h-[180px] flex items-center justify-center">
-      <div className="h-8 w-8 rounded-full border-2 border-slate-200 border-t-indigo-500 animate-spin" />
+    <div className="min-h-[260px] p-4 sm:p-6">
+      <PageSkeleton variant="cards" cards={6} compact label="Loading workspace section" />
     </div>
   );
 }
@@ -457,11 +420,44 @@ export default function App() {
   // ✅ Session state MUST be defined first
   const [session, setSession] = useState<Session | null>(() => loadSession());
   const [appState, setAppState] = useState<AppState>(INITIAL_STATE);
+  const attendanceRef = useRef<AttendanceRecord[]>(INITIAL_STATE.attendance);
+  const attendanceMutationVersionRef = useRef<Map<string, number>>(new Map());
+  const attendanceMutationQueueRef = useRef<Map<string, Promise<unknown>>>(new Map());
+  const attendanceServerIdRef = useRef<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    attendanceRef.current = appState.attendance;
+
+    for (const record of appState.attendance) {
+      if (/^\d+$/.test(String(record.id || ""))) {
+        const normalizedClassKey =
+          record.entityType === EntityType.TEACHER
+            ? String(record.classKey || "").trim().slice(0, 5)
+            : "";
+        const key = `${record.entityType}:${String(record.entityId)}:${record.date}:${normalizedClassKey}`;
+        attendanceServerIdRef.current.set(key, String(record.id));
+      }
+    }
+  }, [appState.attendance]);
 
   // WebSocket listener - auto-refresh state when accounts are created/updated
   useAcademyWS(React.useCallback((data: Record<string, unknown>) => {
     const type = String(data.type || "");
     const event = String((data as any).event || "");
+    if (type === "maintenance_updated") {
+      window.dispatchEvent(new Event("ivs-maintenance-refresh"));
+      return;
+    }
+
+    if (type === "notice_updated") {
+      window.dispatchEvent(new Event("ivs-notices-refresh"));
+      return;
+    }
+
+    if (event === "coordinator_tab_access_updated") {
+      window.dispatchEvent(new Event("ivs-coordinator-tab-access-refresh"));
+    }
+
     if (
       type === "academy_update" ||
       event === "account_created" ||
@@ -477,8 +473,19 @@ export default function App() {
     }
   }, []));
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
+  const [dashboardAccountEditTarget, setDashboardAccountEditTarget] = useState<{
+    role: "teacher" | "student";
+    profileId: string;
+    requestId: number;
+  } | null>(null);
   const [enabledFeatures, setEnabledFeatures] = useState<Record<string, boolean>>({});
+  const [coordinatorTabAccess, setCoordinatorTabAccess] = useState<Record<string, boolean>>({});
   const [featureContextLoaded, setFeatureContextLoaded] = useState(false);
+  const [featureContextError, setFeatureContextError] = useState("");
+  const authContextRequestRef = useRef(0);
+  const [authContext, setAuthContext] = useState<any>(null);
+  const [maintenanceState, setMaintenanceState] = useState<PlatformMaintenanceStatus>({ active: false });
+  const [platformNotices, setPlatformNotices] = useState<PlatformNotice[]>([]);
   const [lockedFeature, setLockedFeature] = useState<FeatureLockDetail | null>(null);
 
   useEffect(() => {
@@ -492,29 +499,364 @@ export default function App() {
     window.addEventListener(FEATURE_LOCK_EVENT, handler);
     return () => window.removeEventListener(FEATURE_LOCK_EVENT, handler);
   }, []);
-  // Fetch feature flags from the backend whenever the session changes.
-  // Populates enabledFeatures so hasFeature() correctly hides/shows tabs.
+  // Keep React state synchronized when the shared API layer renews or clears
+  // the rotating JWT session. Previously localStorage changed while App kept an
+  // expired access token in memory, which could leave every feature appearing
+  // disabled until a manual logout.
   useEffect(() => {
-    if (!session) {
+    const handleSessionUpdated = (event: Event) => {
+      const next = (event as CustomEvent<Session>).detail;
+      if (!next?.access) return;
+
+      setSession((current) => {
+        if (
+          current?.access === next.access &&
+          current?.refresh === next.refresh &&
+          current?.user?.id === next.user?.id
+        ) {
+          return current;
+        }
+        return next;
+      });
+    };
+
+    const handleSessionExpired = () => {
+      setSession(null);
+      setAuthContext(null);
       setEnabledFeatures({});
       setFeatureContextLoaded(false);
+      setFeatureContextError("");
+      setMaintenanceState({ active: false });
+      setPlatformNotices([]);
+    };
+
+    window.addEventListener(SESSION_UPDATED_EVENT, handleSessionUpdated);
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    return () => {
+      window.removeEventListener(SESSION_UPDATED_EVENT, handleSessionUpdated);
+      window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    };
+  }, []);
+
+  const loadFeatureContext = useCallback(async () => {
+    const currentSession = loadSession() || session;
+
+    if (!currentSession?.access) {
+      setEnabledFeatures({});
+      setAuthContext(null);
+      setMaintenanceState({ active: false });
+      setPlatformNotices([]);
+      setFeatureContextLoaded(false);
+      setFeatureContextError("");
       return;
     }
 
+    const requestId = authContextRequestRef.current + 1;
+    authContextRequestRef.current = requestId;
     setFeatureContextLoaded(false);
+    setFeatureContextError("");
 
-    getAuthContext()
-      .then((ctx) => {
+    const retryDelays = [0, 350, 1200];
+    let lastError: unknown = null;
+
+    for (const delay of retryDelays) {
+      if (delay) {
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+      }
+
+      if (requestId !== authContextRequestRef.current) return;
+
+      try {
+        const ctx = await getAuthContext();
+        if (requestId !== authContextRequestRef.current) return;
+
+        if (!ctx?.department?.id || !ctx?.department?.department_type) {
+          throw new Error(
+            "Your account is not connected to an active department.",
+          );
+        }
+
+        if (!ctx.features || typeof ctx.features !== "object") {
+          throw new Error("The department permission map was not returned.");
+        }
+
         console.log("AUTH CONTEXT:", ctx.department, ctx.features);
-        setEnabledFeatures(ctx.features ?? {});
+        setAuthContext(ctx);
+        setMaintenanceState(ctx.maintenance ?? { active: false });
+        setEnabledFeatures(ctx.features);
+        setFeatureContextError("");
         setFeatureContextLoaded(true);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (requestId !== authContextRequestRef.current) return;
+
+    const message =
+      lastError instanceof Error
+        ? lastError.message
+        : "Could not verify department access.";
+
+    console.warn("Could not load department feature context:", lastError);
+    // Never convert a temporary authentication/network failure into an empty
+    // permission map. An empty map made valid dashboards look disabled.
+    setFeatureContextLoaded(false);
+    setFeatureContextError(message);
+  }, [session?.access, session?.user?.id]);
+
+  useEffect(() => {
+    void loadFeatureContext();
+  }, [loadFeatureContext]);
+
+  useEffect(() => {
+    const handleMaintenance = (event: Event) => {
+      const detail = (event as CustomEvent<PlatformMaintenanceStatus>).detail;
+      if (detail?.active) {
+        setMaintenanceState(detail);
+        setPlatformNotices([]);
+      }
+    };
+    window.addEventListener("ivs-maintenance-mode", handleMaintenance);
+    return () => window.removeEventListener("ivs-maintenance-mode", handleMaintenance);
+  }, []);
+
+  useEffect(() => {
+    if (!session?.access || !featureContextLoaded || maintenanceState.active) {
+      if (!session?.access || maintenanceState.active) setPlatformNotices([]);
+      return;
+    }
+
+    let cancelled = false;
+    getMyActiveNotices()
+      .then((response) => {
+        if (!cancelled) setPlatformNotices(response.notices || []);
       })
       .catch((err) => {
-        console.warn("Could not load feature flags:", err);
-        setEnabledFeatures({});
-        setFeatureContextLoaded(true);
+        if (!cancelled) console.warn("Could not load platform notices:", err);
       });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [featureContextLoaded, maintenanceState.active, session?.access]);
+
+  const closePlatformNotice = useCallback(async (notice: PlatformNotice) => {
+    setPlatformNotices((current) => current.filter((item) => item.id !== notice.id));
+    try {
+      await dismissMyNotice(notice.id);
+    } catch (err) {
+      console.warn("Could not record notice dismissal:", err);
+    }
+  }, []);
+
+  const retryMaintenanceStatus = useCallback(async () => {
+    try {
+      const ctx = await getAuthContext();
+      setAuthContext(ctx);
+      setEnabledFeatures(ctx.features ?? {});
+      setCoordinatorTabAccess(ctx.coordinator_tabs ?? {});
+      setMaintenanceState(ctx.maintenance ?? { active: false });
+      if (!ctx.maintenance?.active) {
+        const response = await getMyActiveNotices().catch(() => ({ notices: [] as PlatformNotice[] }));
+        setPlatformNotices(response.notices || []);
+      }
+    } catch (err) {
+      console.warn("Could not refresh maintenance status:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!session?.access) return;
+    const timer = window.setInterval(() => {
+      getAuthContext()
+        .then((ctx) => setMaintenanceState(ctx.maintenance ?? { active: false }))
+        .catch(() => undefined);
+    }, 60_000);
+    return () => window.clearInterval(timer);
   }, [session?.access]);
+
+  useEffect(() => {
+    const refreshMaintenance = () => void retryMaintenanceStatus();
+    const refreshNotices = () => {
+      if (!session?.access || maintenanceState.active) return;
+      getMyActiveNotices()
+        .then((response) => setPlatformNotices(response.notices || []))
+        .catch(() => undefined);
+    };
+    window.addEventListener("ivs-maintenance-refresh", refreshMaintenance);
+    window.addEventListener("ivs-notices-refresh", refreshNotices);
+    return () => {
+      window.removeEventListener("ivs-maintenance-refresh", refreshMaintenance);
+      window.removeEventListener("ivs-notices-refresh", refreshNotices);
+    };
+  }, [maintenanceState.active, retryMaintenanceStatus, session?.access]);
+
+  // Refresh only the permission map after Main Admin changes.
+  // This deliberately never updates authContext, department routing, or portal type.
+  const featureSyncRequestRef = useRef(0);
+
+  const refreshFeaturesOnly = useCallback(async () => {
+    const expectedDepartmentId = Number(authContext?.department?.id || 0);
+
+    if (
+      !session?.access ||
+      !featureContextLoaded ||
+      !expectedDepartmentId
+    ) {
+      return;
+    }
+
+    const requestId = featureSyncRequestRef.current + 1;
+    featureSyncRequestRef.current = requestId;
+
+    try {
+      const ctx = await getAuthContext();
+
+      if (requestId !== featureSyncRequestRef.current) return;
+
+      const returnedDepartmentId = Number(ctx.department?.id || 0);
+
+      if (returnedDepartmentId !== expectedDepartmentId) {
+        console.warn(
+          "Ignored feature refresh because the returned department did not match the active portal.",
+          { expectedDepartmentId, returnedDepartmentId }
+        );
+        return;
+      }
+
+      setEnabledFeatures(ctx.features ?? {});
+      setCoordinatorTabAccess(ctx.coordinator_tabs ?? {});
+      setMaintenanceState(ctx.maintenance ?? { active: false });
+    } catch (err) {
+      // Keep the last valid feature map and portal during temporary failures.
+      console.warn("Could not refresh department features:", err);
+    }
+  }, [
+    authContext?.department?.id,
+    featureContextLoaded,
+    session?.access,
+  ]);
+
+  useEffect(() => {
+    const refreshCoordinatorTabs = () => {
+      if (!session?.access) return;
+      getAuthContext()
+        .then((ctx) => {
+          const expectedDepartmentId = Number(authContext?.department?.id || 0);
+          const returnedDepartmentId = Number(ctx.department?.id || 0);
+          if (expectedDepartmentId && returnedDepartmentId !== expectedDepartmentId) return;
+          setCoordinatorTabAccess(ctx.coordinator_tabs ?? {});
+          setEnabledFeatures(ctx.features ?? {});
+        })
+        .catch((err) => console.warn("Could not refresh coordinator tab access:", err));
+    };
+
+    window.addEventListener("ivs-coordinator-tab-access-refresh", refreshCoordinatorTabs);
+    return () => window.removeEventListener("ivs-coordinator-tab-access-refresh", refreshCoordinatorTabs);
+  }, [authContext?.department?.id, session?.access]);
+
+  useEffect(() => {
+    const currentDepartmentId = Number(authContext?.department?.id || 0);
+
+    if (
+      !session?.access ||
+      !featureContextLoaded ||
+      !currentDepartmentId
+    ) {
+      return;
+    }
+
+    const applyFeatureUpdate = (detail?: FeaturesUpdatedDetail) => {
+      const changedDepartmentId = Number(detail?.departmentId || 0);
+
+      if (
+        changedDepartmentId &&
+        changedDepartmentId !== currentDepartmentId
+      ) {
+        return;
+      }
+
+      if (detail?.featureKey && typeof detail.isEnabled === "boolean") {
+        setEnabledFeatures((current) => ({
+          ...current,
+          [detail.featureKey as string]: detail.isEnabled as boolean,
+        }));
+      }
+
+      void refreshFeaturesOnly();
+    };
+
+    const handleWindowUpdate = (event: Event) => {
+      applyFeatureUpdate(
+        (event as CustomEvent<FeaturesUpdatedDetail>).detail
+      );
+    };
+
+    const handleStorage = (event: StorageEvent) => {
+      if (
+        event.key !== FEATURES_UPDATED_STORAGE_KEY ||
+        !event.newValue
+      ) {
+        return;
+      }
+
+      try {
+        applyFeatureUpdate(
+          JSON.parse(event.newValue) as FeaturesUpdatedDetail
+        );
+      } catch {
+        void refreshFeaturesOnly();
+      }
+    };
+
+    const handleFocus = () => {
+      void refreshFeaturesOnly();
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void refreshFeaturesOnly();
+      }
+    };
+
+    window.addEventListener(FEATURES_UPDATED_EVENT, handleWindowUpdate);
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    let channel: BroadcastChannel | null = null;
+    const handleChannelMessage = (
+      event: MessageEvent<FeaturesUpdatedDetail>
+    ) => {
+      applyFeatureUpdate(event.data);
+    };
+
+    try {
+      channel = new BroadcastChannel(FEATURES_UPDATED_CHANNEL);
+      channel.addEventListener("message", handleChannelMessage);
+    } catch {
+      channel = null;
+    }
+
+    return () => {
+      window.removeEventListener(FEATURES_UPDATED_EVENT, handleWindowUpdate);
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
+
+      if (channel) {
+        channel.removeEventListener("message", handleChannelMessage);
+        channel.close();
+      }
+    };
+  }, [
+    authContext?.department?.id,
+    featureContextLoaded,
+    refreshFeaturesOnly,
+    session?.access,
+  ]);
 
 
 const [themeMode, setThemeMode] = useState<"light" | "dark">(() => {
@@ -641,7 +983,7 @@ const saveSuperAdminProfile = async (e: React.FormEvent) => {
       payload.password = password;
     }
 
-    const updated: any = await updateCoordinatorAccount(session.user.id, payload);
+    const updated: any = await updateMyProfile(payload);
 
     const nextUser = {
       ...(session.user as any),
@@ -710,6 +1052,23 @@ useEffect(() => {
   const sessionUsername = String((session as any)?.user?.username || (session as any)?.username || "").toLowerCase();
   const isPlatformAdmin = session?.role === "platform_admin" || sessionUsername === "mian";
 
+  // Quran navigation guards must never run inside the separate Tuition portal.
+  // The permission map is refreshed when the browser regains focus, so without
+  // this scope check the Quran dashboard key can incorrectly lock Tuition's dashboard.
+  const featureDepartmentType = String(
+    authContext?.department?.department_type ||
+    (session as any)?.user?.department?.department_type ||
+    (session as any)?.department?.department_type ||
+    ""
+  ).toLowerCase();
+  const isTuitionFeatureContext = featureDepartmentType === "tuition";
+  const quranDepartmentDisplayName = String(
+    authContext?.department?.name ||
+    (session as any)?.user?.department?.name ||
+    (session as any)?.department?.name ||
+    "Quran Department"
+  ).trim() || "Quran Department";
+
   const featuresLoaded = featureContextLoaded;
 
   const hasFeature = useCallback((...keys: string[]) => {
@@ -726,6 +1085,8 @@ useEffect(() => {
     scheduling: "tab_scheduling",
     attendance: "tab_attendance",
     reports: "tab_reports",
+    "dropped-leave": "tab_dropped_leave",
+    "teacher-salary": "tab_teacher_salary",
   };
 
   const departmentNavItems: TabId[] = [
@@ -734,13 +1095,10 @@ useEffect(() => {
     "lessons",
     "scheduling",
     "attendance",
+    "dropped-leave",
+    "teacher-salary",
     "reports",
   ];
-
-  const coordinatorNavItems = useMemo<TabId[]>(() => {
-    if (isPlatformAdmin) return ["platform-admin"];
-    return departmentNavItems;
-  }, [isPlatformAdmin]);
 
   const isTabLocked = useCallback(
     (tab: TabId) => {
@@ -750,8 +1108,47 @@ useEffect(() => {
     [featureContextLoaded, hasFeature]
   );
 
+  const isTabHiddenByDepartmentAdmin = useCallback(
+    (tab: TabId) => {
+      if (session?.role !== "coordinator") return false;
+      const featureKey = tabFeatureKey[tab];
+      if (!featureKey || !featureContextLoaded) return false;
+
+      // Main Admin-disabled tabs stay visible as locked. Department Admin rules
+      // hide a tab only while its Main Admin switch is enabled.
+      if (!hasFeature(featureKey)) return false;
+      return coordinatorTabAccess[featureKey] === false;
+    },
+    [coordinatorTabAccess, featureContextLoaded, hasFeature, session?.role]
+  );
+
+  const canAccessPortalTab = useCallback(
+    (tab: TabId) => !isTabHiddenByDepartmentAdmin(tab),
+    [isTabHiddenByDepartmentAdmin]
+  );
+
+  const coordinatorNavItems = useMemo<TabId[]>(() => {
+    if (isPlatformAdmin) return ["platform-admin"];
+    if (!featureContextLoaded || isTuitionFeatureContext) return [];
+
+    // Salary remains intentionally unavailable to coordinators. Every other
+    // coordinator tab follows the per-user Department Admin visibility rules.
+    return departmentNavItems.filter((tab) => {
+      if (session?.role === "coordinator" && tab === "teacher-salary") return false;
+      return !isTabHiddenByDepartmentAdmin(tab);
+    });
+  }, [featureContextLoaded, isPlatformAdmin, isTabHiddenByDepartmentAdmin, isTuitionFeatureContext, session?.role]);
+
+  const firstEnabledCoordinatorTab = useMemo<TabId | null>(() => {
+    if (isPlatformAdmin) return "platform-admin";
+    if (!featureContextLoaded || isTuitionFeatureContext) return null;
+
+    return coordinatorNavItems.find((tab) => !isTabLocked(tab)) || coordinatorNavItems[0] || null;
+  }, [coordinatorNavItems, featureContextLoaded, isPlatformAdmin, isTabLocked, isTuitionFeatureContext]);
+
   const handleSidebarTabClick = useCallback(
     (tab: TabId) => {
+      if (isTuitionFeatureContext) return;
       if (!featureContextLoaded && !isPlatformAdmin) return;
 
       if (isTabLocked(tab)) {
@@ -764,10 +1161,18 @@ useEffect(() => {
 
       navigateToTab(tab);
     },
-    [featureContextLoaded, isPlatformAdmin, isTabLocked]
+    [featureContextLoaded, isPlatformAdmin, isTabLocked, isTuitionFeatureContext]
   );
-  const roleLabel = isPlatformAdmin ? "Platform Admin" : isDepartmentAdmin ? "Quran Super Admin" : "Coordinator";
+  const roleLabel = isPlatformAdmin ? "Platform Admin" : isDepartmentAdmin ? `${quranDepartmentDisplayName} Admin` : "Coordinator";
   const roleIconSrc = isPlatformAdmin ? "/superadmin-icon.png" : isDepartmentAdmin ? "/superadmin-icon.png" : "/coordinator-icon.png";
+  const sidebarDisplayName = useMemo(() => {
+    const current = (session as any)?.user || {};
+    const fullName = String(
+      current.full_name ||
+      `${current.first_name || ""} ${current.last_name || ""}`
+    ).trim();
+    return fullName || current.username || "Management access";
+  }, [session]);
 
   const sessionTeacherId = isTeacher ? (session?.teacherId ?? null) : null;
   const sessionStudentId = isStudent ? (session?.studentId ?? null) : null;
@@ -922,6 +1327,7 @@ const [searchTerm, setSearchTerm] = useState("");
   }, [searchInput]);
 const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 const [sidebarEdgeHover, setSidebarEdgeHover] = useState(false);
+const [sidebarTextReady, setSidebarTextReady] = useState(false);
 const [insightsOpen, setInsightsOpen] = useState(false);
 const timelineCardRef = useRef<HTMLDivElement | null>(null);
 
@@ -932,6 +1338,24 @@ const [timelinePopup, setTimelinePopup] = useState<{
   pinned: boolean;
 } | null>(null);
 const [assistantOpen, setAssistantOpen] = useState(false);
+
+
+
+useEffect(() => {
+  const open = sidebarEdgeHover || mobileMenuOpen;
+
+  if (!open) {
+    setSidebarTextReady(false);
+    return;
+  }
+
+  const timer = window.setTimeout(() => {
+    setSidebarTextReady(true);
+  }, 210);
+
+  return () => window.clearTimeout(timer);
+}, [sidebarEdgeHover, mobileMenuOpen]);
+
 
 
 
@@ -960,6 +1384,8 @@ const validTabs: TabId[] = [
   "scheduling",
   "accounts",
   "lessons",
+  "dropped-leave",
+  "teacher-salary",
   "platform-admin",
 ];
 
@@ -974,6 +1400,27 @@ const navigateToTab = (tab: TabId) => {
   if (window.location.hash !== nextHash) {
     window.history.replaceState(null, "", nextHash);
   }
+};
+
+// IVS_LIVE_CLASS_ACCOUNT_LINKS_V14
+const openDashboardAccountEditor = (
+  role: "teacher" | "student",
+  profileId: string,
+) => {
+  if (!hasFeature("tab_accounts_enrollment")) {
+    showFeatureLocked(
+      "Accounts & Enrollment",
+      `${quranDepartmentDisplayName} Accounts & Enrollment is currently disabled.`,
+    );
+    return;
+  }
+
+  setDashboardAccountEditTarget({
+    role,
+    profileId: String(profileId),
+    requestId: Date.now(),
+  });
+  navigateToTab("accounts");
 };
 
 useEffect(() => {
@@ -993,14 +1440,36 @@ useEffect(() => {
 }, []);
 
 useEffect(() => {
-  if (!coordinatorNavItems.includes(activeTab)) {
-    navigateToTab(coordinatorNavItems[0] || "dashboard");
+  if (
+    isPlatformAdmin ||
+    isTuitionFeatureContext ||
+    !featureContextLoaded ||
+    coordinatorNavItems.length === 0
+  ) {
+    return;
   }
-}, [activeTab, coordinatorNavItems]);
+
+  if (!coordinatorNavItems.includes(activeTab)) {
+    navigateToTab(coordinatorNavItems[0]);
+  }
+}, [
+  activeTab,
+  coordinatorNavItems,
+  featureContextLoaded,
+  isPlatformAdmin,
+  isTuitionFeatureContext,
+]);
 
 useEffect(() => {
-  // Direct URL protection for locked tabs
-  if (!featureContextLoaded || isPlatformAdmin) return;
+  // Direct URL protection applies only to the Quran workspace. Tuition has its
+  // own feature keys and locked-tab handling inside TuitionCoordinatorPortal.
+  if (!featureContextLoaded || isPlatformAdmin || isTuitionFeatureContext) return;
+
+  if (isTabHiddenByDepartmentAdmin(activeTab)) {
+    const fallback = firstEnabledCoordinatorTab;
+    if (fallback && fallback !== activeTab) navigateToTab(fallback);
+    return;
+  }
 
   const featureKey = tabFeatureKey[activeTab];
   if (!featureKey || hasFeature(featureKey)) return;
@@ -1010,14 +1479,21 @@ useEffect(() => {
     `${NAV_META[activeTab]?.label || "This section"} is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
   );
 
-  const fallback =
-    departmentNavItems.find((tab) => {
-      const key = tabFeatureKey[tab];
-      return !key || hasFeature(key);
-    }) || "dashboard";
+  const fallback = firstEnabledCoordinatorTab;
 
-  if (fallback !== activeTab) navigateToTab(fallback);
-}, [activeTab, featureContextLoaded, hasFeature, isPlatformAdmin]);
+  if (fallback && fallback !== activeTab) {
+    navigateToTab(fallback);
+  }
+}, [
+  activeTab,
+  coordinatorNavItems,
+  featureContextLoaded,
+  firstEnabledCoordinatorTab,
+  hasFeature,
+  isPlatformAdmin,
+  isTabHiddenByDepartmentAdmin,
+  isTuitionFeatureContext,
+]);
 
 useEffect(() => {
   if (!session) return;
@@ -1028,6 +1504,7 @@ useEffect(() => {
 
   return () => window.clearTimeout(timer);
 }, [session]);
+
 
  useEffect(() => {
   let mounted = true;
@@ -1115,7 +1592,9 @@ useEffect(() => {
   }, 1500);
 
   return () => window.clearTimeout(timer);
-}, [appState, hydrated]);
+  // Attendance is persisted directly through its dedicated API. Avoid serializing
+  // the entire application state after every attendance click.
+}, [appState.teachers, appState.students, hydrated]);
 
 
 
@@ -1220,7 +1699,7 @@ useEffect(() => {
       payload.password = password;
     }
 
-    const updated: any = await updateCoordinatorAccount(session.user.id, payload);
+    const updated: any = await updateMyProfile(payload);
 
     const nextSession = {
       ...session,
@@ -1320,149 +1799,527 @@ if (rememberLogin) {
       : EntityType.STUDENT;
   };
 
-  const upsertAttendance = async (args: {
+  const normalizeAttendanceClassKey = (value: unknown): string =>
+    String(value || "").trim().slice(0, 5);
+
+  const attendanceMutationKey = (args: {
+    entityId: string;
+    entityType: EntityType;
+    date: string;
+    classKey?: string;
+  }): string => {
+    const normalizedClassKey =
+      args.entityType === EntityType.TEACHER
+        ? normalizeAttendanceClassKey(args.classKey)
+        : "";
+
+    return `${args.entityType}:${String(args.entityId)}:${args.date}:${normalizedClassKey}`;
+  };
+
+  const attendanceRecordMatchesKey = (
+    record: AttendanceRecord,
+    key: string
+  ): boolean =>
+    attendanceMutationKey({
+      entityId: String(record.entityId),
+      entityType: record.entityType,
+      date: record.date,
+      classKey: record.classKey,
+    }) === key;
+
+  const replaceAttendanceRecords = (records: AttendanceRecord[]) => {
+    attendanceRef.current = records;
+    setAppState((previous) => ({ ...previous, attendance: records }));
+  };
+
+  const nextAttendanceMutationVersion = (key: string): number => {
+    const next = (attendanceMutationVersionRef.current.get(key) || 0) + 1;
+    attendanceMutationVersionRef.current.set(key, next);
+    return next;
+  };
+
+  const enqueueAttendanceMutation = <T,>(
+    key: string,
+    task: () => Promise<T>
+  ): Promise<T> => {
+    const previous = attendanceMutationQueueRef.current.get(key) || Promise.resolve();
+    const current = previous.catch(() => undefined).then(task);
+    attendanceMutationQueueRef.current.set(key, current);
+
+    void current.finally(() => {
+      if (attendanceMutationQueueRef.current.get(key) === current) {
+        attendanceMutationQueueRef.current.delete(key);
+      }
+    });
+
+    return current;
+  };
+
+  const upsertAttendance = (args: {
     entityId: string;
     entityType: EntityType;
     date: string;
     status: AttendanceStatus;
     classKey?: string;
-  }) => {
-    const { entityId, entityType, date, status, classKey } = args;
-    const normalizedClassKey = classKey || "";
-    const isTeacher = entityType === EntityType.TEACHER;
+    coverageAssignments?: Array<{
+      student_id: number;
+      substitute_teacher_id: number;
+    }>;
+  }): Promise<boolean> => {
+    const entityId = String(args.entityId);
+    const entityType = args.entityType;
+    const date = args.date;
+    const status = args.status;
 
-    const matches = (record: AttendanceRecord) =>
-      record.entityId === entityId &&
-      record.entityType === entityType &&
-      record.date === date &&
-      ((record.classKey || "") === normalizedClassKey);
+    const coverageAssignments =
+      args.coverageAssignments || [];
 
-    const previousRecord = appState.attendance.find(matches);
+    const normalizedClassKey =
+      entityType === EntityType.TEACHER
+        ? normalizeAttendanceClassKey(
+            args.classKey
+          )
+        : "";
 
-    const optimisticRecord: AttendanceRecord = {
-      id: previousRecord?.id || `local-${entityType}-${entityId}-${date}-${normalizedClassKey}-${Date.now()}`,
+    const key = attendanceMutationKey({
       entityId,
       entityType,
       date,
       classKey: normalizedClassKey,
-      status,
-      timestamp: Date.now(),
-    };
-
-    // Instant UI update first
-    setAppState((prev) => {
-      const others = prev.attendance.filter((record) => !matches(record));
-
-      return {
-        ...prev,
-        attendance: [...others, optimisticRecord],
-      };
     });
 
-    try {
-      // Save to Django in the background
-      const saved = await markAttendanceInDjango({
-        entity_type: isTeacher ? "teacher" : "student",
-        teacher_id: isTeacher ? Number(entityId) : null,
-        student_id: isTeacher ? null : Number(entityId),
+    const version =
+      nextAttendanceMutationVersion(
+        key
+      );
+
+    const previousRecord =
+      attendanceRef.current.find(
+        (record) =>
+          attendanceRecordMatchesKey(
+            record,
+            key
+          )
+      );
+
+    const optimisticRecord:
+      AttendanceRecord = {
+        id:
+          previousRecord?.id ||
+          `local-${entityType}-${entityId}-${date}-${normalizedClassKey}-${Date.now()}`,
+        entityId,
+        entityType,
         date,
-        status: localStatusToDjango(status),
-        class_key: normalizedClassKey,
-      } as any);
-
-      const entityIdFromBackend =
-        saved.entity_type === "teacher"
-          ? String(saved.teacher_id || "")
-          : String(saved.student_id || "");
-
-      const nextRecord: AttendanceRecord = {
-        id: String(saved.id),
-        entityId: entityIdFromBackend || entityId,
-        entityType: djangoEntityToLocal(saved.entity_type),
-        date: saved.date,
-        classKey: normalizedClassKey,
-        status: djangoStatusToLocal(saved.status),
-        timestamp: saved.updated_at ? Date.parse(saved.updated_at) : Date.now(),
+        classKey:
+          normalizedClassKey,
+        status,
+        timestamp: Date.now(),
+        markedById:
+          previousRecord?.markedById,
+        markedByUsername:
+          previousRecord?.markedByUsername,
+        markedByName:
+          previousRecord?.markedByName,
+        markedByRole:
+          previousRecord?.markedByRole,
       };
 
-      setAppState((prev) => {
-        const others = prev.attendance.filter(
-          (record) =>
-            !(
-              record.entityId === entityId &&
-              record.entityType === entityType &&
-              record.date === date &&
-              ((record.classKey || "") === normalizedClassKey)
-            )
-        );
+    replaceAttendanceRecords([
+      ...attendanceRef.current.filter(
+        (record) =>
+          !attendanceRecordMatchesKey(
+            record,
+            key
+          )
+      ),
+      optimisticRecord,
+    ]);
 
-        return {
-          ...prev,
-          attendance: [...others, nextRecord],
-        };
-      });
-    } catch (err: any) {
-      // Roll back only this click if backend fails
-      setAppState((prev) => {
-        const others = prev.attendance.filter((record) => !matches(record));
+    return enqueueAttendanceMutation(
+      key,
+      async () => {
+        try {
+          let savedRecord:
+            AttendanceRecord;
 
-        return {
-          ...prev,
-          attendance: previousRecord ? [...others, previousRecord] : others,
-        };
-      });
+          if (
+            entityType ===
+            EntityType.TEACHER
+          ) {
+            if (!normalizedClassKey) {
+              throw new Error(
+                "Teacher attendance requires a class time."
+              );
+            }
 
-      alert(err?.message || "Could not save attendance.");
-    }
+            const saved =
+              await saveQuranTeacherSessionAttendance({
+                teacher_id:
+                  Number(entityId),
+                date,
+                class_key:
+                  normalizedClassKey,
+                status:
+                  localStatusToDjango(
+                    status
+                  ),
+                coverage_assignments:
+                  coverageAssignments,
+              });
+
+            const teacherAttendance =
+              saved.teacher_attendance;
+
+            if (!teacherAttendance) {
+              throw new Error(
+                "Teacher attendance was not returned by the session endpoint."
+              );
+            }
+
+            attendanceServerIdRef.current.set(
+              key,
+              String(
+                teacherAttendance.id
+              )
+            );
+
+            if (
+              attendanceMutationVersionRef
+                .current
+                .get(key) !== version
+            ) {
+              return true;
+            }
+
+            const backendTimestamp =
+              teacherAttendance.updated_at
+                ? Date.parse(
+                    teacherAttendance.updated_at
+                  )
+                : Date.now();
+
+            savedRecord = {
+              id: String(
+                teacherAttendance.id
+              ),
+              entityId,
+              entityType:
+                EntityType.TEACHER,
+              date:
+                saved.date || date,
+              classKey:
+                normalizeAttendanceClassKey(
+                  saved.class_key ||
+                    normalizedClassKey
+                ),
+              status:
+                djangoStatusToLocal(
+                  teacherAttendance.status
+                ),
+              timestamp:
+                Number.isFinite(
+                  backendTimestamp
+                )
+                  ? backendTimestamp
+                  : Date.now(),
+
+              // V2 session endpoint currently
+              // returns marked_by_id only.
+              markedById:
+                teacherAttendance
+                  .marked_by_id == null
+                  ? ""
+                  : String(
+                      teacherAttendance
+                        .marked_by_id
+                    ),
+              markedByUsername:
+                previousRecord
+                  ?.markedByUsername || "",
+              markedByName:
+                previousRecord
+                  ?.markedByName || "",
+              markedByRole:
+                previousRecord
+                  ?.markedByRole || "",
+            };
+          } else {
+            const saved =
+              await markAttendanceInDjango({
+                entity_type:
+                  "student",
+                teacher_id: null,
+                student_id:
+                  Number(entityId),
+                date,
+                status:
+                  localStatusToDjango(
+                    status
+                  ),
+                class_key: "",
+              });
+
+            attendanceServerIdRef.current.set(
+              key,
+              String(saved.id)
+            );
+
+            if (
+              attendanceMutationVersionRef
+                .current
+                .get(key) !== version
+            ) {
+              return true;
+            }
+
+            const backendTimestamp =
+              saved.updated_at
+                ? Date.parse(
+                    saved.updated_at
+                  )
+                : Date.now();
+
+            savedRecord = {
+              id: String(saved.id),
+              entityId: String(
+                saved.student_id ||
+                  entityId
+              ),
+              entityType:
+                EntityType.STUDENT,
+              date:
+                saved.date || date,
+              classKey: "",
+              status:
+                djangoStatusToLocal(
+                  saved.status
+                ),
+              timestamp:
+                Number.isFinite(
+                  backendTimestamp
+                )
+                  ? backendTimestamp
+                  : Date.now(),
+              markedById:
+                saved.marked_by_id == null
+                  ? ""
+                  : String(
+                      saved.marked_by_id
+                    ),
+              markedByUsername:
+                String(
+                  saved.marked_by_username ||
+                    saved.marked_by ||
+                    ""
+                ),
+              markedByName:
+                String(
+                  saved.marked_by_name ||
+                    ""
+                ),
+              markedByRole:
+                String(
+                  saved.marked_by_role ||
+                    ""
+                ),
+            };
+          }
+
+          replaceAttendanceRecords([
+            ...attendanceRef.current.filter(
+              (record) =>
+                !attendanceRecordMatchesKey(
+                  record,
+                  key
+                )
+            ),
+            savedRecord,
+          ]);
+
+          return true;
+        } catch (error: any) {
+          if (
+            attendanceMutationVersionRef
+              .current
+              .get(key) === version
+          ) {
+            replaceAttendanceRecords([
+              ...attendanceRef.current.filter(
+                (record) =>
+                  !attendanceRecordMatchesKey(
+                    record,
+                    key
+                  )
+              ),
+              ...(previousRecord
+                ? [previousRecord]
+                : []),
+            ]);
+
+            alert(
+              error?.message ||
+                "Could not save attendance."
+            );
+          }
+
+          return false;
+        }
+      }
+    );
   };
 
-  const deleteAttendance = async (args: {
+
+  const deleteAttendance = (args: {
     entityId: string;
     entityType: EntityType;
     date: string;
     classKey?: string;
-  }) => {
-    const { entityId, entityType, date, classKey } = args;
-    const normalizedClassKey = classKey || "";
+  }): Promise<boolean> => {
+    const entityId =
+      String(args.entityId);
 
-    const matches = (record: AttendanceRecord) =>
-      record.entityId === entityId &&
-      record.entityType === entityType &&
-      record.date === date &&
-      ((record.classKey || "") === normalizedClassKey);
+    const entityType =
+      args.entityType;
 
-    const existing = appState.attendance.find(matches);
+    const date = args.date;
 
-    // Instant UI remove first
-    setAppState((prev) => ({
-      ...prev,
-      attendance: prev.attendance.filter((record) => !matches(record)),
-    }));
+    const normalizedClassKey =
+      entityType === EntityType.TEACHER
+        ? normalizeAttendanceClassKey(
+            args.classKey
+          )
+        : "";
 
-    try {
-      if (existing?.id && /^\d+$/.test(String(existing.id))) {
-        await deleteAttendanceInDjango(Number(existing.id));
+    const key =
+      attendanceMutationKey({
+        entityId,
+        entityType,
+        date,
+        classKey:
+          normalizedClassKey,
+      });
+
+    const version =
+      nextAttendanceMutationVersion(
+        key
+      );
+
+    const existing =
+      attendanceRef.current.find(
+        (record) =>
+          attendanceRecordMatchesKey(
+            record,
+            key
+          )
+      );
+
+    replaceAttendanceRecords(
+      attendanceRef.current.filter(
+        (record) =>
+          !attendanceRecordMatchesKey(
+            record,
+            key
+          )
+      )
+    );
+
+    return enqueueAttendanceMutation(
+      key,
+      async () => {
+        try {
+          if (
+            entityType ===
+            EntityType.TEACHER
+          ) {
+            if (!normalizedClassKey) {
+              throw new Error(
+                "Teacher attendance requires a class time."
+              );
+            }
+
+            await deleteQuranTeacherSessionAttendance({
+              teacher_id:
+                Number(entityId),
+              date,
+              class_key:
+                normalizedClassKey,
+            });
+          } else {
+            const serverId =
+              attendanceServerIdRef
+                .current
+                .get(key) ||
+              (
+                existing?.id &&
+                /^\d+$/.test(
+                  String(
+                    existing.id
+                  )
+                )
+                  ? String(
+                      existing.id
+                    )
+                  : ""
+              );
+
+            if (serverId) {
+              await deleteAttendanceInDjango(
+                Number(serverId)
+              );
+            }
+          }
+
+          attendanceServerIdRef
+            .current
+            .delete(key);
+
+          return true;
+        } catch (error: any) {
+          if (
+            attendanceMutationVersionRef
+              .current
+              .get(key) === version
+          ) {
+            replaceAttendanceRecords([
+              ...attendanceRef.current.filter(
+                (record) =>
+                  !attendanceRecordMatchesKey(
+                    record,
+                    key
+                  )
+              ),
+              ...(existing
+                ? [existing]
+                : []),
+            ]);
+
+            alert(
+              error?.message ||
+                "Could not delete attendance."
+            );
+          }
+
+          return false;
+        }
       }
-    } catch (err: any) {
-      // Roll back if backend delete fails
-      if (existing) {
-        setAppState((prev) => ({
-          ...prev,
-          attendance: [...prev.attendance.filter((record) => !matches(record)), existing],
-        }));
-      }
-
-      alert(err?.message || "Could not delete attendance.");
-    }
+    );
   };
 
-  const markAttendance = (entityId: string, status: AttendanceStatus, type: EntityType = EntityType.STUDENT, classKey: string = "") => {
+
+  const markAttendance = (
+    entityId: string,
+    status: AttendanceStatus,
+    type: EntityType = EntityType.STUDENT,
+    classKey: string = ""
+  ): Promise<boolean> =>
     upsertAttendance({ entityId, entityType: type, date: todayStr, status, classKey });
-  };
 
-  const unmarkAttendance = (entityId: string, type: EntityType = EntityType.STUDENT, classKey: string = "") => {
+  const unmarkAttendance = (
+    entityId: string,
+    type: EntityType = EntityType.STUDENT,
+    classKey: string = ""
+  ): Promise<boolean> =>
     deleteAttendance({ entityId, entityType: type, date: todayStr, classKey });
-  };
 
 const saveStudent = (e: React.FormEvent) => {
   e.preventDefault();
@@ -2090,7 +2947,7 @@ if (!session) {
 
                 <div>
                   <div className="ivs-login-school">Iqra Virtual School</div>
-                  <div className="ivs-login-sub">Qur&apos;an Department</div>
+                  <div className="ivs-login-sub">School Management Portal</div>
                 </div>
               </div>
 
@@ -2246,87 +3103,317 @@ if (!session) {
   );
 }
 
-// ---------------- Separate role portals ----------------
-if (session?.role === "teacher") {
+
+// ---------------- Department-aware role portals ----------------
+const activeDepartment =
+  authContext?.department ||
+  (session as any)?.user?.department ||
+  (session as any)?.department ||
+  authContext?.roles?.find(
+    (item: any) =>
+      item?.department?.department_type === "tuition"
+  )?.department ||
+  null;
+
+const activeDepartmentType = String(
+  activeDepartment?.department_type || ""
+).toLowerCase();
+
+const isTuitionDepartment =
+  activeDepartmentType === "tuition";
+
+// The portal type must follow the active department-role assignment returned
+// by /api/auth/context/, not only the role cached at login. The cached role can
+// be older than a later account/department-role correction and previously sent
+// Quran teachers into StudentPortal, making teacher-only tabs appear missing.
+const sessionRoleForDepartment = String(
+  authContext?.user?.role ||
+  (session as any)?.user?.role ||
+  session?.role ||
+  ""
+).trim().toLowerCase();
+
+const activeDepartmentIdForRole = Number(activeDepartment?.id || 0);
+const activeDepartmentRoleAssignments = Array.isArray(authContext?.roles)
+  ? authContext.roles.filter((item: any) => {
+      const assignmentDepartmentId = Number(item?.department?.id || 0);
+      return (
+        activeDepartmentIdForRole > 0 &&
+        assignmentDepartmentId === activeDepartmentIdForRole
+      );
+    })
+  : [];
+
+const activeDepartmentRoleAssignment =
+  activeDepartmentRoleAssignments.find(
+    (item: any) =>
+      String(item?.role || "").trim().toLowerCase() ===
+      sessionRoleForDepartment,
+  ) ||
+  activeDepartmentRoleAssignments[0] ||
+  null;
+
+const effectiveDepartmentRole = String(
+  activeDepartmentRoleAssignment?.role || sessionRoleForDepartment
+).trim().toLowerCase();
+
+if (
+  session &&
+  !isPlatformAdmin &&
+  !featureContextLoaded &&
+  featureContextError
+) {
   return (
-    <TeacherPortal
-      themeMode={themeMode}
-      onToggleTheme={toggleTheme}
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-5">
+      <div className="w-full max-w-lg rounded-[28px] border border-amber-200 bg-white p-7 text-center shadow-xl">
+        <div className="text-lg font-black text-slate-950">Unable to verify dashboard access</div>
+        <div className="mt-2 text-sm font-semibold leading-6 text-slate-600">
+          {featureContextError}
+        </div>
+        <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
+          <button
+            type="button"
+            onClick={() => void loadFeatureContext()}
+            className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-black text-white transition hover:bg-indigo-700"
+          >
+            Retry access check
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              disconnectAcademyWS(true);
+              clearSession();
+            }}
+            className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+          >
+            Sign in again
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+if (
+  session &&
+  !isPlatformAdmin &&
+  !featureContextLoaded
+) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-50">
+      <div className="flex items-center gap-3 rounded-3xl border border-slate-200 bg-white px-6 py-5 font-black text-slate-700 shadow-xl">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-indigo-600" />
+        Loading department workspace...
+      </div>
+    </div>
+  );
+}
+
+if (session && !isPlatformAdmin && maintenanceState.active) {
+  return (
+    <MaintenanceScreen
+      maintenance={maintenanceState}
+      onRetry={() => void retryMaintenanceStatus()}
       onLogout={() => {
+        disconnectAcademyWS(true);
         clearSession();
         setSession(null);
+        setAuthContext(null);
+        setMaintenanceState({ active: false });
+        setPlatformNotices([]);
         navigateToTab("dashboard");
       }}
     />
   );
 }
 
-if (session?.role === "student") {
+if (
+  session &&
+  !isPlatformAdmin &&
+  isTuitionDepartment &&
+  ["coordinator", "department_admin", "institution_admin"].includes(
+    effectiveDepartmentRole
+  )
+) {
   return (
-    <StudentPortal
-      onLogout={() => {
-        clearSession();
-        setSession(null);
-        navigateToTab("dashboard");
-      }}
-    />
+    <>
+      <Suspense fallback={<TabLoading />}>
+        <TuitionCoordinatorPortal
+          department={activeDepartment}
+          features={enabledFeatures}
+          coordinatorTabs={coordinatorTabAccess}
+          user={{ ...(session.user as any), role: effectiveDepartmentRole }}
+          themeMode={themeMode}
+          onToggleTheme={toggleTheme}
+          onLogout={() => {
+            disconnectAcademyWS(true);
+            clearSession();
+            setSession(null);
+            setAuthContext(null);
+            navigateToTab("dashboard");
+          }}
+        />
+      </Suspense>
+
+      <FeatureLockedModal
+        feature={lockedFeature}
+        onClose={() => setLockedFeature(null)}
+      />
+      <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+    </>
+  );
+}
+
+if (
+  session &&
+  isTuitionDepartment &&
+  effectiveDepartmentRole === "student"
+) {
+  return (
+    <>
+      <Suspense fallback={<TabLoading />}>
+        <TuitionStudentPortal
+          departmentId={activeDepartment?.id}
+          themeMode={themeMode}
+          onToggleTheme={toggleTheme}
+          onLogout={() => {
+            disconnectAcademyWS(true);
+            clearSession();
+            setSession(null);
+            setAuthContext(null);
+            navigateToTab("dashboard");
+          }}
+        />
+      </Suspense>
+      <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+    </>
+  );
+}
+
+if (
+  session &&
+  isTuitionDepartment &&
+  effectiveDepartmentRole === "teacher"
+) {
+  return (
+    <>
+      <Suspense fallback={<TabLoading />}>
+        <TuitionTeacherPortal
+          departmentId={activeDepartment?.id}
+          themeMode={themeMode}
+          onToggleTheme={toggleTheme}
+          onLogout={() => {
+            disconnectAcademyWS(true);
+            clearSession();
+            setSession(null);
+            setAuthContext(null);
+            navigateToTab("dashboard");
+          }}
+        />
+      </Suspense>
+      <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+    </>
+  );
+}
+
+// ---------------- Separate role portals ----------------
+if (effectiveDepartmentRole === "teacher") {
+  return (
+    <>
+      <TeacherPortal
+        themeMode={themeMode}
+        onToggleTheme={toggleTheme}
+        onLogout={() => {
+          clearSession();
+          setSession(null);
+          navigateToTab("dashboard");
+        }}
+      />
+      <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+    </>
+  );
+}
+
+if (effectiveDepartmentRole === "student") {
+  return (
+    <>
+      <StudentPortal
+        departmentName={String(activeDepartment?.name || "Quran Department")}
+        onLogout={() => {
+          clearSession();
+          setSession(null);
+          navigateToTab("dashboard");
+        }}
+      />
+      <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+    </>
   );
 }
   // ---------------- Separate Platform Admin Portal ----------------
 if (isPlatformAdmin) {
   return (
-    <div className="h-screen overflow-y-auto bg-slate-50 platform-admin-scroll" tabIndex={0}>
-      <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-4 md:px-8">
-          <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-indigo-700">
-              Platform Super Admin
-            </div>
-            <h1 className="mt-2 text-xl font-black tracking-tight text-slate-950 md:text-2xl">
-              Admin Portal
-            </h1>
-            <p className="mt-0.5 text-xs font-semibold text-slate-500 md:text-sm">
-              Separate platform control center. Quran Department users will not see this portal.
-            </p>
-          </div>
+    <Suspense fallback={<TabLoading />}>
+      <PlatformAdmin
+        themeMode={themeMode}
+        onToggleTheme={toggleTheme}
+        adminName={
+          String((session as any)?.user?.full_name || sessionUsername || "Platform Administrator")
+        }
+        adminUsername={String((session as any)?.user?.username || sessionUsername || "")}
+        adminEmail={String((session as any)?.user?.email || "")}
+        onSaveAdminProfile={async ({
+          name,
+          username,
+          email,
+          currentPassword,
+          newPassword,
+        }) => {
+          if (!session) {
+            throw new Error("Main Admin session was not found. Please log in again.");
+          }
 
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={toggleTheme}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
-              title={themeMode === "dark" ? "Light Mode" : "Dark Mode"}
-            >
-              {themeMode === "dark" ? <Sun size={17} /> : <Moon size={17} />}
-              <span className="hidden sm:inline">
-                {themeMode === "dark" ? "Light" : "Dark"}
-              </span>
-            </button>
+          const nameParts = name.trim().split(/\s+/).filter(Boolean);
+          const firstName = nameParts.shift() || "";
+          const lastName = nameParts.join(" ");
 
-            <button
-              type="button"
-              onClick={() => {
-                disconnectAcademyWS();
-                clearSession();
-                setSession(null);
-                navigateToTab("dashboard");
-              }}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-rose-100 bg-rose-50 px-4 text-sm font-black text-rose-600 shadow-sm transition hover:bg-rose-100"
-              title="Logout"
-            >
-              <LogOut size={17} />
-              <span className="hidden sm:inline">Logout</span>
-            </button>
-          </div>
-        </div>
-      </header>
+          const updated = await updateMyProfile({
+            username,
+            email,
+            first_name: firstName,
+            last_name: lastName,
+            ...(currentPassword ? { current_password: currentPassword } : {}),
+            ...(newPassword ? { new_password: newPassword } : {}),
+          });
 
-      <main className="mx-auto max-w-[1600px] p-4 md:p-8">
-        <Suspense fallback={<TabLoading />}>
-          <PlatformAdmin />
-        </Suspense>
-      </main>
-    </div>
+          const nextSession: Session = {
+            ...session,
+            role: updated.role as Session["role"],
+            user: {
+              ...(session.user || {}),
+              id: updated.id,
+              username: updated.username,
+              email: updated.email,
+              first_name: updated.first_name,
+              last_name: updated.last_name,
+              full_name: updated.full_name,
+              role: updated.role as Session["role"],
+              is_staff: updated.is_staff,
+              is_superuser: updated.is_superuser,
+            },
+          };
+
+          setSession(nextSession);
+          saveSession(nextSession);
+        }}
+        onLogout={() => {
+          disconnectAcademyWS(true);
+          clearSession();
+          setSession(null);
+          setAuthContext(null);
+          navigateToTab("dashboard");
+        }}
+      />
+    </Suspense>
   );
 }
 
@@ -2354,18 +3441,18 @@ if (isPlatformAdmin) {
 ${sidebarEdgeHover ? "is-sidebar-open" : ""}
     fixed inset-y-0 left-0 z-40
     transform transition-transform duration-300 ease-in-out
-    ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full"}
+    ${mobileMenuOpen ? "translate-x-0" : "-translate-x-[110%]"}
     md:translate-x-0 md:static
 
     shrink-0
     m-3 md:m-4
-  w-[248px] md:w-[76px] md:hover:w-[248px] ${sidebarEdgeHover ? "md:!w-[248px]" : ""}
+  w-[286px] md:w-[76px] md:hover:w-[286px] ${sidebarEdgeHover ? "md:!w-[286px]" : ""}
     rounded-[28px]
     border border-white/70
     bg-white/68 backdrop-blur-2xl
     overflow-hidden
 
-    shadow-[-12px_-12px_28px_rgba(255,255,255,0.90),16px_20px_48px_rgba(15,23,42,0.13),inset_0_1px_0_rgba(255,255,255,0.88)]
+    shadow-none md:shadow-[-12px_-12px_28px_rgba(255,255,255,0.90),16px_20px_48px_rgba(15,23,42,0.13),inset_0_1px_0_rgba(255,255,255,0.88)]
 
     md:transition-[width]
     md:duration-300
@@ -2394,7 +3481,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-[13.5px] font-extrabold text-slate-950 leading-tight truncate">Iqra Virtual School</div>
-          <div className="text-[10.5px] font-semibold text-slate-500 truncate mt-0.5">Qur&apos;an Department</div>
+          <div className="text-[10.5px] font-semibold text-slate-500 truncate mt-0.5">{quranDepartmentDisplayName}</div>
         </div>
         <button onClick={() => setMobileMenuOpen(false)} className="md:hidden h-7 w-7 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-500 shrink-0" title="Close">
           <X size={14} />
@@ -2424,8 +3511,8 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
           <img src={roleIconSrc} alt={roleLabel} className="w-9 h-9 object-contain" onError={(e) => { e.currentTarget.style.display = "none"; }} />
         </div>
         <div className="min-w-0">
-          <div className="text-[13px] font-extrabold truncate">{roleLabel}</div>
-          <div className="text-[10px] text-slate-400 mt-0.5 truncate font-semibold">Management access</div>
+          <div className="text-[12.5px] font-extrabold whitespace-nowrap">{roleLabel}</div>
+          <div className="text-[10px] text-slate-400 mt-0.5 truncate font-semibold">{sidebarDisplayName}</div>
         </div>
       </div>
     </div>
@@ -2437,7 +3524,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
     {/* ─────────────────────────────────────
         NAVIGATION
     ───────────────────────────────────── */}
-    <nav className="department-sidebar-nav flex-1 px-3 pt-3 overflow-y-auto" style={{scrollbarWidth:'none',msOverflowStyle:'none'}}>
+    <nav className="flex-1 px-3 pt-3 overflow-y-auto" style={{scrollbarWidth:'none',msOverflowStyle:'none'}}>
 
       {/* Collapsed: stacked bare icons */}
       <div className="hidden md:flex md:group-hover:hidden flex-col items-center gap-2.5 py-1">
@@ -2447,13 +3534,24 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
           const active = activeTab === id;
           const locked = isTabLocked(id);
           return (
-            <button key={id} onClick={() => { handleSidebarTabClick(id); setMobileMenuOpen(false); }} title={item.label} aria-disabled={locked}
-              className={`relative transition-all duration-300 ${locked ? "opacity-55" : ""}`}>
-              <div className={`w-[52px] h-[52px] rounded-[17px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${active ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]" : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"}`}>
-                <Icon size={20} />
+            <button
+              key={id}
+              onClick={() => { handleSidebarTabClick(id); setMobileMenuOpen(false); }}
+              title={locked ? `${item.label} is locked` : item.label}
+              aria-disabled={locked}
+              className="transition-all duration-300"
+            >
+              <div className={`relative w-[52px] h-[52px] rounded-[17px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${
+                locked
+                  ? "border border-slate-300 bg-slate-100 text-slate-400 grayscale opacity-75 shadow-inner"
+                  : active
+                    ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]"
+                    : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"
+              }`}>
+                <Icon size={20} className={locked ? "opacity-45" : ""} />
                 {locked && (
-                  <span className="feature-lock-badge absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full border border-white bg-amber-400 text-[10px] shadow-sm">
-                    🔒
+                  <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full border border-white bg-slate-700 text-white shadow-sm">
+                    <LockKeyhole size={10} />
                   </span>
                 )}
               </div>
@@ -2473,27 +3571,41 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
             <button
               key={id}
               onClick={() => { handleSidebarTabClick(id); setMobileMenuOpen(false); }}
+              title={locked ? `${item.label} is locked` : item.label}
               aria-disabled={locked}
-              title={locked ? `${item.label} - not enabled` : item.label}
-              className={`w-full rounded-[18px] transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${active ? "bg-white/72 shadow-[-5px_-5px_14px_rgba(255,255,255,0.97),7px_9px_18px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,1)]" : "hover:bg-white/45"}`}
+              className={`w-full rounded-[18px] transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${
+                locked
+                  ? "bg-slate-100/85 grayscale opacity-75"
+                  : active
+                    ? "bg-white/72 shadow-[-5px_-5px_14px_rgba(255,255,255,0.97),7px_9px_18px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,1)]"
+                    : "hover:bg-white/45"
+              }`}
             >
-              {/* 52px col = icon (46px) + 3px padding each side — label starts right after */}
-              <div className="grid grid-cols-[52px_1fr] items-center">
+              <div className="grid grid-cols-[52px_1fr_26px] items-center">
                 <div className="flex items-center justify-center py-1.5">
-                  <div className={`relative w-[46px] h-[46px] rounded-[15px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${active ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]" : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"}`}>
-                    <Icon size={19} />
-                    {locked && (
-                      <span className="feature-lock-badge absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full border border-white bg-amber-400 text-[10px] shadow-sm">
-                        🔒
-                      </span>
-                    )}
+                  <div className={`relative w-[46px] h-[46px] rounded-[15px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${
+                    locked
+                      ? "border border-slate-300 bg-slate-200 text-slate-400 shadow-inner"
+                      : active
+                        ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]"
+                        : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"
+                  }`}>
+                    <Icon size={19} className={locked ? "opacity-45" : ""} />
                   </div>
                 </div>
-                {/* No extra padding-left — label starts flush with end of icon col */}
                 <div className="min-w-0 pr-2">
-                  <span className={`block font-extrabold text-[13.5px] whitespace-nowrap truncate ${active ? "text-indigo-700" : "text-slate-700"}`}>
+                  <span className={`block font-extrabold text-[13.5px] whitespace-nowrap truncate ${
+                    locked ? "text-slate-500" : active ? "text-indigo-700" : "text-slate-700"
+                  }`}>
                     {item.label}
                   </span>
+                </div>
+                <div className="flex justify-center">
+                  {locked && (
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-700 text-white shadow-sm">
+                      <LockKeyhole size={12} />
+                    </span>
+                  )}
                 </div>
               </div>
             </button>
@@ -2510,28 +3622,37 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
   <div className="hidden md:flex md:group-hover:hidden items-center justify-center">
     <button
       type="button"
-      onClick={() => setAssistantOpen(true)}
-      className="
-        h-[54px] w-[54px] rounded-[18px]
-        bg-white/90 border border-slate-200/80
-        shadow-[-6px_-6px_14px_rgba(255,255,255,0.95),6px_8px_18px_rgba(15,23,42,0.10)]
-        flex items-center justify-center overflow-hidden
-        transition hover:bg-white active:scale-[0.97]
-      "
-      title="Open AI Assistant"
-      aria-label="Open AI Assistant"
+      onClick={() => {
+        if (!hasFeature("ai_assistant")) {
+          showFeatureLocked(
+            "AI Assistant",
+            `${quranDepartmentDisplayName} AI Assistant is currently disabled by Main Admin.`,
+          );
+          return;
+        }
+        setAssistantOpen(true);
+      }}
+      className={`relative h-[54px] w-[54px] rounded-[18px] border flex items-center justify-center overflow-hidden transition active:scale-[0.97] ${
+        hasFeature("ai_assistant")
+          ? "bg-white/90 border-slate-200/80 shadow-[-6px_-6px_14px_rgba(255,255,255,0.95),6px_8px_18px_rgba(15,23,42,0.10)] hover:bg-white"
+          : "border-slate-300 bg-slate-100 text-slate-500 grayscale opacity-75 shadow-inner"
+      }`}
+      title={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
+      aria-label={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
     >
-      {aiBotAnimation ? (
-        <Lottie
-          animationData={aiBotAnimation}
-          loop
-          autoplay
-          className="h-12 w-12 pointer-events-none"
-        />
+      {hasFeature("ai_assistant") ? (
+        aiBotAnimation ? (
+          <Lottie
+            animationData={aiBotAnimation}
+            loop
+            autoplay
+            className="h-12 w-12 pointer-events-none"
+          />
+        ) : (
+          <div className="text-[10px] font-black text-slate-500">AI</div>
+        )
       ) : (
-        <div className="text-[10px] font-black text-slate-500">
-          AI
-        </div>
+        <LockKeyhole size={20} />
       )}
     </button>
   </div>
@@ -2540,41 +3661,51 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
   <button
     type="button"
     onClick={() => {
+      if (!hasFeature("ai_assistant")) {
+        showFeatureLocked(
+          "AI Assistant",
+          `${quranDepartmentDisplayName} AI Assistant is currently disabled by Main Admin.`,
+        );
+        return;
+      }
       setAssistantOpen(true);
       setMobileMenuOpen(false);
     }}
-    className="
-      flex md:hidden md:group-hover:flex
-      w-full items-center gap-3 rounded-[22px]
-      bg-white/80 border border-white/90
-      px-3 py-3 text-left
-      shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)]
-      transition hover:bg-white active:scale-[0.99]
-    "
-    title="Open AI Assistant"
-    aria-label="Open AI Assistant"
+    className={`flex md:hidden md:group-hover:flex w-full items-center gap-3 rounded-[22px] border px-3 py-3 text-left transition active:scale-[0.99] ${
+      hasFeature("ai_assistant")
+        ? "bg-white/80 border-white/90 shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)] hover:bg-white"
+        : "border-slate-300 bg-slate-100 text-slate-500 grayscale opacity-75 shadow-inner"
+    }`}
+    title={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
+    aria-label={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
   >
-    <div className="h-[58px] w-[58px] rounded-[20px] bg-white border border-slate-200/70 flex items-center justify-center overflow-hidden shrink-0">
-      {aiBotAnimation ? (
-        <Lottie
-          animationData={aiBotAnimation}
-          loop
-          autoplay
-          className="h-14 w-14 pointer-events-none"
-        />
+    <div className={`h-[58px] w-[58px] rounded-[20px] border flex items-center justify-center overflow-hidden shrink-0 ${
+      hasFeature("ai_assistant")
+        ? "bg-white border-slate-200/70"
+        : "border-slate-300 bg-slate-200 text-slate-500"
+    }`}>
+      {hasFeature("ai_assistant") ? (
+        aiBotAnimation ? (
+          <Lottie
+            animationData={aiBotAnimation}
+            loop
+            autoplay
+            className="h-14 w-14 pointer-events-none"
+          />
+        ) : (
+          <div className="text-xs font-black text-slate-500">AI</div>
+        )
       ) : (
-        <div className="text-xs font-black text-slate-500">
-          AI
-        </div>
+        <LockKeyhole size={22} />
       )}
     </div>
 
     <div className="min-w-0">
-      <div className="text-[13px] font-extrabold text-slate-950 truncate">
+      <div className={`text-[13px] font-extrabold truncate ${hasFeature("ai_assistant") ? "text-slate-950" : "text-slate-500"}`}>
         AI Assistant
       </div>
       <div className="text-[10.5px] font-semibold text-slate-500 truncate mt-0.5">
-        Quick help anytime
+        {hasFeature("ai_assistant") ? "Quick help anytime" : "Locked by Main Admin"}
       </div>
     </div>
   </button>
@@ -2621,8 +3752,8 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
       {/* Content */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
-       <header className="mx-3 md:mx-4 mt-3 md:mt-4 mb-2">
-  <div className="rounded-[28px] border border-slate-200/80 bg-white/82 backdrop-blur-xl shadow-[0_16px_40px_rgba(15,23,42,0.06)] px-4 md:px-6 py-3">
+       <header className="mx-3 md:mx-4 mt-2 md:mt-3 mb-1.5">
+  <div className="rounded-[24px] border border-slate-200/80 bg-white/82 backdrop-blur-xl shadow-[0_16px_40px_rgba(15,23,42,0.06)] px-4 md:px-5 py-2">
     <div className="flex items-center justify-between gap-4">
       {/* Left */}
       <div className="flex items-center gap-3 min-w-0">
@@ -2634,7 +3765,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
           <Menu size={20} />
         </button>
         <div className="hidden md:flex items-center gap-3">
-          <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-[0_18px_34px_-18px_rgba(37,99,235,0.70)] shrink-0">
+          <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-[0_18px_34px_-18px_rgba(37,99,235,0.70)] shrink-0">
             <ActiveTopIcon size={21} />
           </div>
           <div className="min-w-0">
@@ -2652,7 +3783,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
       <div className="flex items-center gap-3 sm:gap-4">
         <div
           className="
-            px-3 py-2 rounded-3xl
+            px-2.5 py-1 rounded-[24px]
             bg-white/72 backdrop-blur
             border border-slate-200/80
             shadow-[0_12px_28px_rgba(15,23,42,0.07)]
@@ -2661,7 +3792,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
           <TopbarClock />
         </div>
 
-{isSuperAdmin ? (
+{(isSuperAdmin || isDepartmentAdmin) ? (
   <button
     onClick={() => {
       setModalMode("settings");
@@ -2669,7 +3800,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
     }}
     className="
       inline-flex items-center justify-center
-      w-11 h-11 rounded-2xl
+      w-10 h-10 rounded-2xl
       bg-white/80 backdrop-blur
       border border-slate-200/80
       shadow-[0_12px_28px_rgba(15,23,42,0.07)]
@@ -2685,7 +3816,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
     onClick={toggleTheme}
     className="
       inline-flex items-center justify-center
-      w-11 h-11 rounded-2xl
+      w-10 h-10 rounded-2xl
       bg-white/80 backdrop-blur
       border border-slate-200/80
       shadow-[0_12px_28px_rgba(15,23,42,0.07)]
@@ -2704,7 +3835,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
         <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-16 md:pb-8">
           
-              {activeTab === "dashboard" && hasFeature("tab_daily_classes") && (
+              {activeTab === "dashboard" && canAccessPortalTab("dashboard") && hasFeature("tab_daily_classes") && (
   <div className="w-full max-w-none mx-auto space-y-6">
     {/* ✅ KPI Row */}
 {/* ✅ Pretty background banner like your reference */}
@@ -2798,7 +3929,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
   <div className="mt-5 grid grid-cols-1 xl:grid-cols-2 gap-5">
     {/* Attendance Snapshot */}
-    <div className="relative overflow-hidden rounded-[28px] border border-slate-200/70 bg-white/80 p-5 shadow-[0_18px_45px_rgba(15,23,42,0.06)] dark:bg-slate-900/75 dark:border-slate-700/70">
+    <div className="relative overflow-hidden rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_22px_rgba(15,23,42,0.035)] dark:bg-slate-900/75 dark:border-slate-700/70">
       <div className="pointer-events-none absolute -top-20 -right-20 h-44 w-44 rounded-full bg-emerald-200/35 blur-3xl dark:bg-emerald-500/10" />
       <div className="pointer-events-none absolute -bottom-20 -left-20 h-44 w-44 rounded-full bg-indigo-200/25 blur-3xl dark:bg-indigo-500/10" />
 
@@ -2873,7 +4004,6 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
         </div>
       </div>
     </div>
-    </div>
 
 {/* Timeline */}
 {(() => {
@@ -2912,73 +4042,25 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
       ? chartData.reduce((best, item) => (item.count > best.count ? item : best), chartData[0])
       : null;
 
+
   return (
     <div
       ref={timelineCardRef}
-      className="relative overflow-hidden rounded-[32px] border border-slate-200/70 bg-white/80 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:bg-slate-900/75 dark:border-slate-700/70"
+      className="relative overflow-hidden rounded-[26px] border border-slate-200/60 bg-white/70 p-4 shadow-[0_12px_32px_rgba(15,23,42,0.045)] dark:bg-slate-900/70 dark:border-slate-700/70"
     >
-      {/* Decorative glow */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.12),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(59,130,246,0.08),transparent_30%)]" />
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/60 to-transparent" />
-
-      {/* Header */}
-      <div className="relative z-10 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div className="flex items-start gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-[0_12px_25px_rgba(16,185,129,0.28)]">
-            <BarChart3 size={22} />
-          </div>
-
-          <div>
-            <div className="text-xl font-black tracking-tight text-slate-900 dark:text-white">
-              Timeline Today
-            </div>
-            <div className="mt-1 text-sm font-medium text-slate-500 dark:text-slate-400">
-              Real-time class distribution across the full day
-            </div>
-          </div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+          <BarChart3 size={17} className="text-emerald-600" />
+          Timeline Today
         </div>
 
-        <div className="inline-flex items-center gap-2 self-start rounded-2xl border border-slate-200/80 bg-white/85 px-4 py-3 shadow-sm dark:bg-slate-800/80 dark:border-slate-700">
-          <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="text-sm font-black text-slate-700 dark:text-slate-200">
-            Now: {formatTime12(currentSlot)}
-          </span>
-        </div>
+        <span className="text-xs font-semibold text-slate-600 bg-white/75 border border-slate-100 px-3 py-1.5 rounded-full dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300">
+          Now: {formatTime12(currentSlot)}
+        </span>
       </div>
 
-      {/* Mini stat cards */}
-      <div className="relative z-10 mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
-        <div className="rounded-[22px] border border-slate-200/70 bg-white/75 px-4 py-3 shadow-sm dark:bg-slate-800/60 dark:border-slate-700">
-          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">
-            Total Classes Today
-          </div>
-          <div className="mt-1 text-2xl font-black text-slate-900 dark:text-white">
-            {totalTodayClasses}
-          </div>
-        </div>
-
-        <div className="rounded-[22px] border border-slate-200/70 bg-white/75 px-4 py-3 shadow-sm dark:bg-slate-800/60 dark:border-slate-700">
-          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">
-            Current Slot Load
-          </div>
-          <div className="mt-1 text-2xl font-black text-emerald-600 dark:text-emerald-400">
-            {currentSlotCount}
-          </div>
-        </div>
-
-        <div className="rounded-[22px] border border-slate-200/70 bg-white/75 px-4 py-3 shadow-sm dark:bg-slate-800/60 dark:border-slate-700">
-          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">
-            Peak Time
-          </div>
-          <div className="mt-1 text-lg font-black text-slate-900 dark:text-white">
-            {peakSlot ? `${peakSlot.timeLabel} • ${peakSlot.count} classes` : "No data"}
-          </div>
-        </div>
-      </div>
-
-      {/* Chart area */}
       <div
-        className="relative z-10 mt-5 h-[340px] rounded-[28px] border border-slate-200/70 bg-white/70 p-4 shadow-inner dark:bg-slate-950/40 dark:border-slate-700"
+        className="relative mt-4 w-full h-[245px] rounded-[22px] border border-slate-200/60 bg-white/65 p-3 dark:bg-slate-950/35 dark:border-slate-700"
         onMouseLeave={() => {
           setTimelinePopup((prev) => {
             if (!prev || prev.pinned) return prev;
@@ -2987,83 +4069,56 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
         }}
       >
         {chartData.length === 0 ? (
-          <div className="flex h-full items-center justify-center rounded-[24px] border border-dashed border-slate-300/70 text-center dark:border-slate-700">
+          <div className="flex h-full items-center justify-center rounded-[22px] border border-dashed border-slate-200/80 text-center dark:border-slate-700">
             <div>
-              <div className="text-base font-black text-slate-700 dark:text-slate-200">
+              <div className="text-sm font-black text-slate-700 dark:text-slate-200">
                 No classes found for today
               </div>
-              <div className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              <div className="mt-1 text-xs font-semibold text-slate-400 dark:text-slate-500">
                 Once today’s schedules are available, the graph will appear here.
               </div>
             </div>
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={205}>
             <BarChart
               data={chartData}
-              margin={{ top: 12, right: 10, left: -10, bottom: 10 }}
+              margin={{ top: 8, right: 10, left: -20, bottom: 0 }}
               accessibilityLayer={false}
             >
-              <defs>
-                <linearGradient id="timelineBarDefault" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#cbd5e1" />
-                  <stop offset="100%" stopColor="#94a3b8" />
-                </linearGradient>
-
-                <linearGradient id="timelineBarCurrent" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#22c55e" />
-                  <stop offset="100%" stopColor="#16a34a" />
-                </linearGradient>
-
-                <linearGradient id="timelineBarActive" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10b981" />
-                  <stop offset="100%" stopColor="#0f766e" />
-                </linearGradient>
-
-                <linearGradient id="timelineBarEmpty" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#e2e8f0" />
-                  <stop offset="100%" stopColor="#cbd5e1" />
-                </linearGradient>
-              </defs>
-
-              <CartesianGrid
-                vertical={false}
-                strokeDasharray="4 6"
-                stroke="#e2e8f0"
-                opacity={0.65}
-              />
-
               <XAxis
                 dataKey="timeLabel"
-                tick={{ fontSize: 11, fill: "#64748b", fontWeight: 600 }}
+                tick={{ fontSize: 10, fill: "#64748b" }}
                 axisLine={false}
                 tickLine={false}
-                dy={10}
+                dy={8}
               />
 
               <YAxis
                 allowDecimals={false}
                 axisLine={false}
                 tickLine={false}
-                tick={{ fontSize: 11, fill: "#64748b", fontWeight: 600 }}
+                tick={{ fontSize: 10, fill: "#64748b" }}
               />
 
               <Bar
+                isAnimationActive={false}
                 dataKey="count"
-                radius={[14, 14, 14, 14]}
-                maxBarSize={32}
+                radius={[9, 9, 9, 9]}
                 onMouseEnter={(data: any, _index: number, event: any) => {
-                  if (timelinePopup?.pinned) return;
+                  const current = timelinePopup;
+                  if (current?.pinned) return;
 
                   const card = timelineCardRef.current;
                   if (!card) return;
 
                   const rect = card.getBoundingClientRect();
-                  let x = event?.clientX ? event.clientX - rect.left + 18 : 260;
-                  let y = event?.clientY ? event.clientY - rect.top - 40 : 90;
 
-                  x = Math.max(16, Math.min(x, rect.width - 290));
-                  y = Math.max(70, Math.min(y, rect.height - 235));
+                  let x = event?.clientX ? event.clientX - rect.left + 16 : 260;
+                  let y = event?.clientY ? event.clientY - rect.top - 30 : 70;
+
+                  x = Math.max(16, Math.min(x, rect.width - 280));
+                  y = Math.max(58, Math.min(y, rect.height - 230));
 
                   setTimelinePopup({
                     slot: data.time,
@@ -3079,11 +4134,12 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
                   if (!card) return;
 
                   const rect = card.getBoundingClientRect();
-                  let x = event?.clientX ? event.clientX - rect.left + 18 : 260;
-                  let y = event?.clientY ? event.clientY - rect.top - 40 : 90;
 
-                  x = Math.max(16, Math.min(x, rect.width - 290));
-                  y = Math.max(70, Math.min(y, rect.height - 235));
+                  let x = event?.clientX ? event.clientX - rect.left + 16 : 260;
+                  let y = event?.clientY ? event.clientY - rect.top - 30 : 70;
+
+                  x = Math.max(16, Math.min(x, rect.width - 280));
+                  y = Math.max(58, Math.min(y, rect.height - 230));
 
                   setTimelinePopup({
                     slot: data.time,
@@ -3097,11 +4153,12 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
                   if (!card) return;
 
                   const rect = card.getBoundingClientRect();
-                  let x = event?.clientX ? event.clientX - rect.left + 18 : 260;
-                  let y = event?.clientY ? event.clientY - rect.top - 40 : 90;
 
-                  x = Math.max(16, Math.min(x, rect.width - 290));
-                  y = Math.max(70, Math.min(y, rect.height - 235));
+                  let x = event?.clientX ? event.clientX - rect.left + 16 : 260;
+                  let y = event?.clientY ? event.clientY - rect.top - 30 : 70;
+
+                  x = Math.max(16, Math.min(x, rect.width - 280));
+                  y = Math.max(58, Math.min(y, rect.height - 230));
 
                   setTimelinePopup({
                     slot: data.time,
@@ -3110,19 +4167,20 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
                     pinned: true,
                   });
                 }}
-                style={{ cursor: "pointer", outline: "none" }}
+                style={{
+                  cursor: "pointer",
+                  outline: "none",
+                }}
               >
                 {chartData.map((item, index) => (
                   <Cell
                     key={`cell-${index}`}
                     fill={
                       timelinePopup?.slot === item.time
-                        ? "url(#timelineBarActive)"
+                        ? "#10b981"
                         : item.time === currentSlot
-                        ? "url(#timelineBarCurrent)"
-                        : item.count === 0
-                        ? "url(#timelineBarEmpty)"
-                        : "url(#timelineBarDefault)"
+                        ? "#22c55e"
+                        : "#cbd5e1"
                     }
                   />
                 ))}
@@ -3131,15 +4189,15 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
           </ResponsiveContainer>
         )}
 
-        {/* Floating popup */}
+        {/* Floating hover / pinned popup */}
         {timelinePopup && (
           <div
             className={`
-              absolute z-30 w-[280px] rounded-[22px]
-              border border-slate-200/80 bg-white/95
-              p-4 backdrop-blur-xl
-              shadow-[0_24px_60px_rgba(15,23,42,0.18)]
-              dark:bg-slate-900/95 dark:border-slate-700
+              absolute z-30 w-[260px] rounded-[20px]
+              border border-slate-200/80 bg-white/96
+              p-3 backdrop-blur-xl
+              shadow-[0_18px_45px_rgba(15,23,42,0.14)]
+              dark:bg-slate-900/96 dark:border-slate-700
               ${timelinePopup.pinned ? "pointer-events-auto" : "pointer-events-none"}
             `}
             style={{
@@ -3147,17 +4205,16 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
               top: timelinePopup.y,
             }}
           >
-            <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="mb-2 flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-black text-slate-900 dark:text-white">
-                  {formatTime12(timelinePopup.slot)}
+                <div className="text-xs font-black text-slate-900 dark:text-white">
+                  {formatTime12(timelinePopup.slot)} Classes
                 </div>
-                <div className="mt-1 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                  {viewStudents.filter(
-                    (s) =>
-                      String(s.timeSlot || "").slice(0, 5) === timelinePopup.slot &&
-                      (s.classDays || []).includes(currentDayName)
-                  ).length} classes in this slot
+
+                <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                  {timelinePopup.pinned
+                    ? "Pinned. Scroll this list."
+                    : "Click this bar to pin"}
                 </div>
               </div>
 
@@ -3165,7 +4222,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
                 <button
                   type="button"
                   onClick={() => setTimelinePopup(null)}
-                  className="rounded-full border border-slate-200 px-2.5 py-1 text-[10px] font-black text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
+                  className="rounded-full px-2 py-1 text-[10px] font-black text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
                 >
                   Clear
                 </button>
@@ -3174,8 +4231,8 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
             <div
               className={`
-                space-y-2 pr-1 custom-scrollbar
-                ${timelinePopup.pinned ? "max-h-[165px] overflow-y-auto" : "max-h-[145px] overflow-hidden"}
+                space-y-1.5 pr-1 custom-scrollbar
+                ${timelinePopup.pinned ? "max-h-[155px] overflow-y-auto" : "max-h-[135px] overflow-hidden"}
               `}
             >
               {viewStudents
@@ -3184,22 +4241,12 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
                     String(s.timeSlot || "").slice(0, 5) === timelinePopup.slot &&
                     (s.classDays || []).includes(currentDayName)
                 )
-                .map((s, idx) => (
+                .map((s) => (
                   <div
                     key={s.id}
-                    className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50/90 px-3 py-2.5 dark:bg-slate-950/70 dark:border-slate-700"
+                    className="rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-2 text-[11px] font-bold text-slate-700 dark:bg-slate-950/70 dark:border-slate-700 dark:text-slate-200"
                   >
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-[11px] font-black text-white shadow-sm">
-                      {idx + 1}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="truncate text-[12px] font-bold text-slate-800 dark:text-slate-100">
-                        {s.name}
-                      </div>
-                      <div className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
-                        {formatTime12(String(s.timeSlot || "").slice(0, 5))}
-                      </div>
-                    </div>
+                    {s.name}
                   </div>
                 ))}
 
@@ -3219,19 +4266,20 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
     </div>
   );
 })()}
+  </div>
 </details>
 
     {/* ✅ Main content: Classes first (this is what admins care about) */}
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+    <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start lg:gap-6">
       {/* Live Now */}
-      <section className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-base font-extrabold text-slate-800 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+      <section className="min-w-0 space-y-2 lg:max-h-[calc(100vh-14rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="flex items-center gap-3 text-xl font-black text-slate-950 dark:text-white">
+            <span className="h-3 w-3 rounded-full bg-rose-500 animate-pulse" />
             Live Now
           </h3>
-          <span className="text-xs font-semibold text-slate-600 bg-white/70 border border-slate-100 px-3 py-1 rounded-full">
-            {formatTime12(currentSlot)}
+          <span className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+            {currentClasses.length} class{currentClasses.length === 1 ? "" : "es"}
           </span>
         </div>
 
@@ -3240,7 +4288,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
             No classes scheduled for {formatTime12(currentSlot)}
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-2">
 {currentClasses.map((student) => {
   const teacher = viewTeachers.find((t) => t.id === student.teacherId);
 
@@ -3274,6 +4322,8 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
           unmarkAttendance(teacherId, EntityType.TEACHER, student.timeSlot)
         }
         isCurrentSession={true}
+        onOpenStudent={(item) => openDashboardAccountEditor("student", item.id)}
+        onOpenTeacher={(item) => openDashboardAccountEditor("teacher", item.id)}
       />
     </React.Fragment>
   );
@@ -3285,13 +4335,13 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
       </section>
 
       {/* Up Next */}
-      <section className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-base font-extrabold text-slate-800 flex items-center gap-2">
-            Up Next <ChevronRight size={16} className="text-slate-400" />
+      <section className="min-w-0 space-y-2 lg:max-h-[calc(100vh-14rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="flex items-center gap-2 text-xl font-black text-slate-950 dark:text-white">
+            Up Next <ChevronRight size={19} className="text-slate-400" />
           </h3>
-          <span className="text-xs font-semibold text-slate-600 bg-white/70 border border-slate-100 px-3 py-1 rounded-full">
-            {formatTime12(nextSlot)}
+          <span className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+            Next scheduled classes
           </span>
         </div>
 
@@ -3300,7 +4350,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
             No classes scheduled for {formatTime12(nextSlot)}
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-2">
 {nextClasses.map((student) => {
   const teacher = viewTeachers.find((t) => t.id === student.teacherId);
 
@@ -3335,6 +4385,8 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
           unmarkAttendance(teacherId, EntityType.TEACHER, student.timeSlot)
         }
         isCurrentSession={false}
+        onOpenStudent={(item) => openDashboardAccountEditor("student", item.id)}
+        onOpenTeacher={(item) => openDashboardAccountEditor("teacher", item.id)}
       />
     </React.Fragment>
   );
@@ -3350,7 +4402,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
 
           {/* SCHEDULING */}
-{activeTab === "scheduling" && hasFeature("tab_scheduling") && (
+{activeTab === "scheduling" && canAccessPortalTab("scheduling") && hasFeature("tab_scheduling") && (
   <SchedulingTab
     appState={viewAppState}
     onCellClick={(teacherId, timeSlot, students) => {
@@ -3365,12 +4417,12 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
 
 {/* ATTENDANCE */}
-{activeTab === "attendance" && hasFeature("tab_attendance") && (
+{activeTab === "attendance" && canAccessPortalTab("attendance") && hasFeature("tab_attendance") && (
   <div className="w-full max-w-none mx-auto space-y-6">
     <div className="bg-white/85 backdrop-blur-xl p-6 rounded-[28px] shadow-[0_18px_55px_rgba(15,23,42,0.08)] border border-slate-200/80">
       <h3 className="font-bold text-lg text-slate-950">Attendance</h3>
       <p className="text-sm text-slate-500 mt-1">
-        Student attendance is marked on each class card. Teacher attendance is also available on the same student cards.
+        Student and teacher attendance are recorded separately. Teacher absences require substitute coverage when applicable.
       </p>
     </div>
 
@@ -3385,12 +4437,29 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 )}
 
 {/* ACCOUNTS */}
-{activeTab === "accounts" && (
+{activeTab === "accounts" && canAccessPortalTab("accounts") && hasFeature("tab_accounts_enrollment") && (
   <Suspense fallback={<TabLoading />}>
     <CoordinatorAccounts
       canBulkImport={hasFeature("bulk_import")}
       canDeleteAccounts={hasFeature("delete_accounts")}
+      features={enabledFeatures}
+      editTarget={dashboardAccountEditTarget}
+      onEditTargetHandled={() => setDashboardAccountEditTarget(null)}
     />
+  </Suspense>
+)}
+
+{/* DROPPED & LEAVE */}
+{activeTab === "dropped-leave" && canAccessPortalTab("dropped-leave") && hasFeature("tab_dropped_leave") && (
+  <Suspense fallback={<TabLoading />}>
+    <QuranDroppedLeave />
+  </Suspense>
+)}
+
+{/* TEACHER SALARY MANAGEMENT */}
+{activeTab === "teacher-salary" && session?.role !== "coordinator" && hasFeature("tab_teacher_salary") && (
+  <Suspense fallback={<TabLoading />}>
+    <TeacherSalaryManagement departmentName={quranDepartmentDisplayName} />
   </Suspense>
 )}
 
@@ -3403,7 +4472,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
 
 {/* LESSONS CONTROL */}
-{activeTab === "lessons" && hasFeature("tab_lessons_control") && (
+{activeTab === "lessons" && canAccessPortalTab("lessons") && hasFeature("tab_lessons_control") && (
   <div className="w-full max-w-none mx-auto">
     <Suspense fallback={<TabLoading />}>
       <CoordinatorLessons />
@@ -3412,11 +4481,12 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 )}
 
 {/* REPORTS */}
-{activeTab === "reports" && hasFeature("tab_reports") && (
+{activeTab === "reports" && canAccessPortalTab("reports") && hasFeature("tab_reports") && (
   <div className="w-full max-w-none mx-auto">
     <Suspense fallback={<TabLoading />}>
       <ReportsTab
         appState={viewAppState}
+        departmentName={quranDepartmentDisplayName}
         canExportPdf={hasFeature("pdf_reports")}
         canExportCsv={hasFeature("csv_export")}
         canExportExcel={hasFeature("excel_export")}
@@ -3450,6 +4520,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
         feature={lockedFeature}
         onClose={() => setLockedFeature(null)}
       />
+      <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
 
       {/* MODALS */}
       {showModal && (
@@ -3837,11 +4908,11 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
     </div>
 
     <div className="p-6">
-      {isSuperAdmin && (
+      {(isSuperAdmin || isDepartmentAdmin) && (
         <form onSubmit={saveSuperAdminProfile} className="space-y-5">
           <div>
             <h4 className="text-lg font-black text-slate-950">
-              Super Admin Profile
+              Department Admin Profile
             </h4>
             <p className="mt-1 text-sm font-semibold text-slate-500">
               Update your username, name, email, and password.
@@ -3970,7 +5041,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
         </form>
       )}
 
-      {!isSuperAdmin && (
+      {!(isSuperAdmin || isDepartmentAdmin) && (
         <div>
           <h4 className="text-lg font-black text-slate-950">
             Appearance
@@ -4025,6 +5096,9 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
     from { opacity: 0; transform: translateY(14px); }
     to   { opacity: 1; transform: translateY(0); }
   }
+
+
+
 @media (min-width: 768px) {
   .is-sidebar-open [class~="md:group-hover:hidden"] {
     display: none !important;

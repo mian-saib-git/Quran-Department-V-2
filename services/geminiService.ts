@@ -50,6 +50,12 @@ function getTodayName(): string {
 }
 
 function buildAssistantData(appState: AppState & { assistantContext?: any }) {
+  const session: any = loadSession();
+  const departmentName = String(
+    session?.user?.department?.name ||
+    session?.department?.name ||
+    "Quran Department"
+  ).trim() || "Quran Department";
   const teachers = appState.teachers ?? [];
   const students = appState.students ?? [];
   const attendance = appState.attendance ?? [];
@@ -118,7 +124,7 @@ function buildAssistantData(appState: AppState & { assistantContext?: any }) {
 
   return {
     schoolName: "Iqra Virtual School",
-    department: "Qur'an Department",
+    department: departmentName,
 
     currentDate: today,
     currentDay: todayName,

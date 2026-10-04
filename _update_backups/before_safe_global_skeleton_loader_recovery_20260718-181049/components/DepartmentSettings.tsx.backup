@@ -1,0 +1,598 @@
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Building2,
+  CalendarDays,
+  CheckCircle2,
+  FileText,
+  LayoutDashboard,
+  Layers3,
+  Loader2,
+  RefreshCw,
+  Search,
+  Settings2,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  ToggleLeft,
+  ToggleRight,
+  Trash2,
+  Upload,
+} from "lucide-react";
+
+import {
+  getDepartmentFeatures,
+  getPlatformDepartments,
+  updateDepartmentFeature,
+  type PlatformDepartment,
+  type PlatformFeature,
+} from "../services/djangoApiService";
+import { loadSession } from "../services/sessionService";
+import { SkeletonBlock } from "./SkeletonLoader";
+
+type FeatureState = {
+  department: PlatformDepartment | null;
+  features: PlatformFeature[];
+};
+
+type FeatureCategory = {
+  id: string;
+  title: string;
+  subtitle: string;
+  keys: string[];
+  icon: React.ElementType;
+  accent: string;
+  soft: string;
+};
+
+const FEATURE_CATEGORIES: FeatureCategory[] = [
+  {
+    id: "tabs",
+    title: "Main Portal Tabs",
+    subtitle: "Control which full sections appear in the department sidebar.",
+    keys: [
+      "tab_daily_classes",
+      "tab_accounts_enrollment",
+      "tab_lessons_control",
+      "tab_scheduling",
+      "tab_attendance",
+      "tab_reports",
+    ],
+    icon: LayoutDashboard,
+    accent: "text-indigo-700 bg-indigo-50 border-indigo-100",
+    soft: "from-indigo-50/80 to-blue-50/50",
+  },
+  {
+    id: "reports",
+    title: "Reports & Exports",
+    subtitle: "Control report buttons and downloadable export formats.",
+    keys: ["pdf_reports", "csv_export", "excel_export"],
+    icon: FileText,
+    accent: "text-blue-700 bg-blue-50 border-blue-100",
+    soft: "from-blue-50/80 to-cyan-50/50",
+  },
+  {
+    id: "accounts",
+    title: "Accounts & Enrollment",
+    subtitle: "Control bulk enrollment and account safety actions.",
+    keys: ["bulk_import", "delete_accounts"],
+    icon: Upload,
+    accent: "text-emerald-700 bg-emerald-50 border-emerald-100",
+    soft: "from-emerald-50/80 to-teal-50/50",
+  },
+  {
+    id: "scheduling",
+    title: "Scheduling Actions",
+    subtitle: "Control sensitive actions inside the schedule matrix.",
+    keys: ["delete_schedule"],
+    icon: CalendarDays,
+    accent: "text-amber-700 bg-amber-50 border-amber-100",
+    soft: "from-amber-50/80 to-orange-50/50",
+  },
+  {
+    id: "smart",
+    title: "Smart Tools",
+    subtitle: "Control assistant and future AI-powered tools.",
+    keys: ["ai_assistant"],
+    icon: Sparkles,
+    accent: "text-violet-700 bg-violet-50 border-violet-100",
+    soft: "from-violet-50/80 to-fuchsia-50/50",
+  },
+];
+
+const ALL_CATEGORY_KEYS = new Set(FEATURE_CATEGORIES.flatMap((category) => category.keys));
+
+export default function DepartmentSettings() {
+  const session = loadSession();
+  const isSuperAdmin = Boolean((session as any)?.user?.is_superuser);
+
+  const [departments, setDepartments] = useState<PlatformDepartment[]>([]);
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState<number | null>(null);
+  const [featureState, setFeatureState] = useState<FeatureState>({
+    department: null,
+    features: [],
+  });
+  const [search, setSearch] = useState("");
+  const [loadingDepartments, setLoadingDepartments] = useState(true);
+  const [loadingFeatures, setLoadingFeatures] = useState(false);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+
+  const selectedDepartment = useMemo(
+    () => departments.find((item) => item.id === selectedDepartmentId) || null,
+    [departments, selectedDepartmentId]
+  );
+
+  const filteredFeatures = useMemo(() => {
+    const term = search.trim().toLowerCase();
+
+    if (!term) return featureState.features;
+
+    return featureState.features.filter((item) => {
+      return (
+        String(item.name || "").toLowerCase().includes(term) ||
+        String(item.key || "").toLowerCase().includes(term) ||
+        String(item.description || "").toLowerCase().includes(term)
+      );
+    });
+  }, [featureState.features, search]);
+
+  const groupedFeatures = useMemo(() => {
+    const featureMap = new Map(filteredFeatures.map((feature) => [feature.key, feature]));
+
+    const groups = FEATURE_CATEGORIES.map((category) => ({
+      ...category,
+      features: category.keys
+        .map((key) => featureMap.get(key))
+        .filter(Boolean) as PlatformFeature[],
+    })).filter((category) => category.features.length > 0);
+
+    const otherFeatures = filteredFeatures.filter((feature) => !ALL_CATEGORY_KEYS.has(feature.key));
+
+    if (otherFeatures.length) {
+      groups.push({
+        id: "other",
+        title: "Other / Future Modules",
+        subtitle: "Reserved permissions for future department requirements.",
+        keys: otherFeatures.map((feature) => feature.key),
+        icon: SlidersHorizontal,
+        accent: "text-slate-700 bg-slate-50 border-slate-200",
+        soft: "from-slate-50/90 to-white",
+        features: otherFeatures,
+      } as FeatureCategory & { features: PlatformFeature[] });
+    }
+
+    return groups;
+  }, [filteredFeatures]);
+
+  const enabledCount = featureState.features.filter((item) => item.is_enabled).length;
+  const totalCount = featureState.features.length;
+
+  const tabKeys = new Set(FEATURE_CATEGORIES[0].keys);
+  const tabEnabled = featureState.features.filter((item) => tabKeys.has(item.key) && item.is_enabled).length;
+  const actionEnabled = featureState.features.filter((item) => !tabKeys.has(item.key) && item.is_enabled).length;
+
+  const loadDepartments = async () => {
+    setLoadingDepartments(true);
+    setMessage("");
+
+    try {
+      const response = await getPlatformDepartments();
+      setDepartments(response.departments);
+
+      const firstDepartment = response.departments[0];
+
+      if (firstDepartment && !selectedDepartmentId) {
+        setSelectedDepartmentId(firstDepartment.id);
+      }
+    } catch (err: any) {
+      setMessage(err?.message || "Could not load departments.");
+    } finally {
+      setLoadingDepartments(false);
+    }
+  };
+
+  const loadFeatures = async (departmentId: number) => {
+    setLoadingFeatures(true);
+    setMessage("");
+
+    try {
+      const response = await getDepartmentFeatures(departmentId);
+      setFeatureState({
+        department: response.department,
+        features: response.features,
+      });
+    } catch (err: any) {
+      setMessage(err?.message || "Could not load department features.");
+    } finally {
+      setLoadingFeatures(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadDepartments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (selectedDepartmentId) {
+      void loadFeatures(selectedDepartmentId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDepartmentId]);
+
+  const toggleFeature = async (feature: PlatformFeature) => {
+    if (!selectedDepartmentId || savingKey) return;
+
+    const nextEnabled = !Boolean(feature.is_enabled);
+    const previousFeatures = featureState.features;
+
+    setSavingKey(feature.key);
+    setMessage("");
+
+    setFeatureState((prev) => ({
+      ...prev,
+      features: prev.features.map((item) =>
+        item.key === feature.key ? { ...item, is_enabled: nextEnabled } : item
+      ),
+    }));
+
+    try {
+      await updateDepartmentFeature(selectedDepartmentId, feature.key, nextEnabled);
+      setMessage(`${feature.name} ${nextEnabled ? "enabled" : "disabled"} successfully.`);
+      window.dispatchEvent(new CustomEvent("ivs-features-updated"));
+    } catch (err: any) {
+      setFeatureState((prev) => ({
+        ...prev,
+        features: previousFeatures,
+      }));
+      setMessage(err?.message || "Could not update feature.");
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  if (!isSuperAdmin) {
+    return (
+      <div className="rounded-[28px] border border-amber-200 bg-amber-50 p-6 text-amber-800 shadow-sm">
+        <div className="flex items-center gap-3 font-black">
+          <ShieldCheck size={20} />
+          Super admin access required
+        </div>
+        <p className="mt-2 text-sm font-semibold">
+          Only the main super admin can manage department features.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full max-w-none mx-auto space-y-6">
+      <div className="relative overflow-hidden rounded-[34px] border border-slate-200/80 bg-white p-6 shadow-[0_18px_55px_rgba(15,23,42,0.07)]">
+        <div className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full bg-indigo-100/70 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-28 left-16 h-64 w-64 rounded-full bg-blue-100/60 blur-3xl" />
+
+        <div className="relative z-10 flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-black text-indigo-700">
+              <Settings2 size={14} />
+              SaaS Department Control
+            </div>
+
+            <h2 className="mt-3 text-2xl font-black tracking-tight text-slate-950">
+              Department Permissions
+            </h2>
+
+            <p className="mt-1 max-w-3xl text-sm font-semibold leading-6 text-slate-500">
+              Manage tabs and action permissions by category. This keeps Quran, Tuition, and future
+              departments clean, focused, and easy to configure.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <MetricCard label="Enabled" value={`${enabledCount}/${totalCount}`} />
+            <MetricCard label="Tabs On" value={String(tabEnabled)} />
+            <MetricCard label="Actions On" value={String(actionEnabled)} />
+          </div>
+        </div>
+
+        {message && (
+          <div className="relative z-10 mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700">
+            {message}
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[360px_1fr]">
+        <aside className="rounded-[32px] border border-slate-200/80 bg-white/95 p-5 shadow-[0_18px_55px_rgba(15,23,42,0.06)]">
+          <div className="mb-5 flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-black text-slate-950">Departments</h3>
+              <p className="text-xs font-semibold text-slate-500">Choose where settings apply</p>
+            </div>
+            <Building2 className="text-indigo-600" size={20} />
+          </div>
+
+          {loadingDepartments ? (
+            <DepartmentSkeleton />
+          ) : (
+            <div className="space-y-2">
+              {departments.map((department) => {
+                const active = department.id === selectedDepartmentId;
+
+                return (
+                  <button
+                    key={department.id}
+                    type="button"
+                    onClick={() => setSelectedDepartmentId(department.id)}
+                    className={`w-full rounded-3xl border px-4 py-3 text-left transition ${
+                      active
+                        ? "border-indigo-200 bg-indigo-50 text-indigo-900 shadow-[0_12px_26px_rgba(99,102,241,0.12)]"
+                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-black">{department.name}</div>
+                        <div className="mt-1 text-[11px] font-bold opacity-70">
+                          {department.institution.name} ? {department.department_type}
+                        </div>
+                      </div>
+                      {active && <CheckCircle2 size={17} className="shrink-0 text-indigo-600" />}
+                    </div>
+                  </button>
+                );
+              })}
+
+              {departments.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm font-bold text-slate-400">
+                  No departments found.
+                </div>
+              )}
+            </div>
+          )}
+        </aside>
+
+        <section className="relative overflow-hidden rounded-[32px] border border-slate-200/80 bg-white/95 p-5 shadow-[0_18px_55px_rgba(15,23,42,0.06)]">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-black text-slate-600">
+                <Layers3 size={13} />
+                {featureState.department?.institution?.name || selectedDepartment?.institution?.name || "Institution"}
+              </div>
+
+              <h3 className="mt-2 text-xl font-black text-slate-950">
+                {featureState.department?.name || selectedDepartment?.name || "Department"} Settings
+              </h3>
+
+              <p className="mt-1 text-xs font-semibold text-slate-500">
+                {enabledCount} enabled permissions out of {totalCount}
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <div className="relative w-full sm:w-[320px]">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search permissions..."
+                  className="w-full rounded-2xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm font-bold outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-50"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  void loadDepartments();
+                  if (selectedDepartmentId) void loadFeatures(selectedDepartmentId);
+                }}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+              >
+                <RefreshCw size={16} className={loadingFeatures ? "animate-spin" : ""} />
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          {loadingFeatures && featureState.features.length > 0 && (
+            <div className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-xs font-black text-indigo-700">
+              Updating department permissions...
+            </div>
+          )}
+
+          <div className="mt-6">
+            {loadingFeatures && featureState.features.length === 0 ? (
+              <FeatureSkeleton />
+            ) : (
+              <div className="space-y-5">
+                {groupedFeatures.map((category) => (
+                  <PermissionCategory
+                    key={category.id}
+                    category={category as FeatureCategory & { features: PlatformFeature[] }}
+                    savingKey={savingKey}
+                    onToggle={toggleFeature}
+                  />
+                ))}
+
+                {groupedFeatures.length === 0 && (
+                  <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50/70 p-8 text-center">
+                    <div className="text-sm font-black text-slate-700">No permissions found</div>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                      Try another search term or refresh the department settings.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function PermissionCategory({
+  category,
+  savingKey,
+  onToggle,
+}: {
+  category: FeatureCategory & { features: PlatformFeature[] };
+  savingKey: string | null;
+  onToggle: (feature: PlatformFeature) => void;
+}) {
+  const Icon = category.icon;
+  const enabled = category.features.filter((feature) => feature.is_enabled).length;
+
+  return (
+    <div className={`rounded-[30px] border border-slate-200/80 bg-gradient-to-br ${category.soft} p-4`}>
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-start gap-3">
+          <div className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border ${category.accent}`}>
+            <Icon size={19} />
+          </div>
+
+          <div>
+            <h4 className="text-sm font-black text-slate-950">{category.title}</h4>
+            <p className="mt-0.5 text-xs font-semibold leading-5 text-slate-500">{category.subtitle}</p>
+          </div>
+        </div>
+
+        <div className="inline-flex w-fit rounded-full border border-white/80 bg-white/80 px-3 py-1 text-[11px] font-black text-slate-600 shadow-sm">
+          {enabled} / {category.features.length} enabled
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        {category.features.map((feature) => (
+          <PermissionCard
+            key={feature.key}
+            feature={feature}
+            saving={savingKey === feature.key}
+            disabled={Boolean(savingKey)}
+            onToggle={() => onToggle(feature)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PermissionCard({
+  feature,
+  saving,
+  disabled,
+  onToggle,
+}: {
+  feature: PlatformFeature;
+  saving: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+}) {
+  const enabled = Boolean(feature.is_enabled);
+
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={disabled}
+      className={`group rounded-3xl border p-4 text-left transition ${
+        enabled
+          ? "border-emerald-200 bg-white shadow-[0_10px_24px_rgba(16,185,129,0.08)]"
+          : "border-slate-200 bg-white/80 hover:bg-white"
+      } ${disabled ? "opacity-80" : "hover:shadow-[0_14px_32px_rgba(15,23,42,0.08)]"}`}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            {enabled ? (
+              <CheckCircle2 size={17} className="text-emerald-600" />
+            ) : (
+              <span className="h-[17px] w-[17px] rounded-full border-2 border-slate-300 bg-white" />
+            )}
+
+            <div className="text-sm font-black text-slate-950">{feature.name}</div>
+          </div>
+
+          <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">
+            {feature.description || feature.key}
+          </p>
+
+          <div className="mt-3 inline-flex rounded-full bg-slate-50 px-2.5 py-1 text-[10px] font-black text-slate-500">
+            {feature.key}
+          </div>
+        </div>
+
+        <div className="pt-1">
+          {saving ? (
+            <Loader2 size={24} className="animate-spin text-slate-400" />
+          ) : enabled ? (
+            <ToggleRight size={30} className="text-emerald-600" />
+          ) : (
+            <ToggleLeft size={30} className="text-slate-400" />
+          )}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white/85 px-4 py-3 text-center shadow-[0_10px_26px_rgba(15,23,42,0.05)]">
+      <div className="text-lg font-black text-slate-950">{value}</div>
+      <div className="mt-0.5 text-[10px] font-black uppercase tracking-wide text-slate-400">{label}</div>
+    </div>
+  );
+}
+
+function DepartmentSkeleton() {
+  return (
+    <div role="status" aria-live="polite" aria-busy="true" className="ivs-skeleton-shell space-y-2">
+      <span className="sr-only">Loading departments</span>
+      {Array.from({ length: 4 }).map((_, item) => (
+        <div key={item} className="rounded-3xl border border-slate-200 bg-white px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0 flex-1 space-y-2.5">
+              <SkeletonBlock className="h-3.5 w-3/5" />
+              <SkeletonBlock className="h-2.5 w-4/5" />
+            </div>
+            <SkeletonBlock className="h-5 w-5" rounded="rounded-full" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FeatureSkeleton() {
+  return (
+    <div role="status" aria-live="polite" aria-busy="true" className="ivs-skeleton-shell space-y-5">
+      <span className="sr-only">Loading department permissions</span>
+      {Array.from({ length: 3 }).map((_, category) => (
+        <div key={category} className="rounded-[30px] border border-slate-200 bg-slate-50/80 p-4">
+          <div className="mb-4 flex items-center gap-3 rounded-2xl bg-white p-3">
+            <SkeletonBlock className="h-10 w-10 shrink-0" rounded="rounded-xl" />
+            <div className="flex-1 space-y-2.5">
+              <SkeletonBlock className="h-3.5 w-2/5" />
+              <SkeletonBlock className="h-2.5 w-3/5" />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            {Array.from({ length: 4 }).map((__, item) => (
+              <div key={item} className="rounded-3xl border border-slate-200 bg-white p-4">
+                <div className="flex items-start gap-3">
+                  <div className="flex-1 space-y-3">
+                    <SkeletonBlock className="h-3.5 w-1/2" />
+                    <SkeletonBlock className="h-2.5 w-4/5" />
+                    <SkeletonBlock className="h-6 w-28" rounded="rounded-full" />
+                  </div>
+                  <SkeletonBlock className="h-8 w-12" rounded="rounded-full" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

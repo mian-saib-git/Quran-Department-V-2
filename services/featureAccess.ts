@@ -1,8 +1,18 @@
 export const FEATURE_LOCK_EVENT = "ivs-feature-locked";
+export const FEATURES_UPDATED_EVENT = "ivs-features-updated";
+export const FEATURES_UPDATED_STORAGE_KEY = "ivs-features-updated-v3";
+export const FEATURES_UPDATED_CHANNEL = "ivs-features-v3";
 
 export type FeatureLockDetail = {
   title: string;
   description?: string;
+};
+
+export type FeaturesUpdatedDetail = {
+  departmentId?: number;
+  featureKey?: string;
+  isEnabled?: boolean;
+  updatedAt?: number;
 };
 
 export function showFeatureLocked(title: string, description?: string) {
@@ -11,4 +21,31 @@ export function showFeatureLocked(title: string, description?: string) {
       detail: { title, description },
     })
   );
+}
+
+export function announceFeaturesUpdated(detail: FeaturesUpdatedDetail = {}) {
+  const payload: FeaturesUpdatedDetail = {
+    ...detail,
+    updatedAt: Date.now(),
+  };
+
+  window.dispatchEvent(
+    new CustomEvent<FeaturesUpdatedDetail>(FEATURES_UPDATED_EVENT, {
+      detail: payload,
+    })
+  );
+
+  try {
+    localStorage.setItem(FEATURES_UPDATED_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // Storage can be unavailable in restricted browser modes.
+  }
+
+  try {
+    const channel = new BroadcastChannel(FEATURES_UPDATED_CHANNEL);
+    channel.postMessage(payload);
+    channel.close();
+  } catch {
+    // BroadcastChannel is not available in every browser.
+  }
 }

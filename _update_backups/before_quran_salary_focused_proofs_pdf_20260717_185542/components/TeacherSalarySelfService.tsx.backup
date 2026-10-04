@@ -1,0 +1,153 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, CircleDollarSign, Loader2, RefreshCw, SearchCheck } from "lucide-react";
+
+import {
+  getQuranSalaryDashboard,
+  type QuranSalaryDashboardResponse,
+} from "../services/djangoApiService";
+import QuranSalaryProofModal from "./QuranSalaryProofModal";
+
+const PKR = new Intl.NumberFormat("en-PK", {
+  style: "currency",
+  currency: "PKR",
+  maximumFractionDigits: 0,
+});
+
+function money(value: unknown) {
+  const amount = Number(value || 0);
+  return PKR.format(Number.isFinite(amount) ? amount : 0);
+}
+
+function ClickMetric({ label, value, onClick, tone = "indigo" }: { label: string; value: React.ReactNode; onClick?: () => void; tone?: "indigo" | "emerald" | "rose" | "amber" | "cyan" }) {
+  const tones = {
+    indigo: "border-indigo-100 bg-indigo-50 text-indigo-700",
+    emerald: "border-emerald-100 bg-emerald-50 text-emerald-700",
+    rose: "border-rose-100 bg-rose-50 text-rose-700",
+    amber: "border-amber-100 bg-amber-50 text-amber-700",
+    cyan: "border-cyan-100 bg-cyan-50 text-cyan-700",
+  };
+  const Tag = onClick ? "button" : "div";
+  return (
+    <Tag type={onClick ? "button" : undefined} onClick={onClick} className={`rounded-2xl border p-4 text-left ${tones[tone]} ${onClick ? "transition hover:-translate-y-0.5 hover:shadow-md" : ""}`}>
+      <div className="text-[10px] font-black uppercase tracking-[0.12em] opacity-70">{label}</div>
+      <div className="mt-1 text-xl font-black">{value}</div>
+      {onClick && <div className="mt-1 text-[10px] font-black opacity-70">View proof</div>}
+    </Tag>
+  );
+}
+
+export default function TeacherSalarySelfService() {
+  const now = useMemo(() => new Date(), []);
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [year, setYear] = useState(now.getFullYear());
+  const [data, setData] = useState<QuranSalaryDashboardResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [proofMetric, setProofMetric] = useState<string | null>(null);
+  const requestId = useRef(0);
+
+  const load = useCallback(async () => {
+    const current = ++requestId.current;
+    setLoading(true); setMessage("");
+    try {
+      const response = await getQuranSalaryDashboard(month, year, 1, 1);
+      if (current !== requestId.current) return;
+      if (response.month !== month || response.year !== year) throw new Error("The server returned a different salary month.");
+      setData(response);
+    } catch (error: any) {
+      if (current === requestId.current) setMessage(error?.message || "Could not load your salary slip.");
+    } finally {
+      if (current === requestId.current) setLoading(false);
+    }
+  }, [month, year]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const slip = data?.teachers?.[0];
+  const snapshot: any = slip?.calculated_snapshot || {};
+  const types = snapshot.student_type_breakdown || {};
+  const statuses = snapshot.class_status_breakdown || {};
+  const deductions = snapshot.deductions || slip?.deductions || {};
+  const years = useMemo(() => Array.from({ length: 10 }, (_, index) => now.getFullYear() - 6 + index), [now]);
+  const openProof = (metric: string) => setProofMetric(metric);
+
+  return (
+    <div className="space-y-5">
+      <section className="tp-card p-5 sm:p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="tp-brand-icon"><CircleDollarSign size={22} /></div>
+            <div><h2 className="text-xl font-black text-slate-900">My Salary</h2><p className="mt-1 text-sm font-semibold text-slate-500">Your current and historical salary slip, calculations, cuttings, and source proofs.</p></div>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <select value={month} onChange={(e) => setMonth(Number(e.target.value))} className="tp-compact-select"><option value="" disabled>Month</option>{Array.from({ length: 12 }, (_, i) => <option key={i + 1} value={i + 1}>{new Date(2026, i, 1).toLocaleDateString(undefined, { month: "long" })}</option>)}</select>
+            <select value={year} onChange={(e) => setYear(Number(e.target.value))} className="tp-compact-select">{years.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+            <button type="button" onClick={() => void load()} className="tp-primary-btn inline-flex items-center justify-center gap-2"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /> Refresh</button>
+          </div>
+        </div>
+      </section>
+
+      {message && <div className="tp-card border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">{message}</div>}
+      {loading && !slip && <div className="tp-card flex min-h-[260px] items-center justify-center text-sm font-bold text-slate-500"><Loader2 className="mr-2 animate-spin" size={18} /> Loading salary slip...</div>}
+      {!loading && !message && !slip && <div className="tp-card p-10 text-center text-sm font-bold text-slate-500">No salary slip is available for this month.</div>}
+
+      {slip && (
+        <>
+          <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <ClickMetric label="Gross Salary" value={money(slip.gross_total)} tone="cyan" />
+            <ClickMetric label="Total Cuttings" value={money(slip.deduction_total)} tone="rose" />
+            <ClickMetric label="Net Salary" value={money(slip.final_total)} tone="emerald" />
+            <ClickMetric label="Achievement" value={`${snapshot.achievement_points || 0}/10`} tone="amber" onClick={() => openProof("achievement_points")} />
+          </section>
+
+          <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+            <section className="tp-card p-5">
+              <h3 className="font-black text-slate-900">Class & Student Proofs</h3>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <ClickMetric label="Active" value={snapshot.final_active_classes || 0} onClick={() => openProof("active_classes")} />
+                <ClickMetric label="Half Month" value={snapshot.half_classes || 0} tone="amber" onClick={() => openProof("half_classes")} />
+                <ClickMetric label="Manual Review" value={snapshot.manual_review_classes || 0} tone="rose" onClick={() => openProof("manual_review_classes")} />
+                <ClickMetric label="Running" value={statuses.running || 0} tone="emerald" onClick={() => openProof("running")} />
+                <ClickMetric label="On Leave" value={statuses.on_leave || 0} tone="amber" onClick={() => openProof("on_leave")} />
+                <ClickMetric label="Old Students" value={types.old_students || 0} onClick={() => openProof("old_students")} />
+                <ClickMetric label="Trials" value={types.new_trials || 0} tone="cyan" onClick={() => openProof("new_trials")} />
+              </div>
+            </section>
+
+            <section className="tp-card p-5">
+              <h3 className="font-black text-slate-900">Bonuses & Performance</h3>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <ClickMetric label="English" value={snapshot.english_class_count || 0} tone="cyan" onClick={() => openProof("english_classes")} />
+                <ClickMetric label="Night" value={snapshot.night_class_count || 0} tone="amber" onClick={() => openProof("night_classes")} />
+                <ClickMetric label="Lessons Filled" value={snapshot.lesson_filled_count || 0} tone="emerald" onClick={() => openProof("lesson_filled")} />
+                <ClickMetric label="Attendance" value={`${snapshot.attendance_rate || 0}%`} tone="emerald" onClick={() => openProof("attendance")} />
+              </div>
+            </section>
+
+            <section className="tp-card p-5">
+              <h3 className="font-black text-slate-900">Cuttings Breakdown</h3>
+              <div className="mt-4 space-y-2 text-sm font-bold text-slate-600">
+                {[
+                  ["Food Cutting", deductions.food], ["Drop & Leave", deductions.drop_leave], ["Fine", deductions.fine], ["Imam Hadya", deductions.imam_hadya], ["Advance", deductions.advance],
+                ].map(([label, amount]) => <div key={String(label)} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2"><span>{label}</span><b className="text-rose-700">{money(amount)}</b></div>)}
+                {(deductions.manual || []).map((item: any, index: number) => <div key={index} className="rounded-xl bg-rose-50 px-3 py-2"><div className="flex justify-between gap-3"><span className="break-words">{item.reason}</span><b className="shrink-0 text-rose-700">{money(item.amount)}</b></div></div>)}
+              </div>
+            </section>
+          </div>
+
+          <section className="tp-card p-5">
+            <div className="flex items-center gap-2 font-black text-slate-900"><SearchCheck size={18} className="text-indigo-600" /> Calculation transparency</div>
+            <p className="mt-2 text-sm font-semibold text-slate-500">Every clickable count opens the exact students, enrollment dates, class schedule, complete attendance grid, formulas, and highlighted calculation step used for this month.</p>
+            <button type="button" onClick={() => openProof("calculation_audit")} className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white"><SearchCheck size={17} /> Open Full Calculation Audit</button>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl bg-cyan-50 p-4"><div className="text-xs font-black uppercase text-cyan-700">Gross Salary (Before Cuttings/Deductions)</div><div className="mt-1 text-2xl font-black text-cyan-950">{money(slip.gross_total)}</div></div>
+              <div className="rounded-2xl bg-emerald-50 p-4"><div className="text-xs font-black uppercase text-emerald-700">Net Salary (After Cuttings/Deductions)</div><div className="mt-1 text-2xl font-black text-emerald-950">{money(slip.final_total)}</div></div>
+            </div>
+          </section>
+        </>
+      )}
+
+      {proofMetric && slip && <QuranSalaryProofModal teacherId={slip.teacher_id} metric={proofMetric} month={month} year={year} onClose={() => setProofMetric(null)} />}
+    </div>
+  );
+}

@@ -1,0 +1,23 @@
+{
+  "update": "tuition_schedule_all_days_student_filter",
+  "timestamp": "20260714_012315",
+  "project_root": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)",
+  "files": [
+    {
+      "target": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\components\\tuition\\TuitionScheduling.tsx",
+      "backup": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\components\\tuition\\TuitionScheduling.tsx.before_tuition_schedule_all_days_student_filter_20260714_012315.bak"
+    },
+    {
+      "target": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\services\\tuitionApiService.ts",
+      "backup": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\services\\tuitionApiService.ts.before_tuition_schedule_all_days_student_filter_20260714_012315.bak"
+    },
+    {
+      "target": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\backend\\tuition\\models.py",
+      "backup": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\backend\\tuition\\models.py.before_tuition_schedule_all_days_student_filter_20260714_012315.bak"
+    },
+    {
+      "target": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\backend\\tuition\\views.py",
+      "backup": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\backend\\tuition\\views.py.before_tuition_schedule_all_days_student_filter_20260714_012315.bak"
+    }
+  ]
+}

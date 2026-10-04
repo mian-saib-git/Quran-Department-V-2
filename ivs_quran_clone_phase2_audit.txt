@@ -1,0 +1,1288 @@
+========================================================================================================================
+IVS QURAN DEPARTMENT PHASE 2 AUDIT
+========================================================================================================================
+
+IMPORTANT FILE STATUS
+------------------------------------------------------------------------------------------------------------------------
+App.tsx: FOUND
+components/DepartmentSettings.tsx: FOUND
+components/AttendanceEditor.tsx: FOUND
+components/ReportsTab.tsx: FOUND
+components/TeacherPortal.tsx: FOUND
+components/StudentPortal.tsx: FOUND
+services/djangoApiService.ts: FOUND
+backend/accounts/models.py: FOUND
+backend/accounts/views.py: FOUND
+backend/accounts/serializers.py: FOUND
+backend/accounts/urls.py: FOUND
+backend/academy/models.py: FOUND
+backend/academy/views.py: FOUND
+backend/academy/serializers.py: FOUND
+backend/academy/urls.py: FOUND
+
+========================================================================================================================
+HARD-CODE / DEPARTMENT ROUTING HITS
+========================================================================================================================
+
+FILE: .ivs-backups\skeleton-loader-20260718-175124\App.tsx
+  L0051 [QURAN_LABEL] const QuranDroppedLeave = lazy(() => import("./components/QuranDroppedLeave"));
+  L0990 [QURAN_LABEL] // Quran navigation guards must never run inside the separate Tuition portal.
+  L0992 [QURAN_LABEL] // this scope check the Quran dashboard key can incorrectly lock Tuition's dashboard.
+  L0994 [DEPARTMENT_TYPE] authContext?.department?.department_type ||
+  L0995 [DEPARTMENT_TYPE] (session as any)?.user?.department?.department_type ||
+  L0996 [DEPARTMENT_TYPE] (session as any)?.department?.department_type ||
+  L1036 [QURAN_LABEL] // Keep disabled Quran tabs visible so the user can see they exist and are locked.
+  L1037 [QURAN_LABEL] // Salary is intentionally hidden from coordinators. Only Quran portal admins
+  L1074 [QURAN_DEPARTMENT,QURAN_LABEL] const roleLabel = isPlatformAdmin ? "Platform Admin" : isDepartmentAdmin ? "Quran Department Admin" : "Coordinator";
+  L1351 [QURAN_LABEL] // Direct URL protection applies only to the Quran workspace. Tuition has its
+  L2614 [DEPARTMENT_TYPE] item?.department?.department_type === "tuition"
+  L2619 [DEPARTMENT_TYPE] activeDepartment?.department_type || ""
+  L2821 [QURAN_DEPARTMENT,QURAN_LABEL] // ---------------- Main Quran Department UI ----------------
+  L3030 [QURAN_DEPARTMENT,QURAN_LABEL] "AI Assistant is currently disabled for the Quran Department by Main Admin.",
+  L3068 [QURAN_DEPARTMENT,QURAN_LABEL] "AI Assistant is currently disabled for the Quran Department by Main Admin.",
+  L3849 [QURAN_LABEL] <QuranDroppedLeave />
+
+FILE: .ivs-backups\skeleton-loader-20260718-175124\components\CoordinatorAccounts.tsx
+  L1241 [QURAN_DEPARTMENT,QURAN_LABEL] Only Quran department admins and coordinators can view accounts.
+
+FILE: .ivs-backups\skeleton-loader-20260718-175124\components\DepartmentSettings.tsx
+  L0053 [QURAN_LABEL] const QURAN_FEATURE_CATEGORIES: FeatureCategory[] = [
+  L0057 [QURAN_DEPARTMENT,QURAN_LABEL] subtitle: "Control the sections displayed in the Quran Department sidebar.",
+  L0075 [QURAN_LABEL] subtitle: "Control Quran report buttons and downloadable export formats.",
+  L0084 [QURAN_LABEL] subtitle: "Control Quran bulk enrollment and permanent account deletion.",
+  L0093 [QURAN_LABEL] subtitle: "Control sensitive actions inside Quran scheduling.",
+  L0102 [QURAN_DEPARTMENT,QURAN_LABEL] subtitle: "Control the Quran Department AI assistant.",
+  L0129 [QURAN_LABEL] subtitle: "Control Tuition report downloads without affecting Quran reports.",
+  L0184 [QURAN_LABEL] quran: QURAN_FEATURE_CATEGORIES,
+  L0237 [DEPARTMENT_TYPE] featureState.department?.department_type ||
+  L0238 [DEPARTMENT_TYPE] selectedDepartment?.department_type ||
+  L0425 [QURAN_LABEL] Manage only the permissions that belong to the selected department type. Quran and
+  L0478 [DEPARTMENT_TYPE] {department.institution.name} ? {department.department_type}
+
+FILE: .ivs-backups\skeleton-loader-20260718-175124\components\PlatformAdmin.tsx
+  L0096 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] department_type: "quran" | "tuition" | "general";
+  L0119 [DEPARTMENT_TYPE] department_type: "general",
+  L0217 [CODE_QURAN,QURAN_LABEL] if (normalized === "quran") return "Qur'an";
+  L0423 [DEPARTMENT_TYPE] [item.name, item.code, item.department_type]
+  L0498 [DEPARTMENT_TYPE] department_type: (department.department_type as any) || "general",
+  L0649 [DEPARTMENT_TYPE] department_type: departmentForm.department_type,
+  L0658 [DEPARTMENT_TYPE] department_type: departmentForm.department_type,
+  L1274 [DEPARTMENT_TYPE] value={departmentForm.department_type}
+  L1278 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] department_type: value as "quran" | "tuition" | "general",
+  L1282 [CODE_QURAN,QURAN_LABEL] { value: "quran", label: "Qur'an" },
+  L1721 [DEPARTMENT_TYPE] {formatDepartmentType(department.department_type)}
+  L2083 [DEPARTMENT_TYPE] <InfoChip label="Type" value={formatDepartmentType(department.department_type)} />
+
+FILE: .ivs-backups\skeleton-loader-20260718-175124\components\TeacherPortal.tsx
+  L0098 [QURAN_LABEL] "Nazira Quran",
+  L0099 [QURAN_LABEL] "Quran Memorization",
+  L0319 [QURAN_LABEL] // Quran
+  L0320 [QURAN_LABEL] quranMode: "surah" | "juz";
+  L0639 [QURAN_LABEL] quranMode: "surah",
+  L0658 [QURAN_LABEL] if (subject === "Nazira Quran" || subject === "Quran Memorization") {
+  L0661 [QURAN_LABEL] if (entry.quranMode === "juz") {
+  L0756 [QURAN_LABEL] {/* ── Nazira Quran / Quran Memorization ── */}
+  L0757 [QURAN_LABEL] {(entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") && (
+  L0761 [QURAN_LABEL] <button key={mode} type="button" onClick={() => up({ quranMode: mode })}
+  L0762 [QURAN_LABEL] className={`tp-mode-btn ${entry.quranMode === mode ? "active" : ""}`}>
+  L0768 [QURAN_LABEL] {entry.quranMode === "juz" && (
+  L0777 [QURAN_LABEL] <label className="tp-compact-label">{entry.quranMode === "juz" ? "Surah in Juz" : "Surah"}</label>
+  L0779 [QURAN_LABEL] {(entry.quranMode === "juz" ? surahsForJuz : SURAHS).map(s => (
+  L1266 [CODE_QURAN,QURAN_LABEL] (entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") ? "quran" :
+  L1269 [QURAN_LABEL] ...((entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") && {
+  L1270 [QURAN_LABEL] mode: entry.quranMode, juz: entry.quranMode === "juz" ? entry.juz : null,
+  L1370 [CODE_QURAN,QURAN_LABEL] } else if (type === "quran") {
+  L1371 [QURAN_LABEL] entry.quranMode = ld.mode || "surah";
+  L1428 [CODE_QURAN,QURAN_LABEL] (entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") ? "quran" :
+  L1431 [QURAN_LABEL] ...((entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") && {
+  L1432 [QURAN_LABEL] mode: entry.quranMode, juz: entry.quranMode === "juz" ? entry.juz : null,
+  L1747 [QURAN_LABEL] const isQuranMonthlySubject = useMemo(
+  L2019 [QURAN_LABEL] } else if (isQuranMonthlySubject) {
+  L2045 [CODE_QURAN,QURAN_LABEL] range_type: "quran",
+  L2061 [QURAN_LABEL] `Quran target: Surah ` +
+  L2088 [QURAN_LABEL] isQuranMonthlySubject
+  L3158 [QURAN_LABEL] isQuranMonthlySubject && (
+  L3162 [QURAN_LABEL] Quran range
+  L3301 [QURAN_LABEL] isQuranMonthlySubject
+  L3316 [QURAN_LABEL] isQuranMonthlySubject
+
+FILE: .ivs-backups\skeleton-loader-20260718-175124\components\tuition\TuitionAccountsEnrollment.tsx
+  L0342 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0347 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0352 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0356 [ACTIVE_DEPARTMENT] getTuitionSchedulingMatrix({ department_id: departmentId }).catch(() => null),
+  L0580 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0802 [ACTIVE_DEPARTMENT] department_id: departmentId,
+
+FILE: .ivs-backups\skeleton-loader-20260718-175124\components\tuition\TuitionLiveScheduleCard.tsx
+  L0042 [ACTIVE_DEPARTMENT] department_id: departmentId,
+
+FILE: .ivs-backups\skeleton-loader-20260718-175124\components\tuition\TuitionManagersPanel.tsx
+  L0190 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0281 [ACTIVE_DEPARTMENT] department_id: departmentId,
+
+FILE: .ivs-backups\skeleton-loader-20260718-175124\hooks\useAcademyWS.ts
+  L0003 [QURAN_LABEL] const SESSION_KEY = "quran_academy_session_v2";
+
+FILE: .ivs-backups\skeleton-loader-20260718-175124\services\djangoApiService.ts
+  L0722 [DEPARTMENT_TYPE] department_type: string;
+  L0748 [DEPARTMENT_TYPE] department_type: string;
+  L0759 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] department_type: "quran" | "tuition" | "general";
+  L0790 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] department_type: "quran" | "tuition" | "general";
+  L0940 [DEPARTMENT_TYPE] department_type: string;
+  L0954 [ACTIVE_DEPARTMENT] department_id: number;
+  L0962 [ACTIVE_DEPARTMENT] department_id?: number | string;
+  L1655 [ACTIVE_DEPARTMENT] department_id?: number | null;
+  L1711 [DEPARTMENT_TYPE] department_type: string;
+  L1732 [DEPARTMENT_TYPE] department?: { id: number; name: string; code: string; department_type: string } | null;
+  L1742 [ACTIVE_DEPARTMENT] department_id?: number;
+  L1779 [ACTIVE_DEPARTMENT] department_id?: number;
+  L1812 [ACTIVE_DEPARTMENT] institutions: number; active_institutions: number; departments: number; active_departments: number;
+  L1813 [QURAN_LABEL] users: number; active_users: number; teachers: number; students: number; quran_schedules: number;
+  L1814 [QURAN_LABEL] tuition_schedules: number; quran_lessons: number; tuition_enrollments: number; attendance_records: number;
+  L1818 [DEPARTMENT_TYPE] department_types: Array<{ key: string; label: string; value: number }>;
+  L1819 [QURAN_LABEL] attendance_status: Array<{ status: string; quran: number; tuition: number; total: number }>;
+  L1820 [QURAN_LABEL] activity_timeline: Array<{ date: string; label: string; quran_attendance: number; tuition_attendance: number; lessons: number; admin_activity: number }>;
+  L1821 [DEPARTMENT_TYPE] top_departments: Array<{ id: number; name: string; institution: string; department_type: string; users: number }>;
+  L1830 [QURAN_LABEL] // Quran Dropped / Leave and Teacher Salary Management
+  L1833 [QURAN_LABEL] export type QuranDroppedLeaveItem = {
+  L1853 [QURAN_LABEL] export type QuranDroppedLeaveResponse = {
+  L1854 [QURAN_LABEL] results: QuranDroppedLeaveItem[];
+  L1859 [QURAN_LABEL] export async function getQuranDroppedLeave(): Promise<QuranDroppedLeaveResponse> {
+  L1860 [QURAN_LABEL] return request<QuranDroppedLeaveResponse>("/api/academy/dropped-leave/");
+  L1866 [QURAN_LABEL] export type QuranSalaryConfiguration = {
+  L1868 [ACTIVE_DEPARTMENT] department_id: number;
+  L1887 [QURAN_LABEL] export type QuranTeacherSalarySlip = {
+  L1914 [QURAN_LABEL] export type QuranSalaryPagination = {
+  L1923 [QURAN_LABEL] export type QuranSalaryDashboardResponse = {
+  L1928 [QURAN_LABEL] configuration: QuranSalaryConfiguration | null;
+  L1929 [QURAN_LABEL] teachers: QuranTeacherSalarySlip[];
+  L1930 [QURAN_LABEL] pagination: QuranSalaryPagination;
+  L1941 [QURAN_LABEL] export type QuranSalaryAuditAttendanceDay = {
+  L1949 [QURAN_LABEL] export type QuranSalaryAuditRow = {
+  L1978 [QURAN_LABEL] attendance: QuranSalaryAuditAttendanceDay[];
+  L1981 [QURAN_LABEL] export type QuranSalaryAuditResponse = {
+  L1988 [QURAN_LABEL] rows: QuranSalaryAuditRow[];
+  L1996 [QURAN_LABEL] export async function getQuranSalaryDashboard(
+  L2001 [QURAN_LABEL] ): Promise<QuranSalaryDashboardResponse> {
+  L2009 [QURAN_LABEL] return request<QuranSalaryDashboardResponse>(`/api/academy/teacher-salary/?${query.toString()}`, {
+  L2014 [QURAN_LABEL] export async function getQuranSalaryAudit(input: {
+  L2019 [QURAN_LABEL] }): Promise<QuranSalaryAuditResponse> {
+  L2027 [QURAN_LABEL] return request<QuranSalaryAuditResponse>(`/api/academy/teacher-salary/audit/?${query.toString()}`, {
+  L2032 [QURAN_LABEL] export async function updateQuranSalarySlip(
+  L2043 [QURAN_LABEL] ): Promise<QuranTeacherSalarySlip> {
+  L2044 [QURAN_LABEL] return request<QuranTeacherSalarySlip>("/api/academy/teacher-salary/", {
+  L2051 [QURAN_LABEL] export async function markQuranSalaryPdfDownload(slipId: number): Promise<QuranTeacherSalarySlip> {
+  L2052 [QURAN_LABEL] return request<QuranTeacherSalarySlip>("/api/academy/teacher-salary/pdf-download/", {
+  L2058 [QURAN_LABEL] export async function getQuranSalarySettings(): Promise<QuranSalaryConfiguration> {
+  L2059 [QURAN_LABEL] return request<QuranSalaryConfiguration>("/api/academy/teacher-salary/settings/", { cache: "no-store" });
+  L2062 [QURAN_LABEL] export async function updateQuranSalarySettings(
+  L2063 [QURAN_LABEL] input: Partial<QuranSalaryConfiguration>
+  L2064 [QURAN_LABEL] ): Promise<QuranSalaryConfiguration> {
+  L2065 [QURAN_LABEL] return request<QuranSalaryConfiguration>("/api/academy/teacher-salary/settings/", {
+
+FILE: App.tsx
+  L0001 [QURAN_LABEL] // IVS_QURAN_PORTAL_ROLE_RECOVERY_V31
+  L0047 [QURAN_LABEL] // IVS_QURAN_LIVE_CARD_TUITION_UI_V17
+  L0048 [QURAN_LABEL] // IVS_QURAN_LIVE_UPNEXT_SPLIT_LAYOUT_V18
+  L0050 [QURAN_LABEL] // IVS_QURAN_LIVE_CARDS_ULTRA_COMPACT_NO_SHADOW_V20
+  L0051 [QURAN_LABEL] // IVS_QURAN_MOBILE_SIDEBAR_SHADOW_FIX_V21
+  L0052 [QURAN_LABEL] // IVS_QURAN_MOBILE_SIDEBAR_FULLY_HIDDEN_V22
+  L0067 [QURAN_LABEL] const QuranDroppedLeave = lazy(() => import("./components/QuranDroppedLeave"));
+  L0571 [DEPARTMENT_TYPE] if (!ctx?.department?.id || !ctx?.department?.department_type) {
+  L1053 [QURAN_LABEL] // Quran navigation guards must never run inside the separate Tuition portal.
+  L1055 [QURAN_LABEL] // this scope check the Quran dashboard key can incorrectly lock Tuition's dashboard.
+  L1057 [DEPARTMENT_TYPE] authContext?.department?.department_type ||
+  L1058 [DEPARTMENT_TYPE] (session as any)?.user?.department?.department_type ||
+  L1059 [DEPARTMENT_TYPE] (session as any)?.department?.department_type ||
+  L1158 [QURAN_DEPARTMENT,QURAN_LABEL] const roleLabel = isPlatformAdmin ? "Platform Admin" : isDepartmentAdmin ? "Quran Department Admin" : "Coordinator";
+  L1405 [QURAN_DEPARTMENT,QURAN_LABEL] "Accounts & Enrollment is currently disabled for the Quran Department.",
+  L1456 [QURAN_LABEL] // Direct URL protection applies only to the Quran workspace. Tuition has its
+  L2784 [DEPARTMENT_TYPE] item?.department?.department_type === "tuition"
+  L2789 [DEPARTMENT_TYPE] activeDepartment?.department_type || ""
+  L2798 [QURAN_LABEL] // Quran teachers into StudentPortal, making teacher-only tabs appear missing.
+  L3089 [QURAN_DEPARTMENT,QURAN_LABEL] // ---------------- Main Quran Department UI ----------------
+  L3298 [QURAN_DEPARTMENT,QURAN_LABEL] "AI Assistant is currently disabled for the Quran Department by Main Admin.",
+  L3336 [QURAN_DEPARTMENT,QURAN_LABEL] "AI Assistant is currently disabled for the Quran Department by Main Admin.",
+  L4124 [QURAN_LABEL] <QuranDroppedLeave />
+
+FILE: backend\academy\management\commands\import_legacy_sqlite.py
+  L0136 [QURAN_LABEL] "nazira quran": SubjectName.NAZIRA,
+  L0137 [QURAN_LABEL] "quran memorization": SubjectName.MEMORIZATION,
+  L0158 [QURAN_LABEL] help = "Import old server/quran-academy.db SQLite data into Django PostgreSQL."
+  L0164 [QURAN_LABEL] help="Path to old quran-academy.db. Defaults to project root/server/quran-academy.db",
+  L0180 [QURAN_LABEL] sqlite_path = project_root / "server" / "quran-academy.db"
+
+FILE: backend\academy\migrations\0003_studentsubject.py
+  L0018 [QURAN_LABEL] ('subject', models.CharField(choices=[('Qaida Nooraniyya', 'Qaida Nooraniyya'), ('Nazira Quran', 'Nazira Quran'), ('Quran Memorization', 'Quran Memorization'), ('Tajweed', 'Tajweed'), ('Duas & Sunnah', 'Duas & Sunnah'), ('Arabic Basics', 'Arabic Basics'), ('Other', 'Other')], max_length=120)),
+
+FILE: backend\academy\migrations\0013_assign_existing_records_to_quran_department.py
+  L0027 [CODE_QURAN,QURAN_LABEL] code="quran",
+
+FILE: backend\academy\migrations\0014_remove_monthlylessonsummary_unique_monthly_summary_per_student_subject_and_more.py
+  L0010 [QURAN_LABEL] ('academy', '0013_assign_existing_records_to_quran_department'),
+
+FILE: backend\academy\migrations\0015_quran_student_status_salary.py
+  L0025 [ACTIVE_DEPARTMENT] department_id=student.department_id or getattr(student.user, "department_id", None),
+  L0032 [QURAN_LABEL] notes="Initial history created during Quran salary upgrade.",
+  L0042 [QURAN_LABEL] ('accounts', '0008_quran_management_features'),
+  L0099 [QURAN_LABEL] ('department', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='quran_salary_configuration', to='accounts.department')),
+  L0100 [QURAN_LABEL] ('updated_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='updated_quran_salary_configurations', to=settings.AUTH_USER_MODEL)),
+
+FILE: backend\academy\migrations\0016_quran_salary_audit_deductions.py
+  L0015 [QURAN_LABEL] ("academy", "0015_quran_student_status_salary"),
+
+FILE: backend\academy\migrations\0017_teacher_salary_pdf_tracking.py
+  L0007 [QURAN_LABEL] ("academy", "0016_quran_salary_audit_deductions"),
+
+FILE: backend\academy\models.py
+  L0010 [QURAN_LABEL] NAZIRA = "Nazira Quran", "Nazira Quran"
+  L0011 [QURAN_LABEL] MEMORIZATION = "Quran Memorization", "Quran Memorization"
+  L0322 [QURAN_LABEL] related_name="quran_salary_configuration",
+  L0335 [QURAN_LABEL] related_name="updated_quran_salary_configurations",
+  L1054 [QURAN_LABEL] # Quran: from Surah/Ayah to Surah/Ayah
+
+FILE: backend\academy\quran_management_api.py
+  L0042 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] if department and str(getattr(department, "department_type", "")).lower() == "quran":
+  L0097 [QURAN_LABEL] category="quran_salary",
+  L0116 [QURAN_DEPARTMENT,QURAN_LABEL] return Response({"detail": "Quran department assignment is required."}, status=status.HTTP_403_FORBIDDEN)
+  L0252 [QURAN_DEPARTMENT,QURAN_LABEL] {"detail": "Quran department assignment is required."},
+  L0273 [ACTIVE_DEPARTMENT] if teacher.department_id != department.id and getattr(request.user, "department_id", None) != department.id:
+  L0281 [QURAN_LABEL] {"detail": "Salary access is restricted to Quran portal administrators and the individual teacher."},
+  L0304 [QURAN_LABEL] class QuranSalarySettingsView(APIView):
+  L0337 [QURAN_LABEL] _audit(request, "salary_settings_updated", "Quran salary settings updated.", "department", department.id, department.name)
+  L0338 [ACTIVE_DEPARTMENT] notify_global("academy_update", {"event": "salary_settings_updated", "department_id": department.id})
+  L0342 [QURAN_LABEL] class QuranSalaryDashboardView(APIView):
+  L0566 [QURAN_LABEL] class QuranSalaryAuditView(APIView):
+  L0588 [ACTIVE_DEPARTMENT] if teacher.department_id != department.id and getattr(teacher.user, "department_id", None) != department.id:
+  L0589 [QURAN_DEPARTMENT,QURAN_LABEL] return Response({"detail": "Teacher is outside this Quran department."}, status=status.HTTP_403_FORBIDDEN)
+  L0603 [QURAN_LABEL] class QuranSalaryPdfDownloadView(APIView):
+
+FILE: backend\academy\salary_service.py
+  L0130 [ACTIVE_DEPARTMENT] "department_id": config.department_id,
+  L0408 [QURAN_LABEL] DailyLessonReport is the primary source used by the Quran teacher portal. Lesson is
+
+FILE: backend\academy\urls.py
+  L0003 [QURAN_LABEL] from .quran_management_api import (
+  L0005 [QURAN_LABEL] QuranSalaryAuditView,
+  L0006 [QURAN_LABEL] QuranSalaryDashboardView,
+  L0007 [QURAN_LABEL] QuranSalarySettingsView,
+  L0008 [QURAN_LABEL] QuranSalaryPdfDownloadView,
+  L0031 [QURAN_LABEL] path("teacher-salary/", QuranSalaryDashboardView.as_view(), name="academy_teacher_salary"),
+  L0032 [QURAN_LABEL] path("teacher-salary/settings/", QuranSalarySettingsView.as_view(), name="academy_teacher_salary_settings"),
+  L0033 [QURAN_LABEL] path("teacher-salary/audit/", QuranSalaryAuditView.as_view(), name="academy_teacher_salary_audit"),
+  L0034 [QURAN_LABEL] path("teacher-salary/pdf-download/", QuranSalaryPdfDownloadView.as_view(), name="academy_teacher_salary_pdf_download"),
+
+FILE: backend\academy\views.py
+  L3391 [QURAN_LABEL] # (Quran uses the HH:MM class start time) in academy state.
+  L3736 [QURAN_DEPARTMENT,QURAN_LABEL] You are the AI Assistant for Iqra Virtual School, Qur'an Department.
+
+FILE: backend\accounts\deletion_service.py
+  L0034 [ACTIVE_DEPARTMENT] Q(department_id=department.id)
+  L0035 [ACTIVE_DEPARTMENT] | Q(department_roles__department_id=department.id)
+  L0036 [ACTIVE_DEPARTMENT] | Q(teacher_profile__department_id=department.id)
+  L0037 [ACTIVE_DEPARTMENT] | Q(student_profile__department_id=department.id)
+  L0061 [ACTIVE_DEPARTMENT] if user.department_id and user.department_id != department.id:
+  L0068 [ACTIVE_DEPARTMENT] department_id=department.id
+  L0076 [ACTIVE_DEPARTMENT] if user.department_id:
+  L0077 [ACTIVE_DEPARTMENT] external_primary = Department.objects.filter(id=user.department_id).exclude(
+  L0108 [ACTIVE_DEPARTMENT] return Q(department_id=department.id)
+  L0142 [QURAN_LABEL] """Delete a scoped account and all Quran profile dependencies."""
+  L0222 [ACTIVE_DEPARTMENT] department_id = department.id
+  L0231 [ACTIVE_DEPARTMENT] "id": department_id,
+
+FILE: backend\accounts\migrations\0002_department_feature_institution_alter_user_role_and_more.py
+  L0021 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] ('department_type', models.CharField(choices=[('quran', 'Quran'), ('tuition', 'Tuition'), ('general', 'General')], default='general', max_length=50)),
+
+FILE: backend\accounts\migrations\0003_seed_default_institution_department_features.py
+  L0038 [QURAN_LABEL] quran_department, _ = Department.objects.get_or_create(
+  L0040 [CODE_QURAN,QURAN_LABEL] code="quran",
+  L0042 [QURAN_DEPARTMENT,QURAN_LABEL] "name": "Quran Department",
+  L0043 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] "department_type": "quran",
+  L0060 [QURAN_LABEL] department=quran_department,
+  L0067 [QURAN_LABEL] user.department = quran_department
+  L0084 [QURAN_LABEL] department=quran_department,
+  L0092 [QURAN_LABEL] department=quran_department,
+
+FILE: backend\accounts\migrations\0005_feature_department_scope.py
+  L0004 [QURAN_LABEL] QURAN_FEATURES = [
+  L0005 [QURAN_LABEL] ("tab_daily_classes", "Daily Classes Tab", "Show the Daily Classes section in the Quran portal.", 1),
+  L0006 [QURAN_LABEL] ("tab_accounts_enrollment", "Accounts & Enrollment Tab", "Show the Quran Accounts & Enrollment section.", 2),
+  L0007 [QURAN_LABEL] ("tab_lessons_control", "Lessons Control Tab", "Show the Quran Lessons Control section.", 3),
+  L0008 [QURAN_LABEL] ("tab_scheduling", "Scheduling Tab", "Show the Quran Scheduling section.", 4),
+  L0009 [QURAN_LABEL] ("tab_attendance", "Attendance Tab", "Show the Quran Attendance section.", 5),
+  L0010 [QURAN_LABEL] ("tab_reports", "Reports Tab", "Show the Quran Reports section.", 6),
+  L0011 [QURAN_LABEL] ("pdf_reports", "PDF Reports", "Allow Quran PDF report exports.", 30),
+  L0012 [QURAN_LABEL] ("csv_export", "CSV Export", "Allow Quran CSV export actions.", 31),
+  L0013 [QURAN_LABEL] ("excel_export", "Excel Export", "Allow Quran Excel export actions.", 32),
+  L0014 [QURAN_LABEL] ("bulk_import", "Bulk Import", "Allow Quran teacher and student bulk import.", 40),
+  L0015 [QURAN_LABEL] ("delete_accounts", "Delete Accounts", "Allow permanent Quran account deletion.", 41),
+  L0016 [QURAN_LABEL] ("delete_schedule", "Delete Schedule", "Allow Quran schedule deletion.", 50),
+  L0017 [QURAN_LABEL] ("ai_assistant", "AI Assistant", "Allow the Quran AI assistant.", 60),
+  L0072 [QURAN_LABEL] quran_keys = {item[0] for item in QURAN_FEATURES}
+  L0075 [QURAN_LABEL] for key, name, description, sort_order in QURAN_FEATURES:
+  L0083 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] "department_type": "quran",
+  L0095 [DEPARTMENT_TYPE] "department_type": "tuition",
+  L0101 [DEPARTMENT_TYPE] department_type="tuition",
+  L0104 [QURAN_LABEL] Feature.objects.exclude(key__in=quran_keys | tuition_keys | UNIMPLEMENTED_TUITION_KEYS).update(
+  L0105 [DEPARTMENT_TYPE] department_type="general",
+  L0109 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] if department.department_type == "quran":
+  L0110 [QURAN_LABEL] applicable = QURAN_FEATURES
+  L0111 [DEPARTMENT_TYPE] elif department.department_type == "tuition":
+  L0123 [DEPARTMENT_TYPE] if enabled is None and department.department_type == "tuition":
+  L0157 [DEPARTMENT_TYPE] name="department_type",
+  L0159 [CODE_QURAN,QURAN_LABEL] choices=[("quran", "Quran"), ("tuition", "Tuition"), ("general", "General")],
+
+FILE: backend\accounts\migrations\0008_quran_management_features.py
+  L0008 [QURAN_LABEL] "Track Quran students with consecutive leave or absence records.",
+  L0014 [QURAN_LABEL] "Calculate and manage Quran teacher monthly salaries, bonuses, and achievement points.",
+  L0025 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] quran_departments = Department.objects.filter(department_type="quran")
+  L0035 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] "department_type": "quran",
+  L0038 [QURAN_LABEL] for department in quran_departments:
+
+FILE: backend\accounts\migrations\0009_coordinator_tab_access.py
+  L0008 [QURAN_LABEL] ("accounts", "0008_quran_management_features"),
+
+FILE: backend\accounts\migrations\0010_repair_department_feature_settings.py
+  L0014 [DEPARTMENT_TYPE] department_type=department.department_type,
+  L0020 [ACTIVE_DEPARTMENT] department_id=department.id,
+  L0028 [ACTIVE_DEPARTMENT] department_id=department.id,
+  L0038 [ACTIVE_DEPARTMENT] department_id=department.id,
+
+FILE: backend\accounts\models.py
+  L0026 [CODE_QURAN,QURAN_LABEL] QURAN = "quran", "Quran"
+  L0037 [DEPARTMENT_TYPE] department_type = models.CharField(
+  L0067 [DEPARTMENT_TYPE] department_type = models.CharField(
+
+FILE: backend\accounts\platform_admin_api.py
+  L0166 [DEPARTMENT_TYPE] "department_type": department.department_type,
+  L0276 [ACTIVE_DEPARTMENT] department_id = str(request.query_params.get("department_id", "") or "").strip()
+  L0289 [ACTIVE_DEPARTMENT] if department_id.isdigit():
+  L0291 [ACTIVE_DEPARTMENT] Q(department_id=int(department_id))
+  L0292 [ACTIVE_DEPARTMENT] | Q(department_roles__department_id=int(department_id), department_roles__is_active=True)
+  L0307 [DEPARTMENT_TYPE] "department_type": department.department_type,
+  L0336 [ACTIVE_DEPARTMENT] department_id = request.data.get("department_id")
+  L0352 [ACTIVE_DEPARTMENT] department = Department.objects.select_related("institution").get(id=department_id)
+  L0354 [ACTIVE_DEPARTMENT] return Response({"department_id": "Select a valid department."}, status=status.HTTP_400_BAD_REQUEST)
+  L0392 [ACTIVE_DEPARTMENT] details={"department_id": department.id, "role": role},
+  L0423 [ACTIVE_DEPARTMENT] department_id = request.data.get("department_id", user.department_id)
+  L0425 [ACTIVE_DEPARTMENT] department = Department.objects.select_related("institution").get(id=department_id)
+  L0427 [ACTIVE_DEPARTMENT] return Response({"department_id": "Select a valid department."}, status=status.HTTP_400_BAD_REQUEST)
+  L0476 [ACTIVE_DEPARTMENT] "department_id": department.id,
+  L0477 [ACTIVE_DEPARTMENT] "previous_department_id": previous_department.id if previous_department else None,
+
+FILE: backend\accounts\platform_analytics_api.py
+  L0066 [DEPARTMENT_TYPE] department_types = [
+  L0068 [DEPARTMENT_TYPE] "key": row["department_type"],
+  L0069 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] "label": "Qur'an" if row["department_type"] == "quran" else row["department_type"].title(),
+  L0072 [DEPARTMENT_TYPE] for row in Department.objects.values("department_type").annotate(value=Count("id")).order_by("department_type")
+  L0080 [DEPARTMENT_TYPE] "department_type": row["department_type"],
+  L0087 [DEPARTMENT_TYPE] .values("id", "name", "institution__name", "department_type", "users_count")
+  L0092 [QURAN_LABEL] quran_attendance_by_status = {
+  L0103 [CODE_QURAN,QURAN_LABEL] "quran": quran_attendance_by_status.get(key, 0),
+  L0105 [QURAN_LABEL] "total": quran_attendance_by_status.get(key, 0) + tuition_attendance_by_status.get(key, 0),
+  L0113 [QURAN_LABEL] quran_activity = {
+  L0145 [QURAN_LABEL] "quran_attendance": quran_activity.get(day, 0),
+  L0157 [QURAN_LABEL,DEPARTMENT_TYPE] for department_type in [Department.DepartmentType.QURAN, Department.DepartmentType.TUITION, Department.DepartmentType.GENERAL]:
+  L0158 [DEPARTMENT_TYPE] total = DepartmentFeature.objects.filter(department__department_type=department_type).count()
+  L0160 [DEPARTMENT_TYPE] department__department_type=department_type,
+  L0163 [DEPARTMENT_TYPE] if total or Department.objects.filter(department_type=department_type).exists():
+  L0166 [DEPARTMENT_TYPE] "key": department_type,
+  L0167 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] "label": "Qur'an" if department_type == "quran" else department_type.title(),
+  L0194 [ACTIVE_DEPARTMENT] "active_departments": departments_active,
+  L0199 [QURAN_LABEL] "quran_schedules": ClassSchedule.objects.filter(is_active=True).count(),
+  L0201 [QURAN_LABEL] "quran_lessons": Lesson.objects.count(),
+  L0211 [DEPARTMENT_TYPE] "department_types": department_types,
+
+FILE: backend\accounts\platform_communications.py
+  L0027 [ACTIVE_DEPARTMENT] department_ids: set[int]
+  L0032 [ACTIVE_DEPARTMENT] department_ids: set[int] = set()
+  L0035 [ACTIVE_DEPARTMENT] department_id = getattr(user, "department_id", None)
+  L0038 [ACTIVE_DEPARTMENT] if department_id:
+  L0039 [ACTIVE_DEPARTMENT] department_ids.add(int(department_id))
+  L0045 [ACTIVE_DEPARTMENT] "institution_id", "department_id"
+  L0047 [ACTIVE_DEPARTMENT] for link_institution_id, link_department_id in links:
+  L0050 [ACTIVE_DEPARTMENT] if link_department_id:
+  L0051 [ACTIVE_DEPARTMENT] department_ids.add(int(link_department_id))
+  L0053 [ACTIVE_DEPARTMENT] return UserScope(institution_ids=institution_ids, department_ids=department_ids)
+  L0069 [ACTIVE_DEPARTMENT] if item.department_id:
+  L0101 [ACTIVE_DEPARTMENT] if scope.department_ids:
+  L0104 [ACTIVE_DEPARTMENT] department_id__in=scope.department_ids,
+  L0140 [ACTIVE_DEPARTMENT] if item.department_id:
+  L0175 [ACTIVE_DEPARTMENT] if scope.department_ids:
+  L0178 [ACTIVE_DEPARTMENT] department_id__in=scope.department_ids,
+  L0212 [ACTIVE_DEPARTMENT] def deactivate_overlapping_maintenance(*, scope_type: str, institution_id=None, department_id=None, actor=None) -> None:
+  L0219 [ACTIVE_DEPARTMENT] queryset = queryset.filter(department_id=department_id)
+
+FILE: backend\accounts\platform_communications_api.py
+  L0093 [ACTIVE_DEPARTMENT] department = Department.objects.select_related("institution").get(id=data.get("department_id"))
+  L0096 [ACTIVE_DEPARTMENT] {"department_id": "Select a valid department."},
+  L0135 [ACTIVE_DEPARTMENT] "id": item.department_id,
+  L0138 [DEPARTMENT_TYPE] "department_type": item.department.department_type,
+  L0140 [ACTIVE_DEPARTMENT] if item.department_id
+  L0179 [ACTIVE_DEPARTMENT] "id": item.department_id,
+  L0182 [DEPARTMENT_TYPE] "department_type": item.department.department_type,
+  L0184 [ACTIVE_DEPARTMENT] if item.department_id
+  L0243 [ACTIVE_DEPARTMENT] department_id=getattr(department, "id", None),
+  L0295 [ACTIVE_DEPARTMENT] department_id=item.department_id,
+
+FILE: backend\accounts\self_profile_api.py
+  L0027 [ACTIVE_DEPARTMENT] "department_id": user.department_id,
+
+FILE: backend\accounts\serializers.py
+  L0017 [QURAN_LABEL] "Nazira Quran",
+  L0018 [QURAN_LABEL] "Quran Memorization",
+  L0032 [QURAN_LABEL] "nazira": "Nazira Quran",
+  L0033 [QURAN_LABEL] "nazira quran": "Nazira Quran",
+  L0034 [QURAN_LABEL] "quran nazira": "Nazira Quran",
+  L0036 [QURAN_LABEL] "memorization": "Quran Memorization",
+  L0037 [QURAN_LABEL] "quran memorization": "Quran Memorization",
+  L0038 [QURAN_LABEL] "hifz": "Quran Memorization",
+  L0039 [QURAN_LABEL] "hifz quran": "Quran Memorization",
+  L0352 [QURAN_LABEL] - {"subject": "Nazira Quran"}
+  L0353 [QURAN_LABEL] - {"display_name": "Nazira Quran"}
+  L0354 [QURAN_LABEL] - {"name": "Nazira Quran"}
+  L0355 [QURAN_LABEL] - "Nazira Quran"
+  L0709 [ACTIVE_DEPARTMENT] if student and student.department_id:
+  L0710 [ACTIVE_DEPARTMENT] queryset = queryset.filter(department_id=student.department_id)
+
+FILE: backend\accounts\urls.py
+  L0077 [ACTIVE_DEPARTMENT] path("platform/departments/<int:department_id>/", PlatformDepartmentDetailView.as_view(), name="platform_department_detail"),
+  L0080 [ACTIVE_DEPARTMENT] path("platform/departments/<int:department_id>/features/", PlatformDepartmentFeatureView.as_view(), name="platform_department_features"),
+
+FILE: backend\accounts\views.py
+  L0035 [QURAN_LABEL] Department.DepartmentType.QURAN: [
+  L0039 [QURAN_LABEL] {"key": "tab_scheduling", "label": "Scheduling", "description": "Quran class schedules and timetable."},
+  L0057 [DEPARTMENT_TYPE] return list(COORDINATOR_TAB_DEFINITIONS.get(department.department_type, []))
+  L0096 [DEPARTMENT_TYPE] department_type=department.department_type,
+  L0148 [ACTIVE_DEPARTMENT] if item.department_id not in seen:
+  L0150 [ACTIVE_DEPARTMENT] seen.add(item.department_id)
+  L0167 [ACTIVE_DEPARTMENT] if getattr(actor, "department_id", None) == department.id:
+  L0195 [DEPARTMENT_TYPE] "department_type": department.department_type,
+  L0210 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] def resolve_department_for_account_scope(user, department_type="quran"):
+  L0211 [QURAN_LABEL] """Return the department that the Quran Accounts API must use for scoping.
+  L0213 [QURAN_LABEL] This prevents Tuition coordinators from appearing inside Quran Accounts and
+  L0214 [QURAN_LABEL] also prevents Quran coordinators from appearing inside Tuition manager APIs.
+  L0221 [DEPARTMENT_TYPE] not department_type
+  L0222 [DEPARTMENT_TYPE] or getattr(primary_department, "department_type", None) == department_type
+  L0236 [DEPARTMENT_TYPE] if department_type:
+  L0238 [DEPARTMENT_TYPE] department__department_type=department_type,
+  L0251 [DEPARTMENT_TYPE] if department_type:
+  L0252 [DEPARTMENT_TYPE] departments = departments.filter(department_type=department_type)
+  L0259 [DEPARTMENT_TYPE] if department_type:
+  L0260 [DEPARTMENT_TYPE] departments = departments.filter(department_type=department_type)
+  L0266 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] def user_is_in_same_account_scope(manager_user, target_user, department_type="quran"):
+  L0267 [DEPARTMENT_TYPE] department = resolve_department_for_account_scope(manager_user, department_type)
+  L0271 [ACTIVE_DEPARTMENT] if getattr(target_user, "department_id", None) == department.id:
+  L0281 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] def scoped_coordinator_queryset(manager_user, base_queryset=None, department_type="quran"):
+  L0282 [DEPARTMENT_TYPE] department = resolve_department_for_account_scope(manager_user, department_type)
+  L0471 [ACTIVE_DEPARTMENT] item.department_id == primary.id for item in active_role_links
+  L0492 [QURAN_LABEL,DEPARTMENT_TYPE] department_type=Department.DepartmentType.QURAN,
+  L0529 [ACTIVE_DEPARTMENT] "id": item.department_id,
+  L0532 [DEPARTMENT_TYPE] "department_type": item.department.department_type,
+  L0543 [DEPARTMENT_TYPE] department_type=department.department_type,
+  L0575 [DEPARTMENT_TYPE] "department_type": department.department_type,
+  L0592 [QURAN_DEPARTMENT,QURAN_LABEL] {"detail": "Only Quran department admins and coordinators can view accounts."},
+  L0596 [CODE_QURAN,QURAN_LABEL] department = resolve_department_for_account_scope(request.user, "quran")
+  L0791 [CODE_QURAN,QURAN_LABEL] department = resolve_department_for_account_scope(request.user, "quran")
+  L0856 [CODE_QURAN,QURAN_LABEL] "quran",
+  L0863 [CODE_QURAN,QURAN_LABEL] department = resolve_department_for_account_scope(request.user, "quran")
+  L0914 [CODE_QURAN,QURAN_LABEL] department = resolve_department_for_account_scope(request.user, "quran")
+  L1111 [ACTIVE_DEPARTMENT] "department_id": department.id,
+  L1112 [DEPARTMENT_TYPE] "department_type": department.department_type,
+  L1121 [ACTIVE_DEPARTMENT] "department_id": department.id,
+  L1178 [DEPARTMENT_TYPE] department_type=department.department_type,
+  L1205 [DEPARTMENT_TYPE] "department_type": feature.department_type,
+  L1216 [DEPARTMENT_TYPE] "department_type": department.department_type,
+  L1431 [DEPARTMENT_TYPE] department_type = str(request.data.get("department_type", "general") or "general").strip().lower()
+  L1456 [DEPARTMENT_TYPE] if department_type not in valid_types:
+  L1457 [DEPARTMENT_TYPE] department_type = Department.DepartmentType.GENERAL
+  L1475 [DEPARTMENT_TYPE] department_type=department_type,
+  L1485 [DEPARTMENT_TYPE] details={"institution_id": institution.id, "department_type": department.department_type},
+  L1494 [ACTIVE_DEPARTMENT] def get_object(self, request, department_id):
+  L1496 [ACTIVE_DEPARTMENT] department = Department.objects.select_related("institution").get(id=department_id)
+  L1505 [ACTIVE_DEPARTMENT] def patch(self, request, department_id):
+  L1512 [ACTIVE_DEPARTMENT] department = self.get_object(request, department_id)
+  L1529 [DEPARTMENT_TYPE] if "department_type" in request.data:
+  L1530 [DEPARTMENT_TYPE] department_type = str(request.data.get("department_type", "") or "").strip().lower()
+  L1532 [DEPARTMENT_TYPE] if department_type in valid_types:
+  L1533 [DEPARTMENT_TYPE] department.department_type = department_type
+  L1547 [DEPARTMENT_TYPE] details={"institution_id": department.institution_id, "department_type": department.department_type, "is_active": department.is_active},
+  L1552 [ACTIVE_DEPARTMENT] def delete(self, request, department_id):
+  L1559 [ACTIVE_DEPARTMENT] department = self.get_object(request, department_id)
+  L1588 [ACTIVE_DEPARTMENT] "department_id": summary["id"],
+  L1639 [DEPARTMENT_TYPE] department_type__in=[
+  L1640 [QURAN_LABEL] Department.DepartmentType.QURAN,
+  L1644 [DEPARTMENT_TYPE] .order_by("department_type", "sort_order", "name", "id")
+  L1655 [DEPARTMENT_TYPE] "department_type": item.department_type,
+  L1666 [ACTIVE_DEPARTMENT] def get_department(self, request, department_id):
+  L1668 [ACTIVE_DEPARTMENT] department = Department.objects.select_related("institution").get(id=department_id)
+  L1678 [ACTIVE_DEPARTMENT] def get(self, request, department_id):
+  L1685 [ACTIVE_DEPARTMENT] department = self.get_department(request, department_id)
+  L1700 [DEPARTMENT_TYPE] feature__department_type=department.department_type,
+  L1712 [ACTIVE_DEPARTMENT] def patch(self, request, department_id):
+  L1719 [ACTIVE_DEPARTMENT] department = self.get_department(request, department_id)
+  L1746 [DEPARTMENT_TYPE] department_type=department.department_type,
+  L1770 [ACTIVE_DEPARTMENT] details={"department_id": department.id, "feature_key": feature.key, "is_enabled": is_enabled},
+
+FILE: backend\tuition\management_api.py
+  L0062 [ACTIVE_DEPARTMENT] or user.department_id == department.id
+  L0066 [ACTIVE_DEPARTMENT] "department_id": department.id,
+  L0493 [ACTIVE_DEPARTMENT] user.department_id
+  L0502 [ACTIVE_DEPARTMENT] if user.department_id == department.id:
+
+FILE: backend\tuition\migrations\0002_seed_tuition_foundation.py
+  L0483 [DEPARTMENT_TYPE] department_type="tuition",
+  L0495 [DEPARTMENT_TYPE] department_type="tuition",
+  L0511 [DEPARTMENT_TYPE] if tuition_department.department_type != "tuition":
+  L0512 [DEPARTMENT_TYPE] tuition_department.department_type = "tuition"
+  L0513 [DEPARTMENT_TYPE] update_fields.append("department_type")
+
+FILE: backend\tuition\migrations\0003_consolidate_tuition_departments.py
+  L0037 [DEPARTMENT_TYPE] department_type="tuition",
+  L0051 [DEPARTMENT_TYPE] department_type="tuition",
+  L0081 [ACTIVE_DEPARTMENT] department_id=source.id,
+  L0092 [ACTIVE_DEPARTMENT] department_id=target.id,
+  L0129 [ACTIVE_DEPARTMENT] department_id=source.id,
+  L0141 [ACTIVE_DEPARTMENT] department_id=target.id,
+  L0163 [ACTIVE_DEPARTMENT] role_link.department_id = (
+  L0178 [ACTIVE_DEPARTMENT] department_id=source.id,
+  L0186 [ACTIVE_DEPARTMENT] department_id=target.id,
+  L0222 [ACTIVE_DEPARTMENT] department_id=target.id,
+  L0272 [ACTIVE_DEPARTMENT] department_id=source.id,
+  L0275 [ACTIVE_DEPARTMENT] department_id=target.id,
+  L0287 [DEPARTMENT_TYPE] if target.department_type != "tuition":
+  L0288 [DEPARTMENT_TYPE] target.department_type = "tuition"
+  L0290 [DEPARTMENT_TYPE] "department_type"
+
+FILE: backend\tuition\migrations\0007_teacher_attendance_per_class.py
+  L0015 [ACTIVE_DEPARTMENT] "department_id",
+  L0027 [ACTIVE_DEPARTMENT] department_id=group["department_id"],
+
+FILE: backend\tuition\models.py
+  L0369 [ACTIVE_DEPARTMENT] and self.subject.department_id
+  L0370 [ACTIVE_DEPARTMENT] != self.department_id
+  L0601 [ACTIVE_DEPARTMENT] and self.class_level.department_id
+  L0602 [ACTIVE_DEPARTMENT] != self.department_id
+  L0611 [ACTIVE_DEPARTMENT] and self.subject.department_id
+  L0612 [ACTIVE_DEPARTMENT] != self.department_id
+  L0623 [ACTIVE_DEPARTMENT] department_id=self.department_id,
+  L1066 [ACTIVE_DEPARTMENT] enrollment.department_id
+  L1067 [ACTIVE_DEPARTMENT] != self.department_id
+  L1258 [ACTIVE_DEPARTMENT] if self.schedule.department_id != self.department_id:
+
+FILE: backend\tuition\permissions.py
+  L0038 [ACTIVE_DEPARTMENT] department_id=None,
+  L0047 [ACTIVE_DEPARTMENT] if department_id:
+  L0049 [ACTIVE_DEPARTMENT] id=department_id,
+  L0050 [DEPARTMENT_TYPE] department_type="tuition",
+  L0079 [ACTIVE_DEPARTMENT] department_id=department_id,
+  L0081 [DEPARTMENT_TYPE] department__department_type=(
+  L0094 [ACTIVE_DEPARTMENT] getattr(user, "department_id", None)
+  L0095 [ACTIVE_DEPARTMENT] == int(department_id)
+  L0109 [DEPARTMENT_TYPE] and direct_department.department_type
+  L0120 [DEPARTMENT_TYPE] department__department_type=(
+  L0143 [DEPARTMENT_TYPE] department_type="tuition",
+  L0186 [ACTIVE_DEPARTMENT] getattr(user, "department_id", None)
+  L0220 [DEPARTMENT_TYPE] department_type="tuition",
+  L0270 [ACTIVE_DEPARTMENT] department_id = (
+  L0272 [ACTIVE_DEPARTMENT] "department_id"
+  L0275 [ACTIVE_DEPARTMENT] "department_id"
+  L0281 [ACTIVE_DEPARTMENT] department_id=department_id,
+
+FILE: backend\tuition\serializers.py
+  L0051 [ACTIVE_DEPARTMENT] user.department_id == department.id
+  L0324 [ACTIVE_DEPARTMENT] or user.department_id
+  L0330 [ACTIVE_DEPARTMENT] "department_id":
+  L0398 [ACTIVE_DEPARTMENT] "department_id": enrollment.department_id,
+  L0843 [ACTIVE_DEPARTMENT] if user.department_id is None:
+  L1225 [ACTIVE_DEPARTMENT] if user.department_id is None:
+  L1228 [ACTIVE_DEPARTMENT] elif user.department_id == department.id:
+
+FILE: backend\tuition\views.py
+  L0261 [DEPARTMENT_TYPE] "department_type":
+  L0262 [DEPARTMENT_TYPE] department.department_type,
+  L0615 [ACTIVE_DEPARTMENT] "current_department_id":
+  L0616 [ACTIVE_DEPARTMENT] user.department_id,
+  L0816 [ACTIVE_DEPARTMENT] user.department_id
+  L0930 [ACTIVE_DEPARTMENT] if user.department_id == department.id:
+  L2254 [ACTIVE_DEPARTMENT] "department_id": department.id,
+  L2283 [ACTIVE_DEPARTMENT] row_data["department_id"] = department.id
+  L2441 [ACTIVE_DEPARTMENT] row_data["department_id"] = department.id
+
+FILE: backend\tuition\ws_notify.py
+  L0026 [ACTIVE_DEPARTMENT] "department_id": department.id,
+  L0028 [DEPARTMENT_TYPE] "department_type": "tuition",
+
+FILE: components\ClassCard.tsx
+  L0001 [QURAN_LABEL] // IVS_QURAN_LIVE_CARD_TUITION_UI_V17
+  L0002 [QURAN_LABEL] // IVS_QURAN_LIVE_CARDS_ULTRA_COMPACT_NO_SHADOW_V20
+
+FILE: components\CoordinatorAccounts.tsx
+  L0097 [QURAN_LABEL] const QURAN_COORDINATOR_TABS = [
+  L0101 [QURAN_LABEL] { key: "tab_scheduling", label: "Scheduling", description: "Quran schedules and timetable." },
+  L0107 [QURAN_LABEL] const defaultQuranCoordinatorTabs = () =>
+  L0108 [QURAN_LABEL] Object.fromEntries(QURAN_COORDINATOR_TABS.map((item) => [item.key, true]));
+  L0143 [QURAN_LABEL] tab_access: defaultQuranCoordinatorTabs(),
+  L0876 [QURAN_LABEL] tab_access: { ...defaultQuranCoordinatorTabs(), ...(coordinator.tab_access || {}) },
+  L0885 [QURAN_LABEL] ? { ...current, tab_access: { ...defaultQuranCoordinatorTabs(), ...(response.tabs || {}) } }
+  L1364 [QURAN_DEPARTMENT,QURAN_LABEL] Only Quran department admins and coordinators can view accounts.
+  L2011 [QURAN_LABEL] {QURAN_COORDINATOR_TABS.map((tab) => {
+
+FILE: components\DepartmentSettings.tsx
+  L0054 [QURAN_LABEL] const QURAN_FEATURE_CATEGORIES: FeatureCategory[] = [
+  L0058 [QURAN_DEPARTMENT,QURAN_LABEL] subtitle: "Control the sections displayed in the Quran Department sidebar.",
+  L0076 [QURAN_LABEL] subtitle: "Control Quran report buttons and downloadable export formats.",
+  L0085 [QURAN_LABEL] subtitle: "Control Quran bulk enrollment and permanent account deletion.",
+  L0094 [QURAN_LABEL] subtitle: "Control sensitive actions inside Quran scheduling.",
+  L0103 [QURAN_DEPARTMENT,QURAN_LABEL] subtitle: "Control the Quran Department AI assistant.",
+  L0130 [QURAN_LABEL] subtitle: "Control Tuition report downloads without affecting Quran reports.",
+  L0185 [QURAN_LABEL] quran: QURAN_FEATURE_CATEGORIES,
+  L0238 [DEPARTMENT_TYPE] featureState.department?.department_type ||
+  L0239 [DEPARTMENT_TYPE] selectedDepartment?.department_type ||
+  L0426 [QURAN_LABEL] Manage only the permissions that belong to the selected department type. Quran and
+  L0479 [DEPARTMENT_TYPE] {department.institution.name} ? {department.department_type}
+
+FILE: components\LessonForm.tsx
+  L0007 [QURAN_LABEL] "Nazira Quran",
+  L0008 [QURAN_LABEL] "Quran Memorization",
+  L0148 [QURAN_LABEL] const [quranMode, setQuranMode] = useState<"surah" | "juz">("surah");
+  L0177 [QURAN_LABEL] if (subject === "Nazira Quran" || subject === "Quran Memorization") {
+  L0178 [QURAN_LABEL] if (quranMode === "juz") {
+  L0193 [QURAN_LABEL] quranMode,
+  L0210 [QURAN_LABEL] if (subject === "Nazira Quran" || subject === "Quran Memorization") {
+  L0212 [CODE_QURAN,QURAN_LABEL] type: "quran",
+  L0213 [QURAN_LABEL] mode: quranMode,
+  L0214 [QURAN_LABEL] juz: quranMode === "juz" ? juz : null,
+  L0236 [QURAN_LABEL] quranMode,
+  L0264 [QURAN_LABEL] setQuranMode("surah");
+  L0427 [QURAN_LABEL] {(subject === "Nazira Quran" || subject === "Quran Memorization") && (
+  L0432 [QURAN_LABEL] onClick={() => setQuranMode("surah")}
+  L0434 [QURAN_LABEL] quranMode === "surah"
+  L0444 [QURAN_LABEL] onClick={() => setQuranMode("juz")}
+  L0446 [QURAN_LABEL] quranMode === "juz"
+  L0456 [QURAN_LABEL] {quranMode === "juz" && (
+
+FILE: components\platform\PlatformAdminTools.tsx
+  L0205 [ACTIVE_DEPARTMENT] department_id: "",
+  L0294 [ACTIVE_DEPARTMENT] setForm({ ...emptyAdminForm, department_id: departments[0] ? String(departments[0].id) : "" });
+  L0305 [ACTIVE_DEPARTMENT] department_id: item.department ? String(item.department.id) : "",
+  L0317 [ACTIVE_DEPARTMENT] if (!form.full_name.trim() || !form.username.trim() || !form.department_id || !form.current_password) {
+  L0332 [ACTIVE_DEPARTMENT] department_id: Number(form.department_id),
+  L0532 [ACTIVE_DEPARTMENT] <label><span className="mb-1.5 block text-xs font-black text-slate-600 dark:text-slate-300">Department</span><select value={form.department_id} onChange={(event) => setForm({ ...form, department_id: event.target.value })} className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-b
+
+FILE: components\platform\PlatformAnalyticsOverview.tsx
+  L0158 [ACTIVE_DEPARTMENT] { label: "Departments", value: summary.departments, meta: `${summary.active_departments} active`, icon: Layers3, accent: "bg-cyan-500" },
+  L0161 [QURAN_LABEL] { label: "Active Schedules", value: summary.quran_schedules + summary.tuition_schedules, meta: `${summary.quran_schedules} Qur'an · ${summary.tuition_schedules} Tuition`, icon: CalendarDays, accent: "bg-amber-500" },
+  L0162 [QURAN_LABEL] { label: "Learning Records", value: summary.quran_lessons + summary.tuition_enrollments, meta: `${summary.quran_lessons} lessons · ${summary.tuition_enrollments} enrollments`, icon: BookOpen, accent: "bg-rose-500" },
+  L0176 [QURAN_LABEL] <ChartCard title="14-Day Platform Activity" subtitle="Qur'an attendance, Tuition attendance, lessons, and Main Admin changes from the database.">
+  L0183 [QURAN_LABEL] <linearGradient id="quranActivity" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#4f46e5" stopOpacity={0.34}/><stop offset="95%" stopColor="#4f46e5" stopOpacity={0}/></linearGradient>
+  L0190 [QURAN_LABEL] <Area type="monotone" dataKey="quran_attendance" name="Qur'an Attendance" stroke="#4f46e5" strokeWidth={3} fill="url(#quranActivity)" />
+  L0198 [QURAN_LABEL] { label: "Qur'an Attendance", color: "#4f46e5" },
+  L0234 [QURAN_LABEL] <ChartCard title="Department Portfolio" subtitle="Distribution of Qur'an, Tuition, and future department types.">
+  L0235 [DEPARTMENT_TYPE] {data.department_types.length ? <div className="grid items-center gap-4 sm:grid-cols-[1fr_0.9fr]"><div className="h-[240px] sm:h-[280px]"><ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 320, height: 220 }} debounce={60}><PieChart><Pie data={data.
+  L0240 [QURAN_LABEL] <ChartCard title="Attendance Status" subtitle="Combined comparison between Qur'an and Tuition attendance records.">
+  L0250 [CODE_QURAN,QURAN_LABEL] <Bar dataKey="quran" name="Qur'an" stackId="attendance" fill="#4f46e5" radius={[0, 0, 8, 8]} />
+  L0256 [QURAN_LABEL] { label: "Qur'an", color: "#4f46e5" },
+  L0269 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">{data.top_departments.length ? data.top_departments.map((item, index) => <article key={item.id} className="rounded-[22px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/70"><div className="flex items-start jus
+
+FILE: components\platform\PlatformCommunicationsPanel.tsx
+  L0115 [ACTIVE_DEPARTMENT] department_id: "",
+  L0130 [ACTIVE_DEPARTMENT] department_id: "",
+  L0187 [ACTIVE_DEPARTMENT] if (maintenanceForm.scope_type === "department" && !maintenanceForm.department_id) {
+  L0198 [ACTIVE_DEPARTMENT] department_id: maintenanceForm.department_id ? Number(maintenanceForm.department_id) : undefined,
+  L0262 [ACTIVE_DEPARTMENT] if (noticeForm.scope_type === "department" && !noticeForm.department_id) {
+  L0282 [ACTIVE_DEPARTMENT] department_id: noticeForm.department_id ? Number(noticeForm.department_id) : undefined,
+  L0374 [ACTIVE_DEPARTMENT] department_id: "",
+  L0390 [ACTIVE_DEPARTMENT] onChange={(event) => setMaintenanceForm((current) => ({ ...current, institution_id: event.target.value, department_id: "" }))}
+  L0403 [ACTIVE_DEPARTMENT] value={maintenanceForm.department_id}
+  L0404 [ACTIVE_DEPARTMENT] onChange={(event) => setMaintenanceForm((current) => ({ ...current, department_id: event.target.value }))}
+  L0453 [ACTIVE_DEPARTMENT] <label><span className={labelClass}>Scope</span><select value={noticeForm.scope_type} onChange={(event) => setNoticeForm((current) => ({ ...current, scope_type: event.target.value as PlatformNotice["scope_type"], institution_id: "", department_id: "" }))} className={fieldClass}><option value="platfo
+  L0454 [ACTIVE_DEPARTMENT] {noticeForm.scope_type !== "platform" && <label><span className={labelClass}>Institution</span><select value={noticeForm.institution_id} onChange={(event) => setNoticeForm((current) => ({ ...current, institution_id: event.target.value, department_id: "" }))} className={fieldClass}><option value="">S
+  L0455 [ACTIVE_DEPARTMENT] {noticeForm.scope_type === "department" && <label><span className={labelClass}>Department</span><select value={noticeForm.department_id} onChange={(event) => setNoticeForm((current) => ({ ...current, department_id: event.target.value }))} className={fieldClass}><option value="">Select department</op
+
+FILE: components\PlatformAdmin.tsx
+  L0097 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] department_type: "quran" | "tuition" | "general";
+  L0120 [DEPARTMENT_TYPE] department_type: "general",
+  L0218 [CODE_QURAN,QURAN_LABEL] if (normalized === "quran") return "Qur'an";
+  L0424 [DEPARTMENT_TYPE] [item.name, item.code, item.department_type]
+  L0499 [DEPARTMENT_TYPE] department_type: (department.department_type as any) || "general",
+  L0650 [DEPARTMENT_TYPE] department_type: departmentForm.department_type,
+  L0659 [DEPARTMENT_TYPE] department_type: departmentForm.department_type,
+  L1275 [DEPARTMENT_TYPE] value={departmentForm.department_type}
+  L1279 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] department_type: value as "quran" | "tuition" | "general",
+  L1283 [CODE_QURAN,QURAN_LABEL] { value: "quran", label: "Qur'an" },
+  L1722 [DEPARTMENT_TYPE] {formatDepartmentType(department.department_type)}
+  L2084 [DEPARTMENT_TYPE] <InfoChip label="Type" value={formatDepartmentType(department.department_type)} />
+
+FILE: components\QuranDroppedLeave.tsx
+  L0014 [QURAN_LABEL] getQuranDroppedLeave,
+  L0015 [QURAN_LABEL] type QuranDroppedLeaveItem,
+  L0016 [QURAN_LABEL] type QuranDroppedLeaveResponse,
+  L0027 [QURAN_LABEL] function StatusPill({ item }: { item: QuranDroppedLeaveItem }) {
+  L0043 [QURAN_LABEL] export default function QuranDroppedLeave() {
+  L0044 [QURAN_LABEL] const [data, setData] = useState<QuranDroppedLeaveResponse | null>(null);
+  L0054 [QURAN_LABEL] setData(await getQuranDroppedLeave());
+
+FILE: components\QuranSalaryProofModal.tsx
+  L0014 [QURAN_LABEL] getQuranSalaryAudit,
+  L0015 [QURAN_LABEL] type QuranSalaryAuditResponse,
+  L0098 [QURAN_LABEL] export default function QuranSalaryProofModal({
+  L0111 [QURAN_LABEL] const [data, setData] = useState<QuranSalaryAuditResponse | null>(null);
+  L0121 [QURAN_LABEL] getQuranSalaryAudit({ teacher_id: teacherId, metric, month, year })
+
+FILE: components\ReportsTab.tsx
+  L1818 [QURAN_DEPARTMENT,QURAN_LABEL] doc.text("Qur'an Department", 37, 24);
+  L2021 [QURAN_DEPARTMENT,QURAN_LABEL] doc.text("Qur'an Department Attendance Report", 15, footerY + 5);
+
+FILE: components\StudentPortal.tsx
+  L0001 [QURAN_LABEL] // IVS_QURAN_STUDENT_PORTAL_V49_SAFE_CARD_REVEAL_FIX
+  L0146 [QURAN_LABEL] type QuranStudentCardSide = "front" | "back";
+  L0148 [QURAN_LABEL] type QuranStudentCardDetails = {
+  L0149 [QURAN_LABEL] side: QuranStudentCardSide;
+  L0155 [QURAN_LABEL] function quranRoundedRect(
+  L0173 [QURAN_LABEL] function quranFitText(
+  L0191 [QURAN_LABEL] function loadQuranCardImage(src: string) {
+  L0200 [QURAN_LABEL] async function createQuranStudentCardImage(details: QuranStudentCardDetails) {
+  L0210 [QURAN_LABEL] const logo = await loadQuranCardImage("/ivs-logo.png").catch(() => null);
+  L0224 [QURAN_LABEL] quranRoundedRect(ctx, 48, 42, 106, 106, 30);
+  L0233 [QURAN_DEPARTMENT,QURAN_LABEL] ctx.fillText("QURAN DEPARTMENT", 178, 118);
+  L0236 [QURAN_LABEL] quranRoundedRect(ctx, 600, 52, 188, 52, 26);
+  L0247 [QURAN_LABEL] const fittedName = quranFitText(ctx, details.studentName, 724, 58, 36, 900);
+  L0261 [QURAN_LABEL] { label: "PROGRAM", value: "Quran Studies", icon: "QS" },
+  L0262 [QURAN_DEPARTMENT,QURAN_LABEL] { label: "DEPARTMENT", value: "Quran Department", icon: "DP" },
+  L0269 [QURAN_LABEL] quranRoundedRect(ctx, 50, y, 740, 118, 28);
+  L0276 [QURAN_LABEL] quranRoundedRect(ctx, 72, y + 24, 72, 72, 22);
+  L0287 [QURAN_LABEL] const fitted = quranFitText(ctx, row.value, 574, 31, 22, 850);
+  L0297 [QURAN_LABEL] ctx.fillText("OFFICIAL QURAN STUDENT IDENTITY CARD", 58, 1148);
+  L0302 [QURAN_LABEL] quranRoundedRect(ctx, 52, 46, 104, 104, 28);
+  L0311 [QURAN_LABEL] ctx.fillText("QURAN STUDENT IDENTITY", 180, 126);
+  L0325 [QURAN_LABEL] quranRoundedRect(ctx, 126, 410, 588, 588, 48);
+  L0331 [QURAN_LABEL] const qrDataUrl = await QRCode.toDataURL(`IVS-QURAN-STUDENT:${studentCode}`, {
+  L0337 [QURAN_LABEL] const qrImage = await loadQuranCardImage(qrDataUrl).catch(() => null);
+  L0346 [QURAN_DEPARTMENT,QURAN_LABEL] ctx.fillText("Quran Department", 420, 1085);
+  L0352 [QURAN_LABEL] ctx.fillText("INSTITUTE BRANDING • IVS QURAN", 420, 1164);
+  L0777 [QURAN_LABEL] createQuranStudentCardImage({ side: "front", studentName, studentId: studentCode, teacherName }),
+  L0778 [QURAN_LABEL] createQuranStudentCardImage({ side: "back", studentName, studentId: studentCode, teacherName }),
+  L1181 [QURAN_LABEL] className={`quran-global-lanyard-layer ${studentCardVisible ? "is-visible" : "is-hidden"} ${studentCardHasToggled ? (studentCardVisible ? "motion-showing" : "motion-hiding") : "motion-idle"}`}
+  L1183 [QURAN_LABEL] aria-label="Interactive Quran student identity lanyard"
+
+FILE: components\TeacherPortal.tsx
+  L0100 [QURAN_LABEL] "Nazira Quran",
+  L0101 [QURAN_LABEL] "Quran Memorization",
+  L0321 [QURAN_LABEL] // Quran
+  L0322 [QURAN_LABEL] quranMode: "surah" | "juz";
+  L0655 [QURAN_LABEL] quranMode: "surah",
+  L0674 [QURAN_LABEL] if (subject === "Nazira Quran" || subject === "Quran Memorization") {
+  L0677 [QURAN_LABEL] if (entry.quranMode === "juz") {
+  L0772 [QURAN_LABEL] {/* ── Nazira Quran / Quran Memorization ── */}
+  L0773 [QURAN_LABEL] {(entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") && (
+  L0777 [QURAN_LABEL] <button key={mode} type="button" onClick={() => up({ quranMode: mode })}
+  L0778 [QURAN_LABEL] className={`tp-mode-btn ${entry.quranMode === mode ? "active" : ""}`}>
+  L0784 [QURAN_LABEL] {entry.quranMode === "juz" && (
+  L0793 [QURAN_LABEL] <label className="tp-compact-label">{entry.quranMode === "juz" ? "Surah in Juz" : "Surah"}</label>
+  L0795 [QURAN_LABEL] {(entry.quranMode === "juz" ? surahsForJuz : SURAHS).map(s => (
+  L1282 [CODE_QURAN,QURAN_LABEL] (entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") ? "quran" :
+  L1285 [QURAN_LABEL] ...((entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") && {
+  L1286 [QURAN_LABEL] mode: entry.quranMode, juz: entry.quranMode === "juz" ? entry.juz : null,
+  L1386 [CODE_QURAN,QURAN_LABEL] } else if (type === "quran") {
+  L1387 [QURAN_LABEL] entry.quranMode = ld.mode || "surah";
+  L1444 [CODE_QURAN,QURAN_LABEL] (entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") ? "quran" :
+  L1447 [QURAN_LABEL] ...((entry.subject === "Nazira Quran" || entry.subject === "Quran Memorization") && {
+  L1448 [QURAN_LABEL] mode: entry.quranMode, juz: entry.quranMode === "juz" ? entry.juz : null,
+  L1763 [QURAN_LABEL] const isQuranMonthlySubject = useMemo(
+  L2035 [QURAN_LABEL] } else if (isQuranMonthlySubject) {
+  L2061 [CODE_QURAN,QURAN_LABEL] range_type: "quran",
+  L2077 [QURAN_LABEL] `Quran target: Surah ` +
+  L2104 [QURAN_LABEL] isQuranMonthlySubject
+  L3170 [QURAN_LABEL] isQuranMonthlySubject && (
+  L3174 [QURAN_LABEL] Quran range
+  L3313 [QURAN_LABEL] isQuranMonthlySubject
+  L3328 [QURAN_LABEL] isQuranMonthlySubject
+
+FILE: components\TeacherSalaryManagement.tsx
+  L0034 [QURAN_LABEL] getQuranSalaryAudit,
+  L0035 [QURAN_LABEL] getQuranSalaryDashboard,
+  L0036 [QURAN_LABEL] markQuranSalaryPdfDownload,
+  L0037 [QURAN_LABEL] updateQuranSalarySettings,
+  L0038 [QURAN_LABEL] updateQuranSalarySlip,
+  L0040 [QURAN_LABEL] type QuranSalaryAuditResponse,
+  L0041 [QURAN_LABEL] type QuranSalaryConfiguration,
+  L0042 [QURAN_LABEL] type QuranSalaryDashboardResponse,
+  L0043 [QURAN_LABEL] type QuranTeacherSalarySlip,
+  L0047 [QURAN_LABEL] import QuranSalaryProofModal from "./QuranSalaryProofModal";
+  L0247 [QURAN_LABEL] function SettingsPanel({ config, onSaved }: { config: QuranSalaryConfiguration; onSaved: (value: QuranSalaryConfiguration) => void }) {
+  L0264 [QURAN_LABEL] const saved = await updateQuranSalarySettings({
+  L0476 [QURAN_LABEL] function achievementPayoutFor(points: number, config?: QuranSalaryConfiguration | null) {
+  L0489 [QURAN_LABEL] slip: QuranTeacherSalarySlip;
+  L0490 [QURAN_LABEL] config?: QuranSalaryConfiguration | null;
+  L0492 [QURAN_LABEL] onSaved: (slip: QuranTeacherSalarySlip) => void;
+  L0559 [QURAN_LABEL] const saved = await updateQuranSalarySlip(slip.id, {
+  L0678 [QURAN_LABEL] async function createTeacherSalaryPdf(slip: QuranTeacherSalarySlip, audit: QuranSalaryAuditResponse) {
+  L0734 [QURAN_DEPARTMENT,QURAN_LABEL] doc.text("Quran Department · Monthly Teacher Salary Statement", textX, 21.5);
+  L0907 [QURAN_DEPARTMENT,QURAN_LABEL] doc.text("Iqra Virtual School · Quran Department", 8, pageHeight - 5);
+  L0932 [QURAN_LABEL] const [data, setData] = useState<QuranSalaryDashboardResponse | null>(null);
+  L0936 [QURAN_LABEL] const [selectedSlip, setSelectedSlip] = useState<QuranTeacherSalarySlip | null>(null);
+  L0946 [QURAN_LABEL] const response = await getQuranSalaryDashboard(month, year, page, pageSize);
+  L0973 [QURAN_LABEL] const updateSlipInState = (saved: QuranTeacherSalarySlip) => {
+  L0977 [QURAN_LABEL] const downloadSalaryPdf = async (slip: QuranTeacherSalarySlip) => {
+  L0985 [QURAN_LABEL] const audit = await getQuranSalaryAudit({
+  L0992 [QURAN_LABEL] const saved = await markQuranSalaryPdfDownload(slip.id);
+  L1151 [QURAN_LABEL] {teacherRows.length === 0 && !loading && <div className="col-span-full rounded-[30px] border border-slate-200 bg-white p-12 text-center text-sm font-bold text-slate-500">No Quran teachers found for {monthLabel(month, year)}.</div>}
+  L1157 [QURAN_LABEL] {proof && <QuranSalaryProofModal teacherId={proof.teacherId} metric={proof.metric} month={month} year={year} onClose={() => setProof(null)} />}
+
+FILE: components\TeacherSalarySelfService.tsx
+  L0022 [QURAN_LABEL] getQuranSalaryDashboard,
+  L0023 [QURAN_LABEL] type QuranSalaryDashboardResponse,
+  L0025 [QURAN_LABEL] import QuranSalaryProofModal from "./QuranSalaryProofModal";
+  L0179 [QURAN_LABEL] const [data, setData] = useState<QuranSalaryDashboardResponse | null>(null);
+  L0191 [QURAN_LABEL] const response = await getQuranSalaryDashboard(month, year, 1, 1);
+  L0353 [QURAN_LABEL] {proofMetric && slip && <QuranSalaryProofModal teacherId={slip.teacher_id} metric={proofMetric} month={month} year={year} onClose={() => setProofMetric(null)} />}
+
+FILE: components\tuition\lanyard\Lanyard.tsx
+  L0001 [QURAN_LABEL] // IVS_STUDENT_PORTALS_V50_QURAN_STABLE_DRAG_RIBBON_FIX
+  L0460 [QURAN_LABEL] // The Quran portal uses a full-height event surface. Start the complete
+  L0607 [QURAN_LABEL] // Pulling the Quran card upward can fold the rope back over its fixed
+
+FILE: components\tuition\TuitionAccountsEnrollment.tsx
+  L0355 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0360 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0365 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0369 [ACTIVE_DEPARTMENT] getTuitionSchedulingMatrix({ department_id: departmentId }).catch(() => null),
+  L0649 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0871 [ACTIVE_DEPARTMENT] department_id: departmentId,
+
+FILE: components\tuition\TuitionAssistantChat.tsx
+  L0192 [ACTIVE_DEPARTMENT] getTuitionAccounts({ department_id: departmentId, role: "teacher", page_size: 1000 } as any).catch(() => ({ results: [] })),
+  L0193 [ACTIVE_DEPARTMENT] getTuitionAccounts({ department_id: departmentId, role: "student", page_size: 1000 } as any).catch(() => ({ results: [] })),
+  L0194 [ACTIVE_DEPARTMENT] getTuitionEnrollments({ department_id: departmentId, page_size: 1000, is_active: true } as any).catch(() => ({ results: [] })),
+
+FILE: components\tuition\TuitionAttendance.tsx
+  L0120 [ACTIVE_DEPARTMENT] getTuitionSchedulingMatrix({ department_id: departmentId }),
+  L0121 [ACTIVE_DEPARTMENT] getTuitionAttendance({ department_id: departmentId }),
+  L0134 [ACTIVE_DEPARTMENT] const payload = await getTuitionAttendance({ department_id: departmentId });
+  L0176 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0186 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0266 [QURAN_LABEL] <p className="mt-1 text-sm font-semibold text-slate-500">Create Tuition schedules first, then attendance will appear here using the same Quran attendance UI.</p>
+
+FILE: components\tuition\TuitionCoordinatorPortal.tsx
+  L0054 [DEPARTMENT_TYPE] department_type: string;
+  L0311 [QURAN_LABEL] // TUITION_DASHBOARD_QURAN_HOURGLASS_ICON_V1
+  L0700 [ACTIVE_DEPARTMENT] department_id: department.id,
+  L0740 [ACTIVE_DEPARTMENT] department_id: department.id,
+
+FILE: components\tuition\TuitionCsvImportModal.tsx
+  L0442 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0520 [ACTIVE_DEPARTMENT] department_id: departmentId,
+
+FILE: components\tuition\TuitionLiveScheduleCard.tsx
+  L0042 [ACTIVE_DEPARTMENT] department_id: departmentId,
+
+FILE: components\tuition\TuitionManagersPanel.tsx
+  L0212 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0318 [ACTIVE_DEPARTMENT] department_id: departmentId,
+
+FILE: components\tuition\TuitionPendingPortal.tsx
+  L0018 [QURAN_DEPARTMENT,QURAN_LABEL] <p className="mt-3 text-sm font-semibold leading-7 text-slate-500">Your Tuition account is connected correctly. The dedicated {role} workspace will be activated in the upcoming portal checkpoint, so Quran Department screens are not shown here.</p>
+
+FILE: components\tuition\TuitionReports.tsx
+  L1443 [ACTIVE_DEPARTMENT] getTuitionSchedulingMatrix({ department_id: departmentId }),
+  L1444 [ACTIVE_DEPARTMENT] getTuitionAttendance({ department_id: departmentId }),
+
+FILE: components\tuition\TuitionScheduling.tsx
+  L0491 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0620 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0696 [ACTIVE_DEPARTMENT] department_id: departmentId,
+
+FILE: hooks\useAcademyWS.ts
+  L0003 [QURAN_LABEL] const SESSION_KEY = "quran_academy_session_v2";
+
+FILE: services\djangoApiService.ts
+  L0667 [DEPARTMENT_TYPE] department_type: string;
+  L0693 [DEPARTMENT_TYPE] department_type: string;
+  L0704 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] department_type: "quran" | "tuition" | "general";
+  L0735 [CODE_QURAN,QURAN_LABEL,DEPARTMENT_TYPE] department_type: "quran" | "tuition" | "general";
+  L0885 [DEPARTMENT_TYPE] department_type: string;
+  L0899 [ACTIVE_DEPARTMENT] department_id: number;
+  L0908 [ACTIVE_DEPARTMENT] department_id?: number | string;
+  L1597 [DEPARTMENT_TYPE] department_type: string;
+  L1642 [ACTIVE_DEPARTMENT] department_id?: number | null;
+  L1698 [DEPARTMENT_TYPE] department_type: string;
+  L1719 [DEPARTMENT_TYPE] department?: { id: number; name: string; code: string; department_type: string } | null;
+  L1729 [ACTIVE_DEPARTMENT] department_id?: number;
+  L1766 [ACTIVE_DEPARTMENT] department_id?: number;
+  L1799 [ACTIVE_DEPARTMENT] institutions: number; active_institutions: number; departments: number; active_departments: number;
+  L1800 [QURAN_LABEL] users: number; active_users: number; teachers: number; students: number; quran_schedules: number;
+  L1801 [QURAN_LABEL] tuition_schedules: number; quran_lessons: number; tuition_enrollments: number; attendance_records: number;
+  L1805 [DEPARTMENT_TYPE] department_types: Array<{ key: string; label: string; value: number }>;
+  L1806 [QURAN_LABEL] attendance_status: Array<{ status: string; quran: number; tuition: number; total: number }>;
+  L1807 [QURAN_LABEL] activity_timeline: Array<{ date: string; label: string; quran_attendance: number; tuition_attendance: number; lessons: number; admin_activity: number }>;
+  L1808 [DEPARTMENT_TYPE] top_departments: Array<{ id: number; name: string; institution: string; department_type: string; users: number }>;
+  L1817 [QURAN_LABEL] // Quran Dropped / Leave and Teacher Salary Management
+  L1820 [QURAN_LABEL] export type QuranDroppedLeaveItem = {
+  L1840 [QURAN_LABEL] export type QuranDroppedLeaveResponse = {
+  L1841 [QURAN_LABEL] results: QuranDroppedLeaveItem[];
+  L1846 [QURAN_LABEL] export async function getQuranDroppedLeave(): Promise<QuranDroppedLeaveResponse> {
+  L1847 [QURAN_LABEL] return request<QuranDroppedLeaveResponse>("/api/academy/dropped-leave/");
+  L1853 [QURAN_LABEL] export type QuranSalaryConfiguration = {
+  L1855 [ACTIVE_DEPARTMENT] department_id: number;
+  L1874 [QURAN_LABEL] export type QuranTeacherSalarySlip = {
+  L1901 [QURAN_LABEL] export type QuranSalaryPagination = {
+  L1910 [QURAN_LABEL] export type QuranSalaryDashboardResponse = {
+  L1915 [QURAN_LABEL] configuration: QuranSalaryConfiguration | null;
+  L1916 [QURAN_LABEL] teachers: QuranTeacherSalarySlip[];
+  L1917 [QURAN_LABEL] pagination: QuranSalaryPagination;
+  L1928 [QURAN_LABEL] export type QuranSalaryAuditAttendanceDay = {
+  L1936 [QURAN_LABEL] export type QuranSalaryAuditRow = {
+  L1965 [QURAN_LABEL] attendance: QuranSalaryAuditAttendanceDay[];
+  L1968 [QURAN_LABEL] export type QuranSalaryAuditResponse = {
+  L1975 [QURAN_LABEL] rows: QuranSalaryAuditRow[];
+  L1983 [QURAN_LABEL] export async function getQuranSalaryDashboard(
+  L1988 [QURAN_LABEL] ): Promise<QuranSalaryDashboardResponse> {
+  L1996 [QURAN_LABEL] return request<QuranSalaryDashboardResponse>(`/api/academy/teacher-salary/?${query.toString()}`, {
+  L2001 [QURAN_LABEL] export async function getQuranSalaryAudit(input: {
+  L2006 [QURAN_LABEL] }): Promise<QuranSalaryAuditResponse> {
+  L2014 [QURAN_LABEL] return request<QuranSalaryAuditResponse>(`/api/academy/teacher-salary/audit/?${query.toString()}`, {
+  L2019 [QURAN_LABEL] export async function updateQuranSalarySlip(
+  L2030 [QURAN_LABEL] ): Promise<QuranTeacherSalarySlip> {
+  L2031 [QURAN_LABEL] return request<QuranTeacherSalarySlip>("/api/academy/teacher-salary/", {
+  L2038 [QURAN_LABEL] export async function markQuranSalaryPdfDownload(slipId: number): Promise<QuranTeacherSalarySlip> {
+  L2039 [QURAN_LABEL] return request<QuranTeacherSalarySlip>("/api/academy/teacher-salary/pdf-download/", {
+  L2045 [QURAN_LABEL] export async function getQuranSalarySettings(): Promise<QuranSalaryConfiguration> {
+  L2046 [QURAN_LABEL] return request<QuranSalaryConfiguration>("/api/academy/teacher-salary/settings/", { cache: "no-store" });
+  L2049 [QURAN_LABEL] export async function updateQuranSalarySettings(
+  L2050 [QURAN_LABEL] input: Partial<QuranSalaryConfiguration>
+  L2051 [QURAN_LABEL] ): Promise<QuranSalaryConfiguration> {
+  L2052 [QURAN_LABEL] return request<QuranSalaryConfiguration>("/api/academy/teacher-salary/settings/", {
+
+FILE: services\geminiService.ts
+  L0121 [QURAN_DEPARTMENT,QURAN_LABEL] department: "Qur'an Department",
+
+FILE: services\sessionService.ts
+  L0030 [QURAN_LABEL] const SESSION_KEY = "quran_academy_session_v2";
+
+FILE: services\storageService.ts
+  L0004 [QURAN_LABEL] const CACHE_KEY = "quran_academy_cache_v4";
+
+FILE: services\tuitionApiService.ts
+  L0049 [ACTIVE_DEPARTMENT] department_id: number;
+  L0135 [DEPARTMENT_TYPE] department_type: string;
+  L0143 [ACTIVE_DEPARTMENT] department_id?: number;
+  L0166 [ACTIVE_DEPARTMENT] department_id?: number;
+  L0188 [ACTIVE_DEPARTMENT] department_id?: number;
+  L0210 [ACTIVE_DEPARTMENT] `/api/tuition/foundation/${query({ department_id: departmentId })}`
+  L0215 [ACTIVE_DEPARTMENT] department_id?: number;
+  L0252 [ACTIVE_DEPARTMENT] department_id: departmentId,
+  L0261 [ACTIVE_DEPARTMENT] `/api/tuition/options/${query({ department_id: departmentId })}`
+  L0313 [ACTIVE_DEPARTMENT] department_id: number;
+  L0318 [ACTIVE_DEPARTMENT] department_id?: number;
+  L0365 [ACTIVE_DEPARTMENT] department_id?: number;
+  L0396 [ACTIVE_DEPARTMENT] `/api/tuition/managers/${userId}/${query({ department_id: departmentId })}`,
+  L0403 [ACTIVE_DEPARTMENT] `/api/tuition/dashboard/${query({ department_id: departmentId })}`
+  L0497 [ACTIVE_DEPARTMENT] department_id?: number;
+  L0508 [ACTIVE_DEPARTMENT] department_id?: number;
+  L0519 [ACTIVE_DEPARTMENT] department_id?: number;
+  L0551 [ACTIVE_DEPARTMENT] `/api/tuition/schedules/${scheduleId}/${query({ department_id: departmentId, permanent })}`,
+  L0557 [ACTIVE_DEPARTMENT] department_id?: number;
+  L0590 [ACTIVE_DEPARTMENT] `/api/tuition/availability/${availabilityId}/${query({ department_id: departmentId, permanent })}`,
+  L0623 [ACTIVE_DEPARTMENT] department_id?: number;
+  L0636 [ACTIVE_DEPARTMENT] department_id?: number;
+  L0656 [ACTIVE_DEPARTMENT] `/api/tuition/attendance/${attendanceId}/${query({ department_id: departmentId })}`,
+  L0750 [ACTIVE_DEPARTMENT] `/api/tuition/student-portal/${query({ department_id: departmentId })}`
+  L0827 [ACTIVE_DEPARTMENT] `/api/tuition/teacher-portal/${query({ department_id: departmentId })}`
+
+========================================================================================================================
+ACADEMY QUERYSET DEPARTMENT FILTER AUDIT
+========================================================================================================================
+
+FILE: backend\academy\views.py
+  L0170 subjects = StudentSubject.objects.filter(
+  L0183 first_schedule = ClassSchedule.objects.filter(
+  L0209 subjects = StudentSubject.objects.filter(
+  L0650 queryset=StudentSubject.objects.filter(
+  L0660 queryset=ClassSchedule.objects.filter(is_active=True).order_by(
+  L0721 schedules = ClassSchedule.objects.filter(
+  L0750 return LessonAccessPermission.objects.filter(
+  L0810 "active_schedules": ClassSchedule.objects.filter(is_active=True).count(),
+  L0813 "student_subjects": StudentSubject.objects.filter(is_active=True).count(),
+  L0815 "lesson_permissions": LessonAccessPermission.objects.filter(is_active=True).count(),
+  L1193 teacher = TeacherProfile.objects.get(id=teacher_id)
+  L1197 duplicate = Lesson.objects.filter(
+  L1283 duplicate = Lesson.objects.filter(
+  L1437 LessonAccessPermission.objects.filter(
+  L1479 permission = LessonAccessPermission.objects.get(id=permission_id)
+  L1615 report_exists = DailyLessonReport.objects.filter(
+  L1621 exists_in_lesson = Lesson.objects.filter(
+  L1628 exists_in_daily_report = DailyLessonSubjectEntry.objects.filter(
+  L1646 existing = LessonAccessRequest.objects.filter(
+  L1689 item = LessonAccessRequest.objects.get(id=pk)
+  L1743 LessonAccessPermission.objects.filter(
+  L1881 report_exists = DailyLessonReport.objects.filter(
+  L1926 teacher = TeacherProfile.objects.get(id=teacher_id)
+  L2031 updated_count = LessonAccessPermission.objects.filter(
+  L2156 teacher = TeacherProfile.objects.get(id=teacher_id)
+  L2160 Attendance.objects.filter(
+  L2191 student = StudentProfile.objects.get(id=student_id)
+  L2195 Attendance.objects.filter(
+  L2231 attendance = Attendance.objects.get(id=pk)
+  L2363 teacher = TeacherProfile.objects.get(id=teacher_id)
+  L2510 plan = MonthlyLessonPlan.objects.get(id=pk)
+  L3025 teacher = TeacherProfile.objects.get(
+  L3233 queryset=ClassSchedule.objects.filter(is_active=True).order_by("weekday", "time_slot"),
+  L3312 for item in StudentSubject.objects.filter(
+  L3501 student.teacher = TeacherProfile.objects.get(id=int(teacher_id))
+  L3519 ClassSchedule.objects.filter(student=student).delete()
+  L3568 teacher = TeacherProfile.objects.get(id=entity_id)
+  L3572 Attendance.objects.filter(
+  L3589 student = StudentProfile.objects.get(id=entity_id)
+  L3593 Attendance.objects.filter(
+  L3623 queryset=ClassSchedule.objects.filter(is_active=True).order_by("weekday", "time_slot"),
+  L3669 teacher_students = StudentProfile.objects.filter(teacher=teacher).select_related("user")
+
+FILE: backend\academy\serializers.py
+
+FILE: backend\accounts\views.py
+  L0071 configured = CoordinatorTabAccess.objects.filter(
+  L0073 department=department,
+  L0093 for feature in Feature.objects.filter(
+  L0101 for item in DepartmentFeature.objects.filter(
+  L0102 department=department,
+  L0137 UserDepartmentRole.objects.filter(
+  L0148 if item.department_id not in seen:
+  L0150 seen.add(item.department_id)
+  L0167 if getattr(actor, "department_id", None) == department.id:
+  L0170 return UserDepartmentRole.objects.filter(
+  L0172 department=department,
+  L0227 UserDepartmentRole.objects.filter(
+  L0247 departments = Department.objects.filter(
+  L0258 departments = Department.objects.filter(is_active=True).order_by("id")
+  L0271 if getattr(target_user, "department_id", None) == department.id:
+  L0274 return UserDepartmentRole.objects.filter(
+  L0276 department=department,
+  L0283 queryset = base_queryset if base_queryset is not None else User.objects.all()
+  L0295 Q(department=department)
+  L0297 department_roles__department=department,
+  L0471 item.department_id == primary.id for item in active_role_links
+  L0491 Department.objects.filter(
+  L0511 UserDepartmentRole.objects.filter(user=user, is_active=True)
+  L0529 "id": item.department_id,
+  L0541 Feature.objects.filter(
+  L0549 for item in DepartmentFeature.objects.filter(
+  L0550 department=department,
+  L0621 queryset=StudentSubject.objects.filter(is_active=True).order_by(
+  L0631 queryset=ClassSchedule.objects.filter(is_active=True)
+  L0842 user = User.objects.get(
+  L0981 Attendance.objects.filter(student=student).delete()
+  L0982 StudentSubject.objects.filter(student=student).delete()
+  L0983 ClassSchedule.objects.filter(student=student).delete()
+  L0984 LessonAccessPermission.objects.filter(student=student).delete()
+  L0985 LessonAccessRequest.objects.filter(student=student).delete()
+  L0986 MonthlyLessonPlan.objects.filter(student=student).delete()
+  L0987 MonthlyLessonSummary.objects.filter(student=student).delete()
+  L0988 DailyLessonReport.objects.filter(student=student).delete()
+  L0989 Lesson.objects.filter(student=student).delete()
+  L0998 students = list(StudentProfile.objects.filter(teacher=teacher))
+  L1001 Attendance.objects.filter(student=student).delete()
+  L1002 StudentSubject.objects.filter(student=student).delete()
+  L1003 ClassSchedule.objects.filter(student=student).delete()
+  L1004 LessonAccessPermission.objects.filter(student=student).delete()
+  L1005 LessonAccessRequest.objects.filter(student=student).delete()
+  L1006 MonthlyLessonPlan.objects.filter(student=student).delete()
+  L1007 MonthlyLessonSummary.objects.filter(student=student).delete()
+  L1008 DailyLessonReport.objects.filter(student=student).delete()
+  L1009 Lesson.objects.filter(student=student).delete()
+  L1012 Attendance.objects.filter(teacher=teacher).delete()
+  L1013 ClassSchedule.objects.filter(teacher=teacher).delete()
+  L1014 LessonAccessPermission.objects.filter(teacher=teacher).delete()
+  L1015 LessonAccessRequest.objects.filter(teacher=teacher).delete()
+  L1016 MonthlyLessonPlan.objects.filter(teacher=teacher).delete()
+  L1017 MonthlyLessonSummary.objects.filter(teacher=teacher).delete()
+  L1018 DailyLessonReport.objects.filter(teacher=teacher).delete()
+  L1019 Lesson.objects.filter(teacher=teacher).delete()
+  L1033 coordinator = User.objects.get(
+  L1093 department=department,
+  L1111 "department_id": department.id,
+  L1121 "department_id": department.id,
+  L1176 return Feature.objects.filter(
+  L1186 DepartmentFeature.objects.filter(department=department).exclude(
+  L1192 department=department,
+  L1244 qs = model.objects.filter(**{field_name: slug})
+  L1318 institution = Institution.objects.get(id=institution_id)
+  L1442 institution = Institution.objects.get(id=institution_id)
+  L1468 while Department.objects.filter(institution=institution, code=code).exists():
+  L1494 def get_object(self, request, department_id):
+  L1496 department = Department.objects.select_related("institution").get(id=department_id)
+  L1505 def patch(self, request, department_id):
+  L1512 department = self.get_object(request, department_id)
+  L1552 def delete(self, request, department_id):
+  L1559 department = self.get_object(request, department_id)
+  L1588 "department_id": summary["id"],
+  L1637 Feature.objects.filter(
+  L1666 def get_department(self, request, department_id):
+  L1668 department = Department.objects.select_related("institution").get(id=department_id)
+  L1678 def get(self, request, department_id):
+  L1685 department = self.get_department(request, department_id)
+  L1697 for item in DepartmentFeature.objects.filter(
+  L1698 department=department,
+  L1712 def patch(self, request, department_id):
+  L1719 department = self.get_department(request, department_id)
+  L1743 feature = Feature.objects.get(
+  L1755 department=department,
+  L1770 details={"department_id": department.id, "feature_key": feature.key, "is_enabled": is_enabled},
+
+========================================================================================================================
+FRONTEND DEPARTMENT ROUTING AUDIT
+========================================================================================================================
+
+FILE: App.tsx
+  L0067 const QuranDroppedLeave = lazy(() => import("./components/QuranDroppedLeave"));
+  L0571 if (!ctx?.department?.id || !ctx?.department?.department_type) {
+  L0573 "Your account is not connected to an active department.",
+  L0578 throw new Error("The department permission map was not returned.");
+  L0581 console.log("AUTH CONTEXT:", ctx.department, ctx.features);
+  L0598 : "Could not verify department access.";
+  L0600 console.warn("Could not load department feature context:", lastError);
+  L0695 // This deliberately never updates authContext, department routing, or portal type.
+  L0699 const expectedDepartmentId = Number(authContext?.department?.id || 0);
+  L0717 const returnedDepartmentId = Number(ctx.department?.id || 0);
+  L0721 "Ignored feature refresh because the returned department did not match the active portal.",
+  L0732 console.warn("Could not refresh department features:", err);
+  L0735 authContext?.department?.id,
+  L0745 const expectedDepartmentId = Number(authContext?.department?.id || 0);
+  L0746 const returnedDepartmentId = Number(ctx.department?.id || 0);
+  L0756 }, [authContext?.department?.id, session?.access]);
+  L0759 const currentDepartmentId = Number(authContext?.department?.id || 0);
+  L0770 const changedDepartmentId = Number(detail?.departmentId || 0);
+  L0853 authContext?.department?.id,
+  L1041 const isDepartmentAdmin = session?.role === "department_admin" || session?.role === "institution_admin";
+  L1053 // Quran navigation guards must never run inside the separate Tuition portal.
+  L1055 // this scope check the Quran dashboard key can incorrectly lock Tuition's dashboard.
+  L1057 authContext?.department?.department_type ||
+  L1058 (session as any)?.user?.department?.department_type ||
+  L1059 (session as any)?.department?.department_type ||
+  L1084 const departmentNavItems: TabId[] = [
+  L1128 return departmentNavItems.filter((tab) => {
+  L1149 `${NAV_META[tab]?.label || "This section"} is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
+  L1158 const roleLabel = isPlatformAdmin ? "Platform Admin" : isDepartmentAdmin ? "Quran Department Admin" : "Coordinator";
+  L1405 "Accounts & Enrollment is currently disabled for the Quran Department.",
+  L1456 // Direct URL protection applies only to the Quran workspace. Tuition has its
+  L1471 `${NAV_META[activeTab]?.label || "This section"} is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
+  L2066 "Delete Schedule is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation."
+  L2091 "Delete Schedule is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation."
+  L2779 authContext?.department ||
+  L2780 (session as any)?.user?.department ||
+  L2781 (session as any)?.department ||
+  L2784 item?.department?.department_type === "tuition"
+  L2785 )?.department ||
+  L2789 activeDepartment?.department_type || ""
+  L2795 // The portal type must follow the active department-role assignment returned
+  L2797 // be older than a later account/department-role correction and previously sent
+  L2798 // Quran teachers into StudentPortal, making teacher-only tabs appear missing.
+  L2809 const assignmentDepartmentId = Number(item?.department?.id || 0);
+  L2876 Loading department workspace...
+  L2904 ["coordinator", "department_admin", "institution_admin"].includes(
+  L2912 department={activeDepartment}
+  L2946 departmentId={activeDepartment?.id}
+  L2972 departmentId={activeDepartment?.id}
+  L3089 // ---------------- Main Quran Department UI ----------------
+  L3153 <div className="text-[10.5px] font-semibold text-slate-500 truncate mt-0.5">Qur&apos;an Department</div>
+  L3298 "AI Assistant is currently disabled for the Quran Department by Main Admin.",
+  L3336 "AI Assistant is currently disabled for the Quran Department by Main Admin.",
+  L4124 <QuranDroppedLeave />
+
+FILE: services\djangoApiService.ts
+  L0652 department: PlatformDepartment | null;
+  L0663 department: {
+  L0667 department_type: string;
+  L0693 department_type: string;
+  L0704 department_type: "quran" | "tuition" | "general";
+  L0711 departments: PlatformDepartment[];
+  L0719 department: PlatformDepartment;
+  L0735 department_type: "quran" | "tuition" | "general";
+  L0774 departments_deleted?: number;
+  L0797 return request<PlatformDepartment>("/api/auth/platform/departments/create/", {
+  L0804 departmentId: number,
+  L0807 return request<PlatformDepartment>(`/api/auth/platform/departments/${departmentId}/`, {
+  L0814 departmentId: number,
+  L0818 `/api/auth/platform/departments/${departmentId}/`,
+  L0827 return request<PlatformDepartmentsResponse>("/api/auth/platform/departments/");
+  L0835 departmentId: number
+  L0838 `/api/auth/platform/departments/${departmentId}/features/`
+  L0843 departmentId: number,
+  L0846 ): Promise<{ department: PlatformDepartment; feature: PlatformFeature }> {
+  L0847 return request<{ department: PlatformDepartment; feature: PlatformFeature }>(
+  L0848 `/api/auth/platform/departments/${departmentId}/features/`,
+  L0875 role: "institution_admin" | "department_admin" | "coordinator";
+  L0881 department: {
+  L0885 department_type: string;
+  L0891 departments: PlatformDepartment[];
+  L0898 role: "department_admin" | "coordinator" | "institution_admin";
+  L0899 department_id: number;
+  L0908 department_id?: number | string;
+  L1111 departments: number;
+  L1593 department: {
+  L1597 department_type: string;
+  L1635 | "department_admin"
+  L1642 department_id?: number | null;
+  L1653 // Legacy field kept for existing department settings screens.
+  L1679 scope_type?: "platform" | "institution" | "department";
+  L1694 department: {
+  L1698 department_type: string;
+  L1709 scope_type: "platform" | "institution" | "department";
+  L1719 department?: { id: number; name: string; code: string; department_type: string } | null;
+  L1727 scope_type: "platform" | "institution" | "department";
+  L1729 department_id?: number;
+  L1766 department_id?: number;
+  L1799 institutions: number; active_institutions: number; departments: number; active_departments: number;
+  L1800 users: number; active_users: number; teachers: number; students: number; quran_schedules: number;
+  L1801 tuition_schedules: number; quran_lessons: number; tuition_enrollments: number; attendance_records: number;
+  L1805 department_types: Array<{ key: string; label: string; value: number }>;
+  L1806 attendance_status: Array<{ status: string; quran: number; tuition: number; total: number }>;
+  L1807 activity_timeline: Array<{ date: string; label: string; quran_attendance: number; tuition_attendance: number; lessons: number; admin_activity: number }>;
+  L1808 top_departments: Array<{ id: number; name: string; institution: string; department_type: string; users: number }>;
+  L1817 // Quran Dropped / Leave and Teacher Salary Management
+  L1820 export type QuranDroppedLeaveItem = {
+  L1840 export type QuranDroppedLeaveResponse = {
+  L1841 results: QuranDroppedLeaveItem[];
+  L1846 export async function getQuranDroppedLeave(): Promise<QuranDroppedLeaveResponse> {
+  L1847 return request<QuranDroppedLeaveResponse>("/api/academy/dropped-leave/");
+  L1853 export type QuranSalaryConfiguration = {
+  L1855 department_id: number;
+  L1874 export type QuranTeacherSalarySlip = {
+  L1901 export type QuranSalaryPagination = {
+  L1910 export type QuranSalaryDashboardResponse = {
+  L1914 department: { id: number; name: string };
+  L1915 configuration: QuranSalaryConfiguration | null;
+  L1916 teachers: QuranTeacherSalarySlip[];
+  L1917 pagination: QuranSalaryPagination;
+  L1928 export type QuranSalaryAuditAttendanceDay = {
+  L1936 export type QuranSalaryAuditRow = {
+  L1965 attendance: QuranSalaryAuditAttendanceDay[];
+  L1968 export type QuranSalaryAuditResponse = {
+  L1975 rows: QuranSalaryAuditRow[];
+  L1983 export async function getQuranSalaryDashboard(
+  L1988 ): Promise<QuranSalaryDashboardResponse> {
+  L1996 return request<QuranSalaryDashboardResponse>(`/api/academy/teacher-salary/?${query.toString()}`, {
+  L2001 export async function getQuranSalaryAudit(input: {
+  L2006 }): Promise<QuranSalaryAuditResponse> {
+  L2014 return request<QuranSalaryAuditResponse>(`/api/academy/teacher-salary/audit/?${query.toString()}`, {
+  L2019 export async function updateQuranSalarySlip(
+  L2030 ): Promise<QuranTeacherSalarySlip> {
+  L2031 return request<QuranTeacherSalarySlip>("/api/academy/teacher-salary/", {
+  L2038 export async function markQuranSalaryPdfDownload(slipId: number): Promise<QuranTeacherSalarySlip> {
+  L2039 return request<QuranTeacherSalarySlip>("/api/academy/teacher-salary/pdf-download/", {
+  L2045 export async function getQuranSalarySettings(): Promise<QuranSalaryConfiguration> {
+  L2046 return request<QuranSalaryConfiguration>("/api/academy/teacher-salary/settings/", { cache: "no-store" });
+  L2049 export async function updateQuranSalarySettings(
+  L2050 input: Partial<QuranSalaryConfiguration>
+  L2051 ): Promise<QuranSalaryConfiguration> {
+  L2052 return request<QuranSalaryConfiguration>("/api/academy/teacher-salary/settings/", {
+
+========================================================================================================================
+SUMMARY
+========================================================================================================================
+Total potentially relevant hits: 807
+
+This audit is READ ONLY.
+No project source files or database records were changed.
+========================================================================================================================

@@ -1,9 +1,11 @@
+// IVS_ATTENDANCE_TIME_CLASS_BASED_V24
 import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   BookOpen,
   CalendarDays,
   CheckCircle2,
+  CircleDollarSign,
   ChevronDown,
   ChevronRight,
   Edit3,
@@ -28,6 +30,7 @@ import {
   createLessonAccessRequest,
   createMonthlyLessonPlan,
   generateMonthlyLessonSummary,
+  getAuthContext,
   getDjangoDashboard,
   getDailyLessonReports,
   getLessonAccessRequests,
@@ -45,12 +48,15 @@ import {
   type LessonPayload,
   type MonthlyLessonPlanPayload,
   type MonthlyLessonSummaryResponse,
+  type MonthlyLessonSummaryPayload,
   type MonthlyPlanStatus,
   type ProgressStatus,
 } from "../services/djangoApiService";
 
 import { useAcademyWS } from "./../hooks/useAcademyWS";
+import TeacherSalarySelfService from "./TeacherSalarySelfService";
 
+import { PageSkeleton } from "./ui/SkeletonLoaders";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Props = {
@@ -59,7 +65,8 @@ type Props = {
   onLogout: () => void;
 };
 
-type Tab = "overview" | "classes" | "lesson" | "monthly" | "attendance" | "history";
+type Tab = "overview" | "classes" | "lesson" | "monthly" | "attendance" | "salary" | "history";
+type MonthlyWorkspaceView = "plan" | "summary";
 
 type ScheduleRow = {
   id: number;
@@ -559,10 +566,24 @@ function normalizeAttendanceStatus(value: any) {
   return s;
 }
 
+function attendanceClassKey(item: any) {
+  return String(item?.class_key ?? item?.classKey ?? "").trim();
+}
+
 function attendanceKey(item: any) {
   const type = String(item.entity_type || "").toLowerCase();
   const entityId = type === "teacher" ? String(item.teacher_id || "") : String(item.student_id || "");
-  return `${type}:${entityId}:${item.date || ""}`;
+  const classKey = type === "teacher" ? attendanceClassKey(item) : "";
+  return `${type}:${entityId}:${item.date || ""}:${classKey}`;
+}
+
+function attendanceClassLabel(item: any) {
+  if (String(item?.entity_type || "").toLowerCase() !== "teacher") return "—";
+  const classKey = attendanceClassKey(item);
+  if (!classKey) return "Legacy daily";
+  const scheduleMatch = classKey.match(/^schedule:(\d+)$/);
+  if (scheduleMatch) return `Class #${scheduleMatch[1]}`;
+  return formatTime(classKey);
 }
 
 function attendanceTimeValue(item: any) {
@@ -854,6 +875,7 @@ const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [lessonRequests, setLessonRequests] = useState<LessonAccessRequestPayload[]>([]);
   const [requestingPermission, setRequestingPermission] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [salaryEnabled, setSalaryEnabled] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -874,6 +896,65 @@ const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [classPage, setClassPage] = useState(1);
   const [historyStudentFilter, setHistoryStudentFilter] = useState("");
   const [historyPage, setHistoryPage] = useState(1);
+  const [monthlyWorkspaceView, setMonthlyWorkspaceView] =
+    useState<MonthlyWorkspaceView>("plan");
+
+  const [monthlyFromLesson, setMonthlyFromLesson] =
+    useState("");
+  const [monthlyFromLine, setMonthlyFromLine] =
+    useState("");
+  const [monthlyToLesson, setMonthlyToLesson] =
+    useState("");
+  const [monthlyToLine, setMonthlyToLine] =
+    useState("");
+
+  const [monthlyFromSurah, setMonthlyFromSurah] =
+    useState("");
+  const [monthlyFromAyah, setMonthlyFromAyah] =
+    useState("");
+  const [monthlyToSurah, setMonthlyToSurah] =
+    useState("");
+  const [monthlyToAyah, setMonthlyToAyah] =
+    useState("");
+
+  const [
+    teacherSummaryStudentId,
+    setTeacherSummaryStudentId,
+  ] = useState("");
+
+  const [
+    teacherSummarySubject,
+    setTeacherSummarySubject,
+  ] = useState("");
+
+  const [
+    teacherSummaryStartDate,
+    setTeacherSummaryStartDate,
+  ] = useState(() => {
+    const current = new Date();
+
+    return [
+      current.getFullYear(),
+      String(current.getMonth() + 1).padStart(
+        2,
+        "0"
+      ),
+      "01",
+    ].join("-");
+  });
+
+  const [
+    teacherSummaryEndDate,
+    setTeacherSummaryEndDate,
+  ] = useState(() => today());
+
+  const [
+    teacherSummaryResult,
+    setTeacherSummaryResult,
+  ] = useState<MonthlyLessonSummaryPayload | null>(
+    null
+  );
+
   const [attendancePage, setAttendancePage] = useState(1);
   const [attendanceStudentFilter, setAttendanceStudentFilter] = useState("");
   const [attendanceView, setAttendanceView] = useState<"all" | "daily" | "weekly" | "monthly" | "yearly">("all");
@@ -971,18 +1052,20 @@ useAcademyWS((data) => {
 const loadDashboard = async (silent = false) => {
     try {
       if (!silent) setRefreshing(true);
-      const [dashRes, lessonsRes, dailyRes, permRes, reqRes] = await Promise.all([
+      const [dashRes, lessonsRes, dailyRes, permRes, reqRes, authRes] = await Promise.all([
         getDjangoDashboard(),
         getLessons(),
         getDailyLessonReports(),
         getLessonPermissions({ is_active: true }),
         getLessonAccessRequests({ status: "pending" }),
+        getAuthContext().catch(() => null),
       ]);
       setDashboard(dashRes);
       setLessons(lessonsRes.results || []);
       setDailyReports(dailyRes.results || []);
       setPermissions((permRes.results || []) as LessonPermission[]);
       setLessonRequests(reqRes.results || []);
+      setSalaryEnabled(Boolean(authRes?.features?.tab_teacher_salary));
       setMessage("");
     } catch (error: any) {
       setMessage(error?.message || "Could not load teacher dashboard.");
@@ -1112,9 +1195,22 @@ const lessonAlreadyExistsForDate = useMemo(() => {
     setSubjectEntries([]);
     setMessage("");
     setDateError("");
+
+    // A newly selected student always starts with today's date.
+    // This prevents the previous student's old date from being reused.
+    setLessonDate(today());
+
     if (newStudentId) {
-      const subjects = getStudentSubjectsFromList(students, newStudentId);
-      setSubjectEntries([newSubjectEntry(subjects[0] || ALL_SUBJECTS[0])]);
+      const subjects = getStudentSubjectsFromList(
+        students,
+        newStudentId
+      );
+
+      setSubjectEntries([
+        newSubjectEntry(
+          subjects[0] || ALL_SUBJECTS[0]
+        ),
+      ]);
     }
   };
 
@@ -1616,54 +1712,200 @@ const historyGroups = useMemo(() => {
     attendanceYearFilter,
   ]);
 
-  // ─── Monthly data ──────────────────────────────────────────────────────────
+  // ─── Monthly Workspace data ──────────────────────────────────────────────
+
+  const selectedMonthlyStudent = useMemo(
+    () =>
+      students.find(
+        student =>
+          String(student.id) ===
+          String(monthlyStudentId)
+      ),
+    [students, monthlyStudentId]
+  );
+
+  const monthlySubjectOptions = useMemo(() => {
+    if (!monthlyStudentId) return [];
+
+    return getStudentSubjectsFromList(
+      students,
+      monthlyStudentId
+    );
+  }, [students, monthlyStudentId]);
+
+  const selectedTeacherSummaryStudent = useMemo(
+    () =>
+      students.find(
+        student =>
+          String(student.id) ===
+          String(teacherSummaryStudentId)
+      ),
+    [students, teacherSummaryStudentId]
+  );
+
+  const teacherSummarySubjectOptions = useMemo(() => {
+    if (!teacherSummaryStudentId) return [];
+
+    return getStudentSubjectsFromList(
+      students,
+      teacherSummaryStudentId
+    );
+  }, [students, teacherSummaryStudentId]);
+
+  const isQaidaMonthlySubject = useMemo(
+    () =>
+      /qaida|noorani/i.test(
+        String(monthlySubject || "")
+      ),
+    [monthlySubject]
+  );
+
+  const isQuranMonthlySubject = useMemo(
+    () =>
+      /nazira|memorization|hifz/i.test(
+        String(monthlySubject || "")
+      ),
+    [monthlySubject]
+  );
 
   const existingMonthlyPlan = useMemo(() => {
-    return monthlyPlans.find(plan =>
-      String(plan.student_id) === String(monthlyStudentId) &&
-      String(plan.subject) === String(monthlySubject) &&
-      Number(plan.month) === Number(monthlyMonth) &&
-      Number(plan.year) === Number(monthlyYear)
+    return monthlyPlans.find(
+      plan =>
+        String(plan.student_id) ===
+          String(monthlyStudentId) &&
+        String(plan.subject) ===
+          String(monthlySubject) &&
+        Number(plan.month) ===
+          Number(monthlyMonth) &&
+        Number(plan.year) ===
+          Number(monthlyYear)
     );
-  }, [monthlyPlans, monthlyStudentId, monthlySubject, monthlyMonth, monthlyYear]);
+  }, [
+    monthlyPlans,
+    monthlyStudentId,
+    monthlySubject,
+    monthlyMonth,
+    monthlyYear,
+  ]);
 
-  const selectedMonthlyStudent = useMemo(() => students.find(s => String(s.id) === String(monthlyStudentId)), [students, monthlyStudentId]);
-
-  const savedMonthlySummary = useMemo(() => {
-    if (!monthlySummary || !monthlyStudentId) return null;
-    const fromList = monthlySummary.summaries?.find((item: any) => String(item.student_id) === String(monthlyStudentId));
-    if (fromList) return fromList;
-    return monthlySummary.student_summaries?.find((item: any) => String(item.student_id) === String(monthlyStudentId))?.saved_summary || null;
-  }, [monthlySummary, monthlyStudentId]);
-
-  const selectedStudentAutoSummary = useMemo(() => {
-    if (!monthlySummary || !monthlyStudentId) return null;
-    return monthlySummary.student_summaries?.find((item: any) => String(item.student_id) === String(monthlyStudentId)) || null;
-  }, [monthlySummary, monthlyStudentId]);
-
-  const loadMonthlyData = async () => {
+  const loadMonthlyPlans = async () => {
     try {
       setMonthlyLoading(true);
       setMonthlyMessage("");
-      const params = { month: monthlyMonth, year: monthlyYear, student_id: monthlyStudentId ? Number(monthlyStudentId) : undefined };
-      const [plansRes, summaryRes] = await Promise.all([getMonthlyLessonPlans(params), getMonthlyLessonSummary(params)]);
-      setMonthlyPlans(plansRes.results || []);
-      setMonthlySummary(summaryRes);
+
+      const plansResponse =
+        await getMonthlyLessonPlans({
+          month: monthlyMonth,
+          year: monthlyYear,
+          student_id: monthlyStudentId
+            ? Number(monthlyStudentId)
+            : undefined,
+          teacher_id:
+            dashboard?.teacher?.id || undefined,
+        });
+
+      setMonthlyPlans(
+        plansResponse.results || []
+      );
     } catch (error: any) {
-      setMonthlyMessage(error?.message || "Could not load monthly lesson data.");
-    } finally { setMonthlyLoading(false); }
+      setMonthlyMessage(
+        error?.message ||
+          "Could not load lesson plans."
+      );
+    } finally {
+      setMonthlyLoading(false);
+    }
   };
 
-  useEffect(() => { if (activeTab !== "monthly") return; void loadMonthlyData(); }, [activeTab, monthlyMonth, monthlyYear, monthlyStudentId]);
+  useEffect(() => {
+    if (activeTab !== "monthly") return;
+
+    void loadMonthlyPlans();
+  }, [
+    activeTab,
+    monthlyMonth,
+    monthlyYear,
+    monthlyStudentId,
+  ]);
 
   useEffect(() => {
-    if (existingMonthlyPlan) { setMonthlyPlanText(existingMonthlyPlan.plan_text || ""); setMonthlyStatus(existingMonthlyPlan.status || "planned"); }
-    else { setMonthlyPlanText(""); setMonthlyStatus("planned"); }
+    const planData =
+      existingMonthlyPlan?.plan_data || {};
+
+    if (existingMonthlyPlan) {
+      setMonthlyPlanText(
+        existingMonthlyPlan.plan_text || ""
+      );
+
+      setMonthlyStatus(
+        existingMonthlyPlan.status || "planned"
+      );
+
+      setMonthlyFromLesson(
+        String(planData.from_lesson || "")
+      );
+
+      setMonthlyFromLine(
+        String(planData.from_line || "")
+      );
+
+      setMonthlyToLesson(
+        String(planData.to_lesson || "")
+      );
+
+      setMonthlyToLine(
+        String(planData.to_line || "")
+      );
+
+      setMonthlyFromSurah(
+        String(planData.from_surah || "")
+      );
+
+      setMonthlyFromAyah(
+        String(planData.from_ayah || "")
+      );
+
+      setMonthlyToSurah(
+        String(planData.to_surah || "")
+      );
+
+      setMonthlyToAyah(
+        String(planData.to_ayah || "")
+      );
+    } else {
+      setMonthlyPlanText("");
+      setMonthlyStatus("planned");
+
+      setMonthlyFromLesson("");
+      setMonthlyFromLine("");
+      setMonthlyToLesson("");
+      setMonthlyToLine("");
+
+      setMonthlyFromSurah("");
+      setMonthlyFromAyah("");
+      setMonthlyToSurah("");
+      setMonthlyToAyah("");
+    }
   }, [existingMonthlyPlan]);
 
-  const openAddForSchedule = (row: ScheduleRow) => {
-    const nextStudentId = String(row.student?.id || "");
-    const nextLessonDate = getClassLessonDate(row);
+  const openAddForSchedule = (
+    row: ScheduleRow
+  ) => {
+    const nextStudentId = String(
+      row.student?.id || ""
+    );
+
+    const scheduleDay = normalizeDay(
+      row.weekday
+    );
+
+    const currentDay = getTodayWeekday();
+
+    const nextLessonDate =
+      scheduleDay === currentDay
+        ? today()
+        : getClassLessonDate(row);
+
     handleStudentChange(nextStudentId);
     setLessonDate(nextLessonDate);
     setDateError("");
@@ -1671,57 +1913,312 @@ const historyGroups = useMemo(() => {
     setActiveTab("lesson");
   };
 
-  const openAttendanceForSchedule = (row: ScheduleRow) => {
-    const nextStudentId = String(row.student?.id || "");
+  const openAttendanceForSchedule = (
+    row: ScheduleRow
+  ) => {
+    const nextStudentId = String(
+      row.student?.id || ""
+    );
+
     if (!nextStudentId) return;
-    setAttendanceStudentFilter(nextStudentId);
+
+    setAttendanceStudentFilter(
+      nextStudentId
+    );
+
     setActiveTab("attendance");
   };
 
-  const openLessonHistoryForSchedule = (row: ScheduleRow) => {
-    const nextStudentId = String(row.student?.id || "");
+  const openLessonHistoryForSchedule = (
+    row: ScheduleRow
+  ) => {
+    const nextStudentId = String(
+      row.student?.id || ""
+    );
+
     if (!nextStudentId) return;
+
     setHistoryStudentFilter(nextStudentId);
     setActiveTab("history");
   };
 
-const handleMonthlyStudentChange = (nextStudentId: string) => {
+  const handleMonthlyStudentChange = (
+    nextStudentId: string
+  ) => {
     setMonthlyStudentId(nextStudentId);
     setMonthlyMessage("");
-    setMonthlySubject("");
+    setMonthlyPlanText("");
+
+    const subjects = nextStudentId
+      ? getStudentSubjectsFromList(
+          students,
+          nextStudentId
+        )
+      : [];
+
+    setMonthlySubject(subjects[0] || "");
   };
 
-  const handleSaveMonthlyPlan = async (event: React.FormEvent) => {
+  const handleTeacherSummaryStudentChange = (
+    nextStudentId: string
+  ) => {
+    setTeacherSummaryStudentId(
+      nextStudentId
+    );
+
+    const subjects = nextStudentId
+      ? getStudentSubjectsFromList(
+          students,
+          nextStudentId
+        )
+      : [];
+
+    setTeacherSummarySubject(
+      subjects[0] || ""
+    );
+
+    setTeacherSummaryResult(null);
+    setMonthlyMessage("");
+  };
+
+  const handleSaveMonthlyPlan = async (
+    event: React.FormEvent
+  ) => {
     event.preventDefault();
     setMonthlyMessage("");
-    if (!monthlyStudentId) { setMonthlyMessage("Please select a student."); return; }
-    if (!monthlyPlanText.trim()) { setMonthlyMessage("Please write the monthly lesson plan."); return; }
+
+    if (!monthlyStudentId) {
+      setMonthlyMessage(
+        "Please select a student."
+      );
+      return;
+    }
+
+    if (!monthlySubject) {
+      setMonthlyMessage(
+        "Please select a subject."
+      );
+      return;
+    }
+
+    let planData: Record<string, any> = {};
+    let structuredPlanText = "";
+
+    if (isQaidaMonthlySubject) {
+      if (
+        !monthlyFromLesson ||
+        !monthlyFromLine ||
+        !monthlyToLesson ||
+        !monthlyToLine
+      ) {
+        setMonthlyMessage(
+          "Complete the Qaida lesson and line range."
+        );
+        return;
+      }
+
+      planData = {
+        range_type: "qaida",
+        from_lesson: monthlyFromLesson,
+        from_line: Number(
+          monthlyFromLine
+        ),
+        to_lesson: monthlyToLesson,
+        to_line: Number(monthlyToLine),
+      };
+
+      structuredPlanText =
+        `Qaida target: ${monthlyFromLesson}, ` +
+        `line ${monthlyFromLine} to ` +
+        `${monthlyToLesson}, ` +
+        `line ${monthlyToLine}.`;
+    } else if (isQuranMonthlySubject) {
+      if (
+        !monthlyFromSurah ||
+        !monthlyFromAyah ||
+        !monthlyToSurah ||
+        !monthlyToAyah
+      ) {
+        setMonthlyMessage(
+          "Complete the Surah and Ayah range."
+        );
+        return;
+      }
+
+      const fromSurah = SURAHS.find(
+        item =>
+          String(item.number) ===
+          String(monthlyFromSurah)
+      );
+
+      const toSurah = SURAHS.find(
+        item =>
+          String(item.number) ===
+          String(monthlyToSurah)
+      );
+
+      planData = {
+        range_type: "quran",
+        from_surah: Number(
+          monthlyFromSurah
+        ),
+        from_surah_name:
+          fromSurah?.name || "",
+        from_ayah: Number(
+          monthlyFromAyah
+        ),
+        to_surah: Number(monthlyToSurah),
+        to_surah_name:
+          toSurah?.name || "",
+        to_ayah: Number(monthlyToAyah),
+      };
+
+      structuredPlanText =
+        `Quran target: Surah ` +
+        `${fromSurah?.name || monthlyFromSurah}, ` +
+        `Ayah ${monthlyFromAyah} to Surah ` +
+        `${toSurah?.name || monthlyToSurah}, ` +
+        `Ayah ${monthlyToAyah}.`;
+    } else {
+      if (!monthlyPlanText.trim()) {
+        setMonthlyMessage(
+          "Please write the lesson-plan details."
+        );
+        return;
+      }
+
+      planData = {
+        range_type: "custom",
+      };
+
+      structuredPlanText =
+        monthlyPlanText.trim();
+    }
+
+    const additionalNotes =
+      monthlyPlanText.trim();
+
+    const finalPlanText =
+      (
+        isQaidaMonthlySubject ||
+        isQuranMonthlySubject
+      ) && additionalNotes
+        ? `${structuredPlanText}\n\n` +
+          `Additional notes: ${additionalNotes}`
+        : structuredPlanText;
+
     try {
       setMonthlySaving(true);
+
+      const payload = {
+        plan_data: planData,
+        plan_text: finalPlanText,
+        notes: "",
+        status: monthlyStatus,
+      };
+
       if (existingMonthlyPlan) {
-        await updateMonthlyLessonPlan(existingMonthlyPlan.id, { plan_text: monthlyPlanText, notes: "", status: monthlyStatus });
-        setMonthlyMessage("Monthly lesson plan updated successfully.");
+        await updateMonthlyLessonPlan(
+          existingMonthlyPlan.id,
+          payload
+        );
+
+        setMonthlyMessage(
+          "Lesson plan updated successfully."
+        );
       } else {
-        const { createMonthlyLessonPlan: createPlan } = await import("../services/djangoApiService");
-        await createPlan({ student_id: Number(monthlyStudentId), month: monthlyMonth, year: monthlyYear, subject: monthlySubject, plan_text: monthlyPlanText, notes: "", status: monthlyStatus });
-        setMonthlyMessage("Monthly lesson plan saved successfully.");
+        await createMonthlyLessonPlan({
+          student_id: Number(
+            monthlyStudentId
+          ),
+          teacher_id:
+            dashboard?.teacher?.id || null,
+          month: monthlyMonth,
+          year: monthlyYear,
+          subject: monthlySubject,
+          ...payload,
+        });
+
+        setMonthlyMessage(
+          "Lesson plan saved successfully."
+        );
       }
-      await loadMonthlyData();
-    } catch (error: any) { setMonthlyMessage(error?.message || "Could not save monthly lesson plan."); }
-    finally { setMonthlySaving(false); }
+
+      await loadMonthlyPlans();
+    } catch (error: any) {
+      setMonthlyMessage(
+        error?.message ||
+          "Could not save the lesson plan."
+      );
+    } finally {
+      setMonthlySaving(false);
+    }
   };
 
-  const handleGenerateMonthlySummary = async () => {
-    setMonthlyMessage("");
-    if (!monthlyStudentId) { setMonthlyMessage("Please select a student first."); return; }
-    try {
-      setMonthlySummarySaving(true);
-      await generateMonthlyLessonSummary({ student_id: Number(monthlyStudentId), teacher_id: dashboard?.teacher?.id || null, month: monthlyMonth, year: monthlyYear });
-      setMonthlyMessage("Monthly lesson summary generated successfully.");
-      await loadMonthlyData();
-    } catch (error: any) { setMonthlyMessage(error?.message || "Could not generate monthly lesson summary."); }
-    finally { setMonthlySummarySaving(false); }
-  };
+  const handleGenerateTeacherSummary =
+    async () => {
+      setMonthlyMessage("");
+      setTeacherSummaryResult(null);
+
+      if (!teacherSummaryStudentId) {
+        setMonthlyMessage(
+          "Please select a student."
+        );
+        return;
+      }
+
+      if (
+        !teacherSummaryStartDate ||
+        !teacherSummaryEndDate
+      ) {
+        setMonthlyMessage(
+          "Select both the start and end dates."
+        );
+        return;
+      }
+
+      if (
+        teacherSummaryStartDate >
+        teacherSummaryEndDate
+      ) {
+        setMonthlyMessage(
+          "The start date cannot be after the end date."
+        );
+        return;
+      }
+
+      try {
+        setMonthlySummarySaving(true);
+
+        const generated =
+          await generateMonthlyLessonSummary({
+            student_id: Number(
+              teacherSummaryStudentId
+            ),
+            teacher_id:
+              dashboard?.teacher?.id || null,
+            start_date:
+              teacherSummaryStartDate,
+            end_date:
+              teacherSummaryEndDate,
+            subject:
+              teacherSummarySubject || "",
+          });
+
+        setTeacherSummaryResult(generated);
+
+        setMonthlyMessage(
+          "Lesson summary generated successfully."
+        );
+      } catch (error: any) {
+        setMonthlyMessage(
+          error?.message ||
+            "Could not generate the lesson summary."
+        );
+      } finally {
+        setMonthlySummarySaving(false);
+      }
+    };
 
   const handleLogout = () => { logoutFromDjango(); onLogout(); };
 
@@ -1745,10 +2242,15 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
     { tab: "overview", icon: <LayoutDashboard size={18} />, label: "Overview" },
     { tab: "classes", icon: <CalendarDays size={18} />, label: "Total Classes" },
     { tab: "lesson", icon: <BookOpen size={18} />, label: "Write Lesson" },
-    { tab: "monthly", icon: <CalendarDays size={18} />, label: "Monthly Plan" },
+    { tab: "monthly", icon: <CalendarDays size={18} />, label: "Monthly Workspace" },
     { tab: "attendance", icon: <CheckCircle2 size={18} />, label: "Attendance" },
+    ...(salaryEnabled ? [{ tab: "salary" as Tab, icon: <CircleDollarSign size={18} />, label: "My Salary" }] : []),
     { tab: "history", icon: <History size={18} />, label: "Lesson History" },
   ];
+
+  useEffect(() => {
+    if (!salaryEnabled && activeTab === "salary") setActiveTab("overview");
+  }, [salaryEnabled, activeTab]);
 
   const handleTabChange = (tab: Tab) => {
     setActiveTab(tab);
@@ -1757,12 +2259,8 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
 
   if (loading) {
     return (
-      <div className="tp-root min-h-screen grid place-items-center">
-        <div className="tp-card w-full max-w-md text-center p-10">
-          <div className="tp-brand-icon mx-auto"><Loader2 className="animate-spin" size={26} /></div>
-          <h2 className="mt-5 text-xl font-bold text-slate-800">Loading Teacher Portal</h2>
-          <p className="mt-1 text-sm text-slate-500">Fetching schedules, attendance and lessons.</p>
-        </div>
+      <div className="tp-root min-h-screen bg-slate-50 p-4 sm:p-6">
+        <div className="mx-auto max-w-[1500px]"><PageSkeleton variant="portal" cards={6} label="Loading Teacher Portal" /></div>
       </div>
     );
   }
@@ -1839,8 +2337,9 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
                 {activeTab === "overview" && "Dashboard"}
                 {activeTab === "classes" && "Total Classes"}
                 {activeTab === "lesson" && "Write Daily Lesson"}
-                {activeTab === "monthly" && "Monthly Lesson Plan"}
+                {activeTab === "monthly" && "Monthly Workspace"}
                 {activeTab === "attendance" && "Attendance"}
+                {activeTab === "salary" && "My Salary"}
                 {activeTab === "history" && "Lesson History"}
               </h1>
               <p className="text-xs text-slate-500 mt-0.5">{getCurrentDate()}</p>
@@ -2265,116 +2764,884 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
             </form>
           )}
 
-          {/* ── Monthly Tab ── */}
+          {/* ── Monthly Workspace Tab ── */}
           {activeTab === "monthly" && (
-            <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-5">
-              <form onSubmit={handleSaveMonthlyPlan} className="tp-card space-y-5">
-                <div className="tp-form-hero">
-                  <div className="tp-form-hero-left">
-                    <div className="tp-brand-icon-sm"><CalendarDays size={18} /></div>
+            <div className="space-y-5">
+              <section className="rounded-[28px] border border-slate-200/80 bg-white/90 p-4 shadow-[0_16px_45px_rgba(15,23,42,0.07)] backdrop-blur-xl">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-200">
+                      <CalendarDays size={20} />
+                    </div>
+
                     <div>
-                      <h2 className="text-lg font-black text-slate-900">Monthly Lesson Plan</h2>
-                      <p className="text-sm text-slate-500 mt-1">Prepare the monthly lesson plan for the selected student and subject.</p>
+                      <h2 className="text-lg font-black text-slate-950">
+                        Monthly Workspace
+                      </h2>
+
+                      <p className="mt-0.5 text-xs font-semibold text-slate-500">
+                        Set learning targets and generate private student summaries.
+                      </p>
                     </div>
                   </div>
-                  <div className="tp-form-hero-badge">{selectedMonthlyStudent?.name || "Select Student"}</div>
-                </div>
 
-                {monthlyMessage && (
-                  <div className={`rounded-xl border px-4 py-3 text-sm font-semibold ${monthlyMessage.toLowerCase().includes("success") ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
-                    {monthlyMessage}
+                  <div className="inline-flex w-full rounded-2xl border border-slate-200 bg-slate-100/80 p-1.5 lg:w-auto">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setMonthlyWorkspaceView("plan")
+                      }
+                      className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-xs font-black transition-all lg:flex-none ${
+                        monthlyWorkspaceView === "plan"
+                          ? "bg-white text-indigo-700 shadow-md ring-1 ring-indigo-100"
+                          : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
+                      }`}
+                    >
+                      <BookOpen size={15} />
+                      Lesson Plan
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMonthlyWorkspaceView(
+                          "summary"
+                        );
+                        setMonthlyMessage("");
+                        setTeacherSummaryResult(null);
+                      }}
+                      className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-xs font-black transition-all lg:flex-none ${
+                        monthlyWorkspaceView === "summary"
+                          ? "bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md shadow-indigo-200"
+                          : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
+                      }`}
+                    >
+                      <ListChecks size={15} />
+                      Lesson Summary
+                    </button>
                   </div>
-                )}
-
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <div className="tp-field md:col-span-2">
-                    <label className="tp-label">Student</label>
-                    <select value={monthlyStudentId} onChange={e => handleMonthlyStudentChange(e.target.value)} className="tp-select">
-                      <option value="">Select student</option>
-                      {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    </select>
-                  </div>
-                  <div className="tp-field">
-                    <label className="tp-label">Month</label>
-                    <select value={monthlyMonth} onChange={e => setMonthlyMonth(Number(e.target.value))} className="tp-select">
-                      {Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{monthName(m)}</option>)}
-                    </select>
-                  </div>
-                  <div className="tp-field">
-                    <label className="tp-label">Year</label>
-                    <input type="number" value={monthlyYear} onChange={e => setMonthlyYear(Number(e.target.value))} className="tp-input-el" min={2000} />
-                  </div>
                 </div>
+              </section>
 
-<div className="tp-field">
-                  <label className="tp-label">Plan Status</label>
-                  <select value={monthlyStatus} onChange={e => setMonthlyStatus(e.target.value as MonthlyPlanStatus)} className="tp-select">
-                    <option value="planned">Planned</option>
-                    <option value="in_progress">In Progress</option>
-                    <option value="completed">Completed</option>
-                  </select>
+              {monthlyMessage && (
+                <div
+                  className={`rounded-2xl border px-4 py-3 text-sm font-bold ${
+                    monthlyMessage
+                      .toLowerCase()
+                      .includes("success")
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-amber-200 bg-amber-50 text-amber-800"
+                  }`}
+                >
+                  {monthlyMessage}
                 </div>
+              )}
 
-                <div className="tp-field">
-                  <label className="tp-label">Monthly Lesson Plan</label>
-                  <textarea value={monthlyPlanText} onChange={e => setMonthlyPlanText(e.target.value)} className="tp-textarea" rows={7} placeholder="Write the full monthly plan for this student and subject..." />
-                </div>
-
-                <button type="submit" disabled={monthlySaving} className="tp-save-btn w-full">
-                  {monthlySaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                  {existingMonthlyPlan ? (monthlySaving ? "Updating..." : "Update Monthly Plan") : monthlySaving ? "Saving..." : "Save Monthly Plan"}
-                </button>
-              </form>
-
-              <aside className="tp-card h-fit space-y-4">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-800">Monthly Lesson Summary</h3>
-                  <p className="text-xs text-slate-500 mt-1">Generate the end-of-month student summary from saved daily lessons.</p>
-                </div>
-                <button type="button" onClick={handleGenerateMonthlySummary} disabled={!monthlyStudentId || monthlySummarySaving} className="tp-auto-btn w-full justify-center">
-                  {monthlySummarySaving && <Loader2 size={14} className="animate-spin" />}
-                  {monthlySummarySaving ? "Generating..." : "Generate Summary"}
-                </button>
-
-                {monthlyLoading ? (
-                  <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 size={16} className="animate-spin" /> Loading...</div>
-                ) : monthlySummary ? (
-                  <>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="rounded-xl bg-indigo-50 border border-indigo-100 p-4">
-                        <div className="text-xs font-semibold text-indigo-600">Lessons</div>
-                        <div className="text-2xl font-black text-indigo-900 mt-1">{monthlySummary.total_lessons}</div>
+              {monthlyWorkspaceView === "plan" ? (
+                <form
+                  onSubmit={handleSaveMonthlyPlan}
+                  className="space-y-5 rounded-[30px] border border-slate-200/80 bg-white/90 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.07)] md:p-6"
+                >
+                  <div className="flex flex-col gap-3 border-b border-slate-100 pb-5 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="text-xs font-black uppercase tracking-[0.16em] text-indigo-500">
+                        Lesson Plan
                       </div>
-                      <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4">
-                        <div className="text-xs font-semibold text-emerald-600">Plans</div>
-                        <div className="text-2xl font-black text-emerald-900 mt-1">{monthlySummary.total_plans}</div>
-                      </div>
+
+                      <h3 className="mt-1 text-xl font-black text-slate-950">
+                        Monthly learning target
+                      </h3>
+
+                      <p className="mt-1 text-sm text-slate-500">
+                        Choose exactly where the student should start and finish.
+                      </p>
                     </div>
-                    <div className="tp-summary-card">
-                      <div className="tp-summary-label">Monthly Summary</div>
-                      {!monthlyStudentId ? (
-                        <p className="text-sm font-black text-slate-800">Select a student to view their monthly summary.</p>
-                      ) : savedMonthlySummary ? (
-                        <div>
-                          <div className="text-base font-black text-slate-900">{selectedMonthlyStudent?.name || savedMonthlySummary.student_name}</div>
-                          <p className="text-sm text-slate-600 mt-2 leading-relaxed whitespace-pre-line">{savedMonthlySummary.summary_text}</p>
-                        </div>
-                      ) : selectedStudentAutoSummary ? (
-                        <div>
-                          <div className="text-base font-black text-slate-900">{selectedStudentAutoSummary.student_name}</div>
-                          <p className="text-sm text-slate-600 mt-2 leading-relaxed">{selectedStudentAutoSummary.auto_summary}</p>
-                          <p className="text-xs font-semibold text-slate-500 mt-4">Click Generate Summary to save the full monthly summary.</p>
-                        </div>
-                      ) : (
-                        <p className="text-sm font-black text-slate-800">No lessons found for this student in the selected month.</p>
+
+                    <span className="w-fit rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1.5 text-xs font-black text-indigo-700">
+                      {selectedMonthlyStudent?.name ||
+                        "Select student"}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+                    <div className="tp-field xl:col-span-2">
+                      <label className="tp-label">
+                        Student
+                      </label>
+
+                      <select
+                        value={monthlyStudentId}
+                        onChange={event =>
+                          handleMonthlyStudentChange(
+                            event.target.value
+                          )
+                        }
+                        className="tp-select"
+                      >
+                        <option value="">
+                          Select student
+                        </option>
+
+                        {students.map(student => (
+                          <option
+                            key={student.id}
+                            value={student.id}
+                          >
+                            {student.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="tp-field">
+                      <label className="tp-label">
+                        Month
+                      </label>
+
+                      <select
+                        value={monthlyMonth}
+                        onChange={event =>
+                          setMonthlyMonth(
+                            Number(event.target.value)
+                          )
+                        }
+                        className="tp-select"
+                      >
+                        {Array.from(
+                          { length: 12 },
+                          (_, index) => index + 1
+                        ).map(month => (
+                          <option
+                            key={month}
+                            value={month}
+                          >
+                            {monthName(month)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="tp-field">
+                      <label className="tp-label">
+                        Year
+                      </label>
+
+                      <input
+                        type="number"
+                        min="2020"
+                        max="2100"
+                        value={monthlyYear}
+                        onChange={event =>
+                          setMonthlyYear(
+                            Number(event.target.value)
+                          )
+                        }
+                        className="tp-input"
+                      />
+                    </div>
+
+                    <div className="tp-field">
+                      <label className="tp-label">
+                        Status
+                      </label>
+
+                      <select
+                        value={monthlyStatus}
+                        onChange={event =>
+                          setMonthlyStatus(
+                            event.target
+                              .value as MonthlyPlanStatus
+                          )
+                        }
+                        className="tp-select"
+                      >
+                        <option value="planned">
+                          Planned
+                        </option>
+                        <option value="in_progress">
+                          In progress
+                        </option>
+                        <option value="completed">
+                          Completed
+                        </option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="tp-field">
+                    <label className="tp-label">
+                      Subject
+                    </label>
+
+                    <select
+                      value={monthlySubject}
+                      disabled={!monthlyStudentId}
+                      onChange={event => {
+                        setMonthlySubject(
+                          event.target.value
+                        );
+                        setMonthlyMessage("");
+                      }}
+                      className="tp-select disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      <option value="">
+                        {monthlyStudentId
+                          ? "Select subject"
+                          : "Select student first"}
+                      </option>
+
+                      {monthlySubjectOptions.map(
+                        subject => (
+                          <option
+                            key={subject}
+                            value={subject}
+                          >
+                            {subject}
+                          </option>
+                        )
                       )}
+                    </select>
+
+                    {monthlyStudentId && (
+                      <p className="mt-1.5 text-xs font-semibold text-slate-400">
+                        Only subjects assigned to this student are shown.
+                      </p>
+                    )}
+                  </div>
+
+                  {monthlySubject &&
+                    isQaidaMonthlySubject && (
+                      <section className="rounded-3xl border border-amber-200/80 bg-gradient-to-br from-amber-50 to-orange-50/60 p-5">
+                        <div className="mb-4">
+                          <div className="text-xs font-black uppercase tracking-[0.15em] text-amber-600">
+                            Qaida range
+                          </div>
+
+                          <h4 className="mt-1 text-base font-black text-slate-900">
+                            From lesson and line to lesson and line
+                          </h4>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                          <div className="tp-field">
+                            <label className="tp-label">
+                              From Lesson
+                            </label>
+
+                            <select
+                              value={monthlyFromLesson}
+                              onChange={event => {
+                                setMonthlyFromLesson(
+                                  event.target.value
+                                );
+                                setMonthlyFromLine("");
+                              }}
+                              className="tp-select"
+                            >
+                              <option value="">
+                                Select lesson
+                              </option>
+
+                              {QAIDA_LESSONS.map(
+                                lesson => (
+                                  <option
+                                    key={lesson}
+                                    value={lesson}
+                                  >
+                                    {lesson}
+                                  </option>
+                                )
+                              )}
+                            </select>
+                          </div>
+
+                          <div className="tp-field">
+                            <label className="tp-label">
+                              From Line
+                            </label>
+
+                            <select
+                              value={monthlyFromLine}
+                              disabled={!monthlyFromLesson}
+                              onChange={event =>
+                                setMonthlyFromLine(
+                                  event.target.value
+                                )
+                              }
+                              className="tp-select disabled:bg-white/50"
+                            >
+                              <option value="">
+                                Select line
+                              </option>
+
+                              {Array.from(
+                                {
+                                  length:
+                                    QAIDA_LINE_RANGES[
+                                      monthlyFromLesson
+                                    ] || 0,
+                                },
+                                (_, index) => index + 1
+                              ).map(line => (
+                                <option
+                                  key={line}
+                                  value={line}
+                                >
+                                  Line {line}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="tp-field">
+                            <label className="tp-label">
+                              To Lesson
+                            </label>
+
+                            <select
+                              value={monthlyToLesson}
+                              onChange={event => {
+                                setMonthlyToLesson(
+                                  event.target.value
+                                );
+                                setMonthlyToLine("");
+                              }}
+                              className="tp-select"
+                            >
+                              <option value="">
+                                Select lesson
+                              </option>
+
+                              {QAIDA_LESSONS.map(
+                                lesson => (
+                                  <option
+                                    key={lesson}
+                                    value={lesson}
+                                  >
+                                    {lesson}
+                                  </option>
+                                )
+                              )}
+                            </select>
+                          </div>
+
+                          <div className="tp-field">
+                            <label className="tp-label">
+                              To Line
+                            </label>
+
+                            <select
+                              value={monthlyToLine}
+                              disabled={!monthlyToLesson}
+                              onChange={event =>
+                                setMonthlyToLine(
+                                  event.target.value
+                                )
+                              }
+                              className="tp-select disabled:bg-white/50"
+                            >
+                              <option value="">
+                                Select line
+                              </option>
+
+                              {Array.from(
+                                {
+                                  length:
+                                    QAIDA_LINE_RANGES[
+                                      monthlyToLesson
+                                    ] || 0,
+                                },
+                                (_, index) => index + 1
+                              ).map(line => (
+                                <option
+                                  key={line}
+                                  value={line}
+                                >
+                                  Line {line}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      </section>
+                    )}
+
+                  {monthlySubject &&
+                    isQuranMonthlySubject && (
+                      <section className="rounded-3xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-teal-50/60 p-5">
+                        <div className="mb-4">
+                          <div className="text-xs font-black uppercase tracking-[0.15em] text-emerald-600">
+                            Quran range
+                          </div>
+
+                          <h4 className="mt-1 text-base font-black text-slate-900">
+                            From Surah and Ayah to Surah and Ayah
+                          </h4>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                          <div className="tp-field">
+                            <label className="tp-label">
+                              From Surah
+                            </label>
+
+                            <select
+                              value={monthlyFromSurah}
+                              onChange={event => {
+                                setMonthlyFromSurah(
+                                  event.target.value
+                                );
+                                setMonthlyFromAyah("");
+                              }}
+                              className="tp-select"
+                            >
+                              <option value="">
+                                Select Surah
+                              </option>
+
+                              {SURAHS.map(surah => (
+                                <option
+                                  key={surah.number}
+                                  value={surah.number}
+                                >
+                                  {surah.number}.{" "}
+                                  {surah.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="tp-field">
+                            <label className="tp-label">
+                              From Ayah
+                            </label>
+
+                            <input
+                              type="number"
+                              min="1"
+                              max={
+                                SURAHS.find(
+                                  surah =>
+                                    String(
+                                      surah.number
+                                    ) ===
+                                    String(
+                                      monthlyFromSurah
+                                    )
+                                )?.ayahs || 286
+                              }
+                              value={monthlyFromAyah}
+                              disabled={!monthlyFromSurah}
+                              onChange={event =>
+                                setMonthlyFromAyah(
+                                  event.target.value
+                                )
+                              }
+                              placeholder="Ayah"
+                              className="tp-input disabled:bg-white/50"
+                            />
+                          </div>
+
+                          <div className="tp-field">
+                            <label className="tp-label">
+                              To Surah
+                            </label>
+
+                            <select
+                              value={monthlyToSurah}
+                              onChange={event => {
+                                setMonthlyToSurah(
+                                  event.target.value
+                                );
+                                setMonthlyToAyah("");
+                              }}
+                              className="tp-select"
+                            >
+                              <option value="">
+                                Select Surah
+                              </option>
+
+                              {SURAHS.map(surah => (
+                                <option
+                                  key={surah.number}
+                                  value={surah.number}
+                                >
+                                  {surah.number}.{" "}
+                                  {surah.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="tp-field">
+                            <label className="tp-label">
+                              To Ayah
+                            </label>
+
+                            <input
+                              type="number"
+                              min="1"
+                              max={
+                                SURAHS.find(
+                                  surah =>
+                                    String(
+                                      surah.number
+                                    ) ===
+                                    String(
+                                      monthlyToSurah
+                                    )
+                                )?.ayahs || 286
+                              }
+                              value={monthlyToAyah}
+                              disabled={!monthlyToSurah}
+                              onChange={event =>
+                                setMonthlyToAyah(
+                                  event.target.value
+                                )
+                              }
+                              placeholder="Ayah"
+                              className="tp-input disabled:bg-white/50"
+                            />
+                          </div>
+                        </div>
+                      </section>
+                    )}
+
+                  <div className="tp-field">
+                    <label className="tp-label">
+                      {isQaidaMonthlySubject ||
+                      isQuranMonthlySubject
+                        ? "Additional notes (optional)"
+                        : "Lesson-plan details"}
+                    </label>
+
+                    <textarea
+                      value={monthlyPlanText}
+                      onChange={event =>
+                        setMonthlyPlanText(
+                          event.target.value
+                        )
+                      }
+                      rows={5}
+                      placeholder={
+                        isQaidaMonthlySubject ||
+                        isQuranMonthlySubject
+                          ? "Add revision targets, special instructions or teaching notes..."
+                          : "Describe the target, topics and expected progress..."
+                      }
+                      className="tp-textarea"
+                    />
+                  </div>
+
+                  {existingMonthlyPlan && (
+                    <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4">
+                      <div className="text-xs font-black uppercase tracking-wide text-indigo-500">
+                        Existing saved plan
+                      </div>
+
+                      <p className="mt-2 whitespace-pre-line text-sm font-semibold leading-6 text-slate-700">
+                        {existingMonthlyPlan.plan_text}
+                      </p>
                     </div>
-                  </>
-                ) : (
-                  <p className="text-sm text-slate-400">Select a month to view summary.</p>
-                )}
-              </aside>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={
+                      monthlySaving ||
+                      !monthlyStudentId ||
+                      !monthlySubject
+                    }
+                    className="tp-save-btn w-full justify-center disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {monthlySaving ? (
+                      <Loader2
+                        size={16}
+                        className="animate-spin"
+                      />
+                    ) : (
+                      <Save size={16} />
+                    )}
+
+                    {monthlySaving
+                      ? "Saving..."
+                      : existingMonthlyPlan
+                      ? "Update Lesson Plan"
+                      : "Save Lesson Plan"}
+                  </button>
+                </form>
+              ) : (
+                <section className="grid grid-cols-1 gap-5 xl:grid-cols-[380px_1fr]">
+                  <div className="h-fit space-y-4 rounded-[28px] border border-slate-200/80 bg-white/90 p-5 shadow-[0_16px_45px_rgba(15,23,42,0.07)]">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-black uppercase tracking-[0.15em] text-violet-500">
+                          Lesson Summary
+                        </div>
+
+                        <h3 className="mt-1 text-lg font-black text-slate-950">
+                          Generate summary
+                        </h3>
+                      </div>
+
+                      <span className="rounded-full border border-violet-100 bg-violet-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-violet-600">
+                        Teacher only
+                      </span>
+                    </div>
+
+                    <p className="text-xs font-semibold leading-5 text-slate-500">
+                      Choose any date range. The coordinator’s summary is completely separate.
+                    </p>
+
+                    <div className="tp-field">
+                      <label className="tp-label">
+                        Student
+                      </label>
+
+                      <select
+                        value={teacherSummaryStudentId}
+                        onChange={event =>
+                          handleTeacherSummaryStudentChange(
+                            event.target.value
+                          )
+                        }
+                        className="tp-select"
+                      >
+                        <option value="">
+                          Select student
+                        </option>
+
+                        {students.map(student => (
+                          <option
+                            key={student.id}
+                            value={student.id}
+                          >
+                            {student.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="tp-field">
+                      <label className="tp-label">
+                        Subject
+                      </label>
+
+                      <select
+                        value={teacherSummarySubject}
+                        disabled={
+                          !teacherSummaryStudentId
+                        }
+                        onChange={event => {
+                          setTeacherSummarySubject(
+                            event.target.value
+                          );
+                          setTeacherSummaryResult(null);
+                        }}
+                        className="tp-select disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                      >
+                        <option value="">
+                          {teacherSummaryStudentId
+                            ? "All learned subjects"
+                            : "Select student first"}
+                        </option>
+
+                        {teacherSummarySubjectOptions.map(
+                          subject => (
+                            <option
+                              key={subject}
+                              value={subject}
+                            >
+                              {subject}
+                            </option>
+                          )
+                        )}
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                      <div className="tp-field">
+                        <label className="tp-label">
+                          From date
+                        </label>
+
+                        <input
+                          type="date"
+                          value={
+                            teacherSummaryStartDate
+                          }
+                          onChange={event => {
+                            setTeacherSummaryStartDate(
+                              event.target.value
+                            );
+                            setTeacherSummaryResult(
+                              null
+                            );
+                          }}
+                          className="tp-input"
+                        />
+                      </div>
+
+                      <div className="tp-field">
+                        <label className="tp-label">
+                          To date
+                        </label>
+
+                        <input
+                          type="date"
+                          min={
+                            teacherSummaryStartDate ||
+                            undefined
+                          }
+                          value={teacherSummaryEndDate}
+                          onChange={event => {
+                            setTeacherSummaryEndDate(
+                              event.target.value
+                            );
+                            setTeacherSummaryResult(
+                              null
+                            );
+                          }}
+                          className="tp-input"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={
+                        handleGenerateTeacherSummary
+                      }
+                      disabled={
+                        monthlySummarySaving ||
+                        !teacherSummaryStudentId ||
+                        !teacherSummaryStartDate ||
+                        !teacherSummaryEndDate
+                      }
+                      className="tp-save-btn w-full justify-center disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {monthlySummarySaving ? (
+                        <Loader2
+                          size={16}
+                          className="animate-spin"
+                        />
+                      ) : (
+                        <ListChecks size={16} />
+                      )}
+
+                      {monthlySummarySaving
+                        ? "Generating..."
+                        : "Generate Summary"}
+                    </button>
+                  </div>
+
+                  <div className="min-h-[430px]">
+                    {!teacherSummaryResult ? (
+                      <div className="flex min-h-[430px] flex-col items-center justify-center rounded-[30px] border border-dashed border-slate-300 bg-white/60 px-6 text-center">
+                        <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-violet-50 text-violet-600">
+                          <BookOpen size={28} />
+                        </div>
+
+                        <h3 className="mt-4 text-lg font-black text-slate-900">
+                          No summary generated
+                        </h3>
+
+                        <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">
+                          Select a student and date range, then press Generate Summary. Nothing is displayed automatically.
+                        </p>
+                      </div>
+                    ) : (
+                      <article className="overflow-hidden rounded-[30px] border border-violet-100 bg-white shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
+                        <div className="border-b border-violet-100 bg-gradient-to-r from-violet-50 via-white to-indigo-50 p-6">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                              <div className="text-xs font-black uppercase tracking-[0.15em] text-violet-500">
+                                Teacher Summary
+                              </div>
+
+                              <h3 className="mt-1 text-2xl font-black text-slate-950">
+                                {selectedTeacherSummaryStudent?.name ||
+                                  teacherSummaryResult.student_name}
+                              </h3>
+
+                              <p className="mt-1 text-sm font-bold text-slate-500">
+                                {formatDate(
+                                  teacherSummaryResult.start_date
+                                )}
+                                {" — "}
+                                {formatDate(
+                                  teacherSummaryResult.end_date
+                                )}
+                              </p>
+                            </div>
+
+                            <span className="w-fit rounded-full border border-violet-200 bg-white px-3 py-1.5 text-xs font-black text-violet-700">
+                              {teacherSummaryResult.generated_from_lessons_count ||
+                                0}{" "}
+                              lessons
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-6 p-6">
+                          <div>
+                            <div className="text-xs font-black uppercase tracking-wide text-slate-400">
+                              Summary
+                            </div>
+
+                            <p className="mt-2 whitespace-pre-line text-sm font-semibold leading-7 text-slate-700">
+                              {teacherSummaryResult.summary_text}
+                            </p>
+                          </div>
+
+                          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                            <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                              <div className="text-xs font-black uppercase tracking-wide text-emerald-600">
+                                Strengths
+                              </div>
+
+                              <p className="mt-2 whitespace-pre-line text-sm font-semibold leading-6 text-emerald-900">
+                                {teacherSummaryResult.strengths ||
+                                  "No details generated."}
+                              </p>
+                            </div>
+
+                            <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
+                              <div className="text-xs font-black uppercase tracking-wide text-amber-600">
+                                Improvement
+                              </div>
+
+                              <p className="mt-2 whitespace-pre-line text-sm font-semibold leading-6 text-amber-900">
+                                {teacherSummaryResult.improvement_areas ||
+                                  teacherSummaryResult.weaknesses ||
+                                  "No details generated."}
+                              </p>
+                            </div>
+
+                            <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 p-4">
+                              <div className="text-xs font-black uppercase tracking-wide text-indigo-600">
+                                Recommendation
+                              </div>
+
+                              <p className="mt-2 whitespace-pre-line text-sm font-semibold leading-6 text-indigo-900">
+                                {teacherSummaryResult.parent_message ||
+                                  teacherSummaryResult.recommendations ||
+                                  "No details generated."}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </article>
+                    )}
+                  </div>
+                </section>
+              )}
             </div>
+          )}
+
+          {/* ── Salary Tab ── */}
+          {activeTab === "salary" && salaryEnabled && (
+            <TeacherSalarySelfService />
           )}
 
           {/* ── Attendance Tab ── */}
@@ -2702,6 +3969,7 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
                           "Date",
                           "Type",
                           "Name",
+                          "Class Time",
                           "Status",
                           "Marked By",
                         ].map(heading => (
@@ -2740,6 +4008,10 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
                                 "-"}
                             </td>
 
+                            <td className="px-5 py-3 whitespace-nowrap text-slate-600">
+                              {attendanceClassLabel(item)}
+                            </td>
+
                             <td className="px-5 py-3">
                               <span
                                 className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold ${statusStyle.light}`}
@@ -2773,7 +4045,7 @@ const handleMonthlyStudentChange = (nextStudentId: string) => {
                       {attendanceRows.length === 0 && (
                         <tr>
                           <td
-                            colSpan={5}
+                            colSpan={6}
                             className="px-5 py-12 text-center text-sm text-slate-400"
                           >
                             No attendance records found.

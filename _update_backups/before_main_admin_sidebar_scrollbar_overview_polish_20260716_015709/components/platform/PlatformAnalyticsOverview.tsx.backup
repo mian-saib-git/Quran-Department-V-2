@@ -1,0 +1,203 @@
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  BarChart3,
+  BellRing,
+  BookOpen,
+  Building2,
+  CalendarDays,
+  Database,
+  GraduationCap,
+  Layers3,
+  Loader2,
+  RefreshCw,
+  ShieldCheck,
+  UsersRound,
+  Wrench,
+} from "lucide-react";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  RadialBar,
+  RadialBarChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { getPlatformAnalytics, type PlatformAnalytics } from "../../services/djangoApiService";
+
+const chartColors = ["#4f46e5", "#06b6d4", "#10b981", "#f59e0b", "#f43f5e", "#8b5cf6"];
+
+function ChartCard({
+  title,
+  subtitle,
+  children,
+  className = "",
+}: {
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`rounded-[30px] border border-slate-200 bg-white p-5 shadow-[0_16px_44px_rgba(15,23,42,0.06)] dark:border-slate-800 dark:bg-slate-900 md:p-6 ${className}`}>
+      <div>
+        <h3 className="text-lg font-black text-slate-950 dark:text-white">{title}</h3>
+        <p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">{subtitle}</p>
+      </div>
+      <div className="mt-5">{children}</div>
+    </section>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  meta,
+  icon: Icon,
+  accent,
+}: {
+  label: string;
+  value: number | string;
+  meta: string;
+  icon: React.ComponentType<{ size?: number }>;
+  accent: string;
+}) {
+  return (
+    <article className="group relative overflow-hidden rounded-[26px] border border-slate-200 bg-white p-5 shadow-[0_14px_38px_rgba(15,23,42,0.06)] transition hover:-translate-y-1 hover:shadow-[0_22px_52px_rgba(15,23,42,0.1)] dark:border-slate-800 dark:bg-slate-900">
+      <div className={`absolute -right-8 -top-10 h-28 w-28 rounded-full opacity-15 blur-2xl ${accent}`} />
+      <div className="relative flex items-start justify-between gap-4">
+        <div>
+          <div className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">{label}</div>
+          <div className="mt-3 text-3xl font-black text-slate-950 dark:text-white">{value}</div>
+          <div className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">{meta}</div>
+        </div>
+        <span className={`grid h-12 w-12 place-items-center rounded-2xl text-white shadow-lg ${accent}`}><Icon size={21} /></span>
+      </div>
+    </article>
+  );
+}
+
+function EmptyChart() {
+  return <div className="grid h-64 place-items-center rounded-2xl border border-dashed border-slate-300 text-sm font-bold text-slate-400 dark:border-slate-700">No data recorded yet</div>;
+}
+
+export default function PlatformAnalyticsOverview() {
+  const [data, setData] = useState<PlatformAnalytics | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setData(await getPlatformAnalytics());
+    } catch (err: any) {
+      setError(err?.message || "Could not load platform analytics.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const radialData = useMemo(
+    () => [
+      { name: "Attendance", value: data?.summary.attendance_rate || 0, fill: "#4f46e5" },
+      { name: "Features", value: data?.summary.feature_enablement_rate || 0, fill: "#06b6d4" },
+    ],
+    [data]
+  );
+
+  if (loading && !data) {
+    return <div className="grid min-h-[460px] place-items-center rounded-[30px] border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"><div className="flex items-center gap-3 font-black text-slate-600 dark:text-slate-300"><Loader2 size={22} className="animate-spin text-indigo-600" /> Loading real platform analytics...</div></div>;
+  }
+
+  if (!data) {
+    return <div className="rounded-[30px] border border-rose-200 bg-rose-50 p-6 text-sm font-bold text-rose-700 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-300">{error || "Analytics are not available."}</div>;
+  }
+
+  const summary = data.summary;
+  const cards = [
+    { label: "Institutions", value: summary.institutions, meta: `${summary.active_institutions} active`, icon: Building2, accent: "bg-indigo-600" },
+    { label: "Departments", value: summary.departments, meta: `${summary.active_departments} active`, icon: Layers3, accent: "bg-cyan-500" },
+    { label: "Active Users", value: summary.active_users, meta: `${summary.users} total accounts`, icon: UsersRound, accent: "bg-emerald-500" },
+    { label: "Students", value: summary.students, meta: `${summary.teachers} teachers`, icon: GraduationCap, accent: "bg-violet-500" },
+    { label: "Active Schedules", value: summary.quran_schedules + summary.tuition_schedules, meta: `${summary.quran_schedules} Qur'an · ${summary.tuition_schedules} Tuition`, icon: CalendarDays, accent: "bg-amber-500" },
+    { label: "Learning Records", value: summary.quran_lessons + summary.tuition_enrollments, meta: `${summary.quran_lessons} lessons · ${summary.tuition_enrollments} enrollments`, icon: BookOpen, accent: "bg-rose-500" },
+    { label: "Backups", value: summary.backups, meta: "Protected database copies", icon: Database, accent: "bg-slate-700" },
+    { label: "Communication", value: summary.active_notices + summary.active_maintenance, meta: `${summary.active_notices} notices · ${summary.active_maintenance} maintenance`, icon: BellRing, accent: "bg-fuchsia-500" },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <section className="overflow-hidden rounded-[32px] border border-slate-200 bg-gradient-to-br from-slate-950 via-indigo-950 to-indigo-700 p-6 text-white shadow-[0_24px_70px_rgba(49,46,129,0.2)] md:p-8">
+        <div className="relative flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-200">Live platform intelligence</div>
+            <h2 className="mt-2 text-3xl font-black tracking-tight">IVS Operational Overview</h2>
+            <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-indigo-100/80">Real information from accounts, departments, schedules, attendance, lessons, Tuition enrollment, permissions, backups, and administration activity.</p>
+          </div>
+          <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-xs font-black backdrop-blur transition hover:bg-white/15 disabled:opacity-50"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /> Refresh Analytics</button>
+          <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full border-[42px] border-white/5" />
+        </div>
+      </section>
+
+      {error && <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300">{error}</div>}
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {cards.map((card) => <MetricCard key={card.label} {...card} />)}
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[1.5fr_0.8fr]">
+        <ChartCard title="14-Day Platform Activity" subtitle="Qur'an attendance, Tuition attendance, lessons, and Main Admin changes from the database.">
+          {data.activity_timeline.length ? <div className="h-[330px]"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data.activity_timeline} margin={{ top: 10, right: 8, left: -22, bottom: 0 }}><defs><linearGradient id="quranActivity" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#4f46e5" stopOpacity={0.34}/><stop offset="95%" stopColor="#4f46e5" stopOpacity={0}/></linearGradient><linearGradient id="tuitionActivity" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3}/><stop offset="95%" stopColor="#06b6d4" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="4 6" vertical={false} stroke="#e2e8f0" /><XAxis dataKey="label" tick={{ fontSize: 10, fontWeight: 700, fill: "#64748b" }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10, fontWeight: 700, fill: "#64748b" }} axisLine={false} tickLine={false} allowDecimals={false} /><Tooltip contentStyle={{ borderRadius: 16, border: "1px solid #e2e8f0", fontSize: 12, fontWeight: 700 }} /><Legend wrapperStyle={{ fontSize: 11, fontWeight: 800 }} /><Area type="monotone" dataKey="quran_attendance" name="Qur'an Attendance" stroke="#4f46e5" strokeWidth={3} fill="url(#quranActivity)" /><Area type="monotone" dataKey="tuition_attendance" name="Tuition Attendance" stroke="#06b6d4" strokeWidth={3} fill="url(#tuitionActivity)" /><Area type="monotone" dataKey="lessons" name="Lessons" stroke="#10b981" strokeWidth={2.5} fillOpacity={0} /><Area type="monotone" dataKey="admin_activity" name="Admin Activity" stroke="#f59e0b" strokeWidth={2.5} fillOpacity={0} /></AreaChart></ResponsiveContainer></div> : <EmptyChart />}
+        </ChartCard>
+
+        <ChartCard title="Platform Performance" subtitle="Attendance and permission enablement shown as live completion gauges.">
+          <div className="relative h-[330px]"><ResponsiveContainer width="100%" height="100%"><RadialBarChart innerRadius="35%" outerRadius="95%" data={radialData} startAngle={210} endAngle={-30}><RadialBar dataKey="value" background cornerRadius={18} /><Legend iconSize={10} layout="horizontal" verticalAlign="bottom" align="center" wrapperStyle={{ fontSize: 11, fontWeight: 800 }} /><Tooltip formatter={(value) => `${value}%`} contentStyle={{ borderRadius: 16, border: "1px solid #e2e8f0", fontSize: 12, fontWeight: 700 }} /></RadialBarChart></ResponsiveContainer><div className="pointer-events-none absolute inset-x-0 top-[42%] text-center"><div className="text-3xl font-black text-slate-950 dark:text-white">{summary.attendance_rate}%</div><div className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Attendance rate</div></div></div>
+        </ChartCard>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <ChartCard title="Users by Role" subtitle="Every active portal category represented from the accounts database.">
+          {data.users_by_role.length ? <div className="h-[320px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.users_by_role} layout="vertical" margin={{ left: 18, right: 20 }}><CartesianGrid strokeDasharray="4 6" horizontal={false} stroke="#e2e8f0" /><XAxis type="number" allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 700, fill: "#64748b" }} /><YAxis type="category" dataKey="label" width={112} axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 800, fill: "#475569" }} /><Tooltip cursor={{ fill: "rgba(99,102,241,0.06)" }} contentStyle={{ borderRadius: 16, border: "1px solid #e2e8f0", fontSize: 12, fontWeight: 700 }} /><Bar dataKey="value" name="Accounts" radius={[0, 12, 12, 0]}>{data.users_by_role.map((item, index) => <Cell key={item.key} fill={chartColors[index % chartColors.length]} />)}</Bar></BarChart></ResponsiveContainer></div> : <EmptyChart />}
+        </ChartCard>
+
+        <ChartCard title="Department Portfolio" subtitle="Distribution of Qur'an, Tuition, and future department types.">
+          {data.department_types.length ? <div className="grid items-center gap-4 sm:grid-cols-[1fr_0.9fr]"><div className="h-[280px]"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data.department_types} dataKey="value" nameKey="label" innerRadius={65} outerRadius={105} paddingAngle={5} cornerRadius={10}>{data.department_types.map((item, index) => <Cell key={item.key} fill={chartColors[index % chartColors.length]} />)}</Pie><Tooltip contentStyle={{ borderRadius: 16, border: "1px solid #e2e8f0", fontSize: 12, fontWeight: 700 }} /></PieChart></ResponsiveContainer></div><div className="space-y-3">{data.department_types.map((item, index) => <div key={item.key} className="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3 dark:bg-slate-800"><span className="flex items-center gap-2 text-xs font-black"><span className="h-3 w-3 rounded-full" style={{ backgroundColor: chartColors[index % chartColors.length] }} />{item.label}</span><span className="text-sm font-black">{item.value}</span></div>)}</div></div> : <EmptyChart />}
+        </ChartCard>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+        <ChartCard title="Attendance Status" subtitle="Combined comparison between Qur'an and Tuition attendance records.">
+          {data.attendance_status.some((item) => item.total > 0) ? <div className="h-[300px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.attendance_status} margin={{ top: 10, right: 10, left: -20 }}><CartesianGrid strokeDasharray="4 6" vertical={false} stroke="#e2e8f0" /><XAxis dataKey="status" axisLine={false} tickLine={false} tick={{ fontSize: 11, fontWeight: 800, fill: "#475569" }} /><YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 700, fill: "#64748b" }} /><Tooltip contentStyle={{ borderRadius: 16, border: "1px solid #e2e8f0", fontSize: 12, fontWeight: 700 }} /><Legend wrapperStyle={{ fontSize: 11, fontWeight: 800 }} /><Bar dataKey="quran" name="Qur'an" stackId="attendance" fill="#4f46e5" radius={[0, 0, 8, 8]} /><Bar dataKey="tuition" name="Tuition" stackId="attendance" fill="#06b6d4" radius={[8, 8, 0, 0]} /></BarChart></ResponsiveContainer></div> : <EmptyChart />}
+        </ChartCard>
+
+        <ChartCard title="Department Access Health" subtitle="Percentage of configured portal permissions currently enabled.">
+          <div className="space-y-5">{data.feature_health.length ? data.feature_health.map((item, index) => <div key={item.key}><div className="flex items-end justify-between gap-3"><div><div className="text-sm font-black text-slate-900 dark:text-white">{item.label}</div><div className="mt-1 text-[11px] font-bold text-slate-400">{item.enabled} of {item.total} permissions enabled</div></div><div className="text-2xl font-black" style={{ color: chartColors[index % chartColors.length] }}>{item.rate}%</div></div><div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-full rounded-full transition-all" style={{ width: `${Math.min(item.rate, 100)}%`, backgroundColor: chartColors[index % chartColors.length] }} /></div></div>) : <EmptyChart />}</div>
+        </ChartCard>
+      </div>
+
+      <ChartCard title="Largest Departments" subtitle="Departments ranked by currently active primary user accounts.">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">{data.top_departments.length ? data.top_departments.map((item, index) => <article key={item.id} className="rounded-[22px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/70"><div className="flex items-start justify-between gap-3"><span className="grid h-10 w-10 place-items-center rounded-2xl text-white" style={{ backgroundColor: chartColors[index % chartColors.length] }}><BarChart3 size={17} /></span><span className="text-2xl font-black text-slate-950 dark:text-white">{item.users}</span></div><h4 className="mt-4 truncate text-sm font-black">{item.name}</h4><p className="mt-1 truncate text-[11px] font-bold text-slate-400">{item.institution} · {item.department_type === "quran" ? "Qur'an" : item.department_type}</p></article>) : <div className="col-span-full"><EmptyChart /></div>}</div>
+      </ChartCard>
+
+      <section className="grid gap-4 md:grid-cols-3">
+        <div className="rounded-[24px] border border-emerald-200 bg-emerald-50 p-5 dark:border-emerald-500/25 dark:bg-emerald-500/10"><ShieldCheck className="text-emerald-600" /><div className="mt-4 text-2xl font-black text-emerald-800 dark:text-emerald-200">{summary.active_institutions}/{summary.institutions}</div><div className="mt-1 text-xs font-black text-emerald-700 dark:text-emerald-300">Active institution health</div></div>
+        <div className="rounded-[24px] border border-indigo-200 bg-indigo-50 p-5 dark:border-indigo-500/25 dark:bg-indigo-500/10"><Activity className="text-indigo-600" /><div className="mt-4 text-2xl font-black text-indigo-800 dark:text-indigo-200">{summary.attendance_records}</div><div className="mt-1 text-xs font-black text-indigo-700 dark:text-indigo-300">Recorded attendance events</div></div>
+        <div className="rounded-[24px] border border-amber-200 bg-amber-50 p-5 dark:border-amber-500/25 dark:bg-amber-500/10"><Wrench className="text-amber-600" /><div className="mt-4 text-2xl font-black text-amber-800 dark:text-amber-200">{summary.active_maintenance}</div><div className="mt-1 text-xs font-black text-amber-700 dark:text-amber-300">Active maintenance scopes</div></div>
+      </section>
+    </div>
+  );
+}

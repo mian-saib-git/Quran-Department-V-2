@@ -1,0 +1,65 @@
+/* IVS_TUITION_STUDENT_PORTAL_V36_OVERVIEW_OVERLAY_LANYARD */
+.lanyard-wrapper {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  touch-action: pan-y;
+  user-select: none;
+}
+
+.lanyard-wrapper canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  outline: none;
+  pointer-events: none;
+}
+
+/* The shadow belongs to the floating badge, not to a separate card or panel. */
+.lanyard-wrapper::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  top: 36%;
+  width: 170px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.16);
+  filter: blur(15px);
+  pointer-events: none;
+}
+
+.tuition-overview-lanyard-layer {
+  position: absolute;
+  inset: -24px 0 0;
+  z-index: 45;
+  overflow: visible;
+  pointer-events: none;
+}
+
+@media (max-width: 767px) {
+  .tuition-overview-lanyard-layer {
+    inset: -12px -10px 0;
+  }
+
+  .lanyard-wrapper::after {
+    top: 31%;
+    width: 132px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lanyard-wrapper::after {
+    display: none;
+  }
+}

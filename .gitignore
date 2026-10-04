@@ -41,6 +41,7 @@ components.zip
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
+!.vscode/settings.json
 .idea/
 .DS_Store
 *.suo
@@ -65,3 +66,4 @@ update_locked_feature_ui.py
 refine_locked_feature_ui.py
 *.bak
 *_diagnostic.txt
+!backend/.vscode/settings.json

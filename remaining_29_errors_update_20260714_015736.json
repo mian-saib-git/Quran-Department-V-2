@@ -1,0 +1,15 @@
+{
+  "applied_at": "2026-07-14T01:57:36",
+  "project_root": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)",
+  "updated": [
+    "components/tuition/TuitionAccountsEnrollment.tsx",
+    "services/djangoApiService.ts",
+    "backend/academy/views.py"
+  ],
+  "already_fixed": [],
+  "backups": [
+    "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\components\\tuition\\TuitionAccountsEnrollment.tsx.before_remaining_29_errors_20260714_015736.bak",
+    "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\services\\djangoApiService.ts.before_remaining_29_errors_20260714_015736.bak",
+    "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\backend\\academy\\views.py.before_remaining_29_errors_20260714_015736.bak"
+  ]
+}

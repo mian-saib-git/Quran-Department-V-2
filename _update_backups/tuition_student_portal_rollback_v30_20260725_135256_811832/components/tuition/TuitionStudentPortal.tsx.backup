@@ -1,0 +1,2026 @@
+// IVS_TUITION_STUDENT_PORTAL_V29
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  AlertCircle,
+  BookOpen,
+  CalendarDays,
+  CheckCircle2,
+  ChevronRight,
+  ClipboardList,
+  Clock,
+  GraduationCap,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  Moon,
+  Sun,
+  UserRound,
+  Video,
+  X,
+} from "lucide-react";
+
+import { logoutFromDjango } from "../../services/djangoApiService";
+import {
+  getTuitionStudentPortal,
+  type TuitionStudentPortalAttendance,
+  type TuitionStudentPortalResponse,
+  type TuitionStudentPortalSchedule,
+  type TuitionStudentPortalSubject,
+} from "../../services/tuitionApiService";
+import { useAcademyWS } from "../../hooks/useAcademyWS";
+import { PageSkeleton } from "../ui/SkeletonLoaders";
+
+type Props = {
+  departmentId?: number;
+  onLogout: () => void;
+};
+
+type Tab = "overview" | "attendance" | "assignments" | "schedule";
+type PeriodView = "all" | "daily" | "weekly" | "monthly" | "yearly";
+
+type ScheduleTiming = {
+  start: Date;
+  end: Date;
+  duration: number;
+  diffMinutes: number;
+  isLive: boolean;
+  isUpcoming: boolean;
+  isPast: boolean;
+};
+
+const PAGE_SIZE = 9;
+const WEEKDAY_ORDER = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+];
+
+function localDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatDate(value: string) {
+  if (!value) return "—";
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function formatTime(value: string) {
+  const [hoursRaw, minutesRaw] = String(value || "").slice(0, 5).split(":");
+  const hours = Number(hoursRaw);
+  if (!Number.isFinite(hours) || minutesRaw === undefined) return value || "—";
+  const suffix = hours >= 12 ? "PM" : "AM";
+  const hour12 = hours % 12 || 12;
+  return `${hour12}:${minutesRaw} ${suffix}`;
+}
+
+function getInitials(name: string) {
+  return (
+    String(name || "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((part) => part[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "S"
+  );
+}
+
+function getWeekRange(value: string) {
+  const selected = new Date(`${value}T00:00:00`);
+  const day = selected.getDay();
+  const start = new Date(selected);
+  start.setDate(selected.getDate() - day);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return { start: localDateKey(start), end: localDateKey(end) };
+}
+
+function paginate<T>(items: T[], page: number, size = PAGE_SIZE) {
+  const totalPages = Math.max(1, Math.ceil(items.length / size));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const start = (safePage - 1) * size;
+  return {
+    items: items.slice(start, start + size),
+    safePage,
+    totalPages,
+  };
+}
+
+function statusLabel(status?: string) {
+  if (status === "present") return "Present";
+  if (status === "absent") return "Absent";
+  if (status === "leave") return "Leave";
+  return "Unmarked";
+}
+
+function statusClasses(status?: string) {
+  if (status === "present") {
+    return {
+      badge: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      dot: "bg-emerald-500",
+      card: "rounded-3xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-emerald-800",
+    };
+  }
+  if (status === "absent") {
+    return {
+      badge: "bg-rose-50 text-rose-700 border-rose-200",
+      dot: "bg-rose-500",
+      card: "rounded-3xl border border-rose-200 bg-rose-50 px-5 py-4 text-rose-800",
+    };
+  }
+  if (status === "leave") {
+    return {
+      badge: "bg-amber-50 text-amber-700 border-amber-200",
+      dot: "bg-amber-500",
+      card: "rounded-3xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-800",
+    };
+  }
+  return {
+    badge: "bg-slate-50 text-slate-600 border-slate-200",
+    dot: "bg-slate-400",
+    card: "rounded-3xl border border-slate-200 bg-slate-50 px-5 py-4 text-slate-700",
+  };
+}
+
+function zonedParts(date: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    weekday: "long",
+  });
+  const parts = formatter.formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || "";
+  return {
+    year: Number(get("year")),
+    month: Number(get("month")),
+    day: Number(get("day")),
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+    second: Number(get("second")),
+    weekday: get("weekday").toLowerCase(),
+  };
+}
+
+function timeZoneOffsetMs(date: Date, timeZone: string) {
+  const parts = zonedParts(date, timeZone);
+  return Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  ) - date.getTime();
+}
+
+function zonedLocalToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+) {
+  const desired = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  let candidate = desired;
+  for (let index = 0; index < 3; index += 1) {
+    candidate = desired - timeZoneOffsetMs(new Date(candidate), timeZone);
+  }
+  return new Date(candidate);
+}
+
+function addUtcDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function scheduleDuration(schedule: TuitionStudentPortalSchedule) {
+  const [startHour, startMinute] = schedule.start_time.split(":").map(Number);
+  const [endHour, endMinute] = schedule.end_time.split(":").map(Number);
+  const start = (Number.isFinite(startHour) ? startHour : 0) * 60 + (Number.isFinite(startMinute) ? startMinute : 0);
+  let end = (Number.isFinite(endHour) ? endHour : 0) * 60 + (Number.isFinite(endMinute) ? endMinute : 0);
+  if (end <= start) end += 24 * 60;
+  return Math.max(1, end - start);
+}
+
+function getScheduleTiming(schedule: TuitionStudentPortalSchedule, now = new Date()): ScheduleTiming {
+  const timeZone = schedule.timezone_name || "Asia/Karachi";
+  const nowParts = zonedParts(now, timeZone);
+  const currentIndex = WEEKDAY_ORDER.indexOf(nowParts.weekday);
+  const targetIndex = WEEKDAY_ORDER.indexOf(String(schedule.weekday || "").toLowerCase());
+  const daysUntil = ((targetIndex < 0 ? currentIndex : targetIndex) - currentIndex + 7) % 7;
+  const localBase = addUtcDays(new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day)), daysUntil);
+  const [hourRaw, minuteRaw] = schedule.start_time.split(":").map(Number);
+  let start = zonedLocalToUtc(
+    localBase.getUTCFullYear(),
+    localBase.getUTCMonth() + 1,
+    localBase.getUTCDate(),
+    Number.isFinite(hourRaw) ? hourRaw : 0,
+    Number.isFinite(minuteRaw) ? minuteRaw : 0,
+    timeZone,
+  );
+  const duration = scheduleDuration(schedule);
+  let end = new Date(start.getTime() + duration * 60_000);
+  const previousStart = new Date(start.getTime() - 7 * 24 * 60 * 60_000);
+  const previousEnd = new Date(previousStart.getTime() + duration * 60_000);
+
+  if (now >= previousStart && now < previousEnd) {
+    start = previousStart;
+    end = previousEnd;
+  } else if (now >= end) {
+    start = new Date(start.getTime() + 7 * 24 * 60 * 60_000);
+    end = new Date(start.getTime() + duration * 60_000);
+  }
+
+  const diffMinutes = Math.ceil((start.getTime() - now.getTime()) / 60_000);
+  return {
+    start,
+    end,
+    duration,
+    diffMinutes,
+    isLive: now >= start && now < end,
+    isUpcoming: now < start,
+    isPast: now >= end,
+  };
+}
+
+function formatLocalClassTime(date: Date) {
+  return date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function formatLocalClassDate(date: Date) {
+  return date.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function countdownLabel(minutes: number) {
+  if (minutes <= 1) return "Starting now";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+}
+
+function clockAngles(now: Date) {
+  const seconds = now.getSeconds();
+  const minutes = now.getMinutes() + seconds / 60;
+  const hours = (now.getHours() % 12) + minutes / 60;
+  return {
+    second: seconds * 6,
+    minute: minutes * 6,
+    hour: hours * 30,
+  };
+}
+
+const STYLES = String.raw`
+        .sp-root {
+          background:
+            radial-gradient(circle at top left, rgba(99,102,241,0.10), transparent 34%),
+            radial-gradient(circle at top right, rgba(16,185,129,0.10), transparent 30%),
+            #f8fafc;
+          font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        .sp-page-scroll {
+          scrollbar-width: thin;
+          scrollbar-color: #cbd5e1 transparent;
+        }
+
+        .sp-page-scroll::-webkit-scrollbar {
+          width: 10px;
+        }
+
+        .sp-page-scroll::-webkit-scrollbar-track {
+          background: transparent;
+        }
+
+        .sp-page-scroll::-webkit-scrollbar-thumb {
+          background: #cbd5e1;
+          border-radius: 999px;
+          border: 3px solid #f8fafc;
+        }
+
+        .sp-page-scroll::-webkit-scrollbar-thumb:hover {
+          background: #94a3b8;
+        }
+
+        .sp-sidebar {
+          width: 260px;
+          min-height: 100vh;
+          background:
+            linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(248,250,252,0.96) 100%);
+          border-right: 1px solid #e8eef7;
+          flex-shrink: 0;
+          overflow: hidden;
+          padding: 18px 14px;
+          box-shadow: 16px 0 50px rgba(15, 23, 42, 0.06);
+        }
+
+        .sp-sidebar-logo {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 12px;
+          border-radius: 24px;
+          background: #ffffff;
+          border: 1px solid #edf2f7;
+          box-shadow:
+            0 24px 48px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255,255,255,0.9);
+        }
+
+        .sp-logo-icon {
+          width: 52px;
+          height: 52px;
+          border-radius: 18px;
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+          overflow: hidden;
+          box-shadow:
+            0 14px 28px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255,255,255,0.9);
+        }
+
+        .sp-sidebar-logo-img {
+          width: 42px;
+          height: 42px;
+          object-fit: contain;
+          display: block;
+        }
+
+        .sp-nav-btn {
+          position: relative;
+          display: flex;
+          align-items: center;
+          gap: 13px;
+          padding: 13px 14px;
+          border-radius: 20px;
+          font-size: 14px;
+          font-weight: 950;
+          color: #334155;
+          transition: all 0.18s ease;
+          text-align: left;
+          background: transparent;
+          border: 1px solid transparent;
+          cursor: pointer;
+        }
+
+        .sp-nav-btn svg {
+          width: 40px;
+          height: 40px;
+          padding: 10px;
+          border-radius: 15px;
+          color: #64748b;
+          background: #ffffff;
+          border: 1px solid #e8eef7;
+          box-shadow: 0 10px 22px rgba(15, 23, 42, 0.06);
+        }
+
+        .sp-nav-btn:hover {
+          background: rgba(255,255,255,0.86);
+          color: #1e293b;
+          transform: translateX(2px);
+          box-shadow: 0 12px 30px rgba(15,23,42,0.06);
+        }
+
+        .sp-nav-btn.active {
+          background: #ffffff;
+          color: #4f46e5;
+          border-color: #111827;
+          box-shadow:
+            0 18px 42px rgba(15, 23, 42, 0.10),
+            inset 0 1px 0 rgba(255,255,255,0.95);
+        }
+
+        .sp-nav-btn.active svg {
+          color: #4f46e5;
+          background: #eef2ff;
+          border-color: #dbe5ff;
+        }
+
+        .sp-student-card {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 12px;
+          background: linear-gradient(135deg, #ffffff, #f8fafc);
+          border: 1px solid #e8eef7;
+          border-radius: 20px;
+          box-shadow: 0 16px 36px rgba(15, 23, 42, 0.08);
+        }
+
+        .sp-logout-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          padding: 13px 14px;
+          border-radius: 18px;
+          font-size: 13px;
+          font-weight: 950;
+          color: #e11d48;
+          background: #fff1f2;
+          border: 1px solid #ffe4e6;
+          transition: all 0.15s;
+          cursor: pointer;
+        }
+
+        .sp-logout-btn:hover {
+          background: #ffe4e6;
+          transform: translateY(-1px);
+        }
+
+        .sp-topbar {
+          background: rgba(255,255,255,0.88);
+          backdrop-filter: blur(16px);
+          border-bottom: 1px solid #f1f5f9;
+          flex-shrink: 0;
+        }
+
+        .sp-clock-card {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          min-height: 58px;
+          padding: 8px 14px 8px 8px;
+          border-radius: 24px;
+          background: #ffffff;
+          border: 1px solid #e8eef7;
+          box-shadow: 0 14px 36px rgba(15, 23, 42, 0.07);
+        }
+
+        .sp-analog-clock {
+          position: relative;
+          width: 48px;
+          height: 48px;
+          border-radius: 999px;
+          background:
+            radial-gradient(circle at center, #ffffff 0%, #f8fafc 62%, #eef2ff 100%);
+          border: 1px solid #e2e8f0;
+          box-shadow:
+            inset 0 3px 8px rgba(15, 23, 42, 0.06),
+            0 8px 20px rgba(15, 23, 42, 0.08);
+        }
+
+        .sp-clock-mark {
+          position: absolute;
+          font-size: 6px;
+          font-weight: 950;
+          color: #94a3b8;
+          line-height: 1;
+        }
+
+        .sp-clock-mark-12 { top: 6px; left: 50%; transform: translateX(-50%); }
+        .sp-clock-mark-3 { right: 5px; top: 50%; transform: translateY(-50%); }
+        .sp-clock-mark-6 { bottom: 5px; left: 50%; transform: translateX(-50%); }
+        .sp-clock-mark-9 { left: 5px; top: 50%; transform: translateY(-50%); }
+
+        .sp-clock-hand {
+          position: absolute;
+          left: 50%;
+          bottom: 50%;
+          transform-origin: bottom center;
+          border-radius: 999px;
+        }
+
+        .sp-clock-hour {
+          width: 3px;
+          height: 13px;
+          background: #0f172a;
+        }
+
+        .sp-clock-minute {
+          width: 2px;
+          height: 17px;
+          background: #64748b;
+        }
+
+        .sp-clock-second {
+          width: 1.5px;
+          height: 19px;
+          background: #ef4444;
+        }
+
+        .sp-clock-center {
+          position: absolute;
+          width: 7px;
+          height: 7px;
+          border-radius: 999px;
+          background: #ef4444;
+          border: 2px solid #ffffff;
+          left: 50%;
+          top: 50%;
+          transform: translate(-50%, -50%);
+          box-shadow: 0 2px 5px rgba(239, 68, 68, 0.35);
+        }
+
+        .sp-theme-btn {
+          width: 46px;
+          height: 46px;
+          border-radius: 17px;
+          border: 1px solid #e8eef7;
+          background: #ffffff;
+          color: #475569;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
+          transition: all 180ms ease;
+        }
+
+        .sp-theme-btn:hover {
+          transform: translateY(-1px);
+          color: #4f46e5;
+          background: #eef2ff;
+        }
+
+        .sp-avatar-sm {
+          width: 32px;
+          height: 32px;
+          border-radius: 10px;
+          background: linear-gradient(135deg, #10b981, #6366f1);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 11px;
+          font-weight: 950;
+          color: white;
+          flex-shrink: 0;
+        }
+
+        .sp-big-avatar {
+          width: 76px;
+          height: 76px;
+          border-radius: 26px;
+          background: linear-gradient(135deg, #10b981, #6366f1);
+          color: white;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 24px;
+          font-weight: 1000;
+          box-shadow: 0 18px 36px rgba(99,102,241,0.22);
+          flex-shrink: 0;
+        }
+
+        .sp-card {
+          background: rgba(255,255,255,0.92);
+          backdrop-filter: blur(14px);
+          border-radius: 22px;
+          border: 1px solid #f1f5f9;
+          padding: 22px;
+          box-shadow: 0 18px 46px rgba(15,23,42,0.06);
+        }
+
+        .sp-brand-icon {
+          width: 52px;
+          height: 52px;
+          border-radius: 16px;
+          background: linear-gradient(135deg, #10b981, #6366f1);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: white;
+        }
+
+        .sp-hero-panel {
+          border-radius: 28px;
+          padding: 28px;
+          background:
+            radial-gradient(circle at 10% 10%, rgba(16, 185, 129, 0.12), transparent 30%),
+            radial-gradient(circle at 85% 10%, rgba(99, 102, 241, 0.18), transparent 35%),
+            linear-gradient(135deg, #ffffff, #f7f7ff);
+          border: 1px solid #eef2ff;
+          box-shadow: 0 24px 70px rgba(15, 23, 42, 0.08);
+        }
+
+        .sp-hero-stat {
+          min-height: 108px;
+          border-radius: 20px;
+          padding: 20px;
+          background: rgba(255,255,255,0.92);
+          border: 1px solid #e9eef8;
+          box-shadow: 0 16px 38px rgba(15, 23, 42, 0.06);
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+
+        .sp-hero-label {
+          font-size: 12px;
+          font-weight: 800;
+          color: #64748b;
+        }
+
+        .sp-hero-number {
+          font-size: 30px;
+          line-height: 1;
+          font-weight: 950;
+          margin-top: 8px;
+        }
+
+        .sp-hero-icon {
+          width: 44px;
+          height: 44px;
+          border-radius: 16px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .sp-live-dot {
+          width: 44px;
+          height: 44px;
+          border-radius: 16px;
+          background: #fff1f2;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .sp-live-dot span {
+          width: 9px;
+          height: 9px;
+          border-radius: 999px;
+          background: #fb7185;
+          box-shadow: 0 0 0 8px rgba(251, 113, 133, 0.12);
+        }
+
+        .sp-welcome-card {
+          position: relative;
+          overflow: hidden;
+          border-radius: 28px;
+          border: 1px solid rgba(226,232,240,0.85);
+          background: rgba(255,255,255,0.84);
+          backdrop-filter: blur(18px);
+          padding: 28px;
+          box-shadow: 0 20px 60px rgba(15,23,42,0.08);
+        }
+
+        .sp-soft-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 14px;
+          border: 1px solid #e0e7ff;
+          background: #eef2ff;
+          color: #4f46e5;
+          padding: 9px 14px;
+          font-size: 12px;
+          font-weight: 950;
+          transition: all 0.15s;
+          white-space: nowrap;
+        }
+
+        .sp-soft-btn:hover {
+          background: #e0e7ff;
+          transform: translateY(-1px);
+        }
+
+        .sp-save-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          padding: 11px 20px;
+          border-radius: 14px;
+          font-size: 13px;
+          font-weight: 950;
+          background: linear-gradient(135deg, #10b981, #6366f1);
+          color: white;
+          border: none;
+          cursor: pointer;
+          transition: all 0.15s;
+          box-shadow: 0 4px 12px rgba(99,102,241,0.25);
+        }
+
+        .sp-save-btn:hover {
+          opacity: 0.92;
+          transform: translateY(-1px);
+        }
+
+        .sp-empty-state {
+          text-align: center;
+          padding: 40px 20px;
+          background: #f8fafc;
+          border-radius: 18px;
+          border: 1px dashed #e2e8f0;
+        }
+
+        .sp-filter-shell {
+          border-radius: 18px;
+          padding: 16px;
+          background: #f8fafc;
+          border: 1px solid #e8eef7;
+        }
+
+        .sp-filter-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+        }
+
+        .sp-field {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .sp-label {
+          font-size: 11px;
+          font-weight: 850;
+          color: #64748b;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          margin-bottom: 6px;
+        }
+
+        .sp-search-input,
+        .sp-select,
+        .sp-input-el {
+          width: 100%;
+          padding: 10px 12px;
+          border: 1px solid #e2e8f0;
+          border-radius: 14px;
+          font-size: 13px;
+          font-weight: 700;
+          color: #1e293b;
+          background: #ffffff;
+          outline: none;
+          transition: all 0.15s;
+        }
+
+        .sp-search-input {
+          padding-left: 36px;
+        }
+
+        .sp-search-input:focus,
+        .sp-select:focus,
+        .sp-input-el:focus {
+          border-color: #a5b4fc;
+          box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+          background: white;
+        }
+
+        .sp-schedule-card {
+          background: rgba(255,255,255,0.94);
+          border: 1px solid #e8eef7;
+          border-radius: 22px;
+          padding: 20px;
+          box-shadow: 0 16px 38px rgba(15,23,42,0.06);
+          transition: all 0.2s;
+        }
+
+        .sp-schedule-card:hover {
+          box-shadow: 0 20px 44px rgba(15,23,42,0.10);
+          transform: translateY(-2px);
+        }
+
+        .sp-schedule-card.live {
+          border-color: #86efac;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(34,197,94,0.12), transparent 32%),
+            #ffffff;
+        }
+
+        .sp-schedule-card.past {
+          opacity: 0.72;
+        }
+
+        .sp-time-pill,
+        .sp-count-pill {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 999px;
+          border: 1px solid #e2e8f0;
+          background: #ffffff;
+          padding: 7px 13px;
+          font-size: 12px;
+          font-weight: 950;
+          color: #334155;
+          box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+        }
+
+        .sp-soft-pill {
+          display: inline-flex;
+          align-items: center;
+          border-radius: 999px;
+          border: 1px solid #e2e8f0;
+          background: #f8fafc;
+          padding: 5px 12px;
+          font-size: 12px;
+          font-weight: 900;
+          color: #475569;
+        }
+
+        .sp-live-badge,
+        .sp-upnext-badge,
+        .sp-countdown-badge,
+        .sp-past-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          border-radius: 999px;
+          padding: 5px 11px;
+          font-size: 11px;
+          font-weight: 950;
+        }
+
+        .sp-live-badge {
+          color: #047857;
+          background: #d1fae5;
+          border: 1px solid #a7f3d0;
+        }
+
+        .sp-upnext-badge {
+          color: #4f46e5;
+          background: #eef2ff;
+          border: 1px solid #dbe5ff;
+        }
+
+        .sp-countdown-badge {
+          color: #7c3aed;
+          background: #f5f3ff;
+          border: 1px solid #ddd6fe;
+        }
+
+        .sp-past-badge {
+          color: #64748b;
+          background: #f1f5f9;
+          border: 1px solid #e2e8f0;
+        }
+
+        .sp-section-title {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 17px;
+          font-weight: 950;
+          color: #111827;
+        }
+
+        .sp-table-head {
+          background: #f8fafc;
+          border-bottom: 1px solid #f1f5f9;
+          color: #64748b;
+        }
+
+        .sp-table-row {
+          transition: all 0.15s;
+        }
+
+        .sp-table-row:hover {
+          background: rgba(248, 250, 252, 0.82);
+        }
+
+        .sp-status-card {
+          border-radius: 24px;
+          border: 1px solid transparent;
+          padding: 18px;
+          min-width: 220px;
+        }
+
+        .sp-status-card--emerald { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+        .sp-status-card--rose { background: #fff1f2; border-color: #fecdd3; color: #9f1239; }
+        .sp-status-card--amber { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+        .sp-status-card--slate { background: #f8fafc; border-color: #e2e8f0; color: #475569; }
+
+        .sp-status-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          border-radius: 999px;
+          border: 1px solid transparent;
+          padding: 6px 11px;
+          font-size: 12px;
+          font-weight: 950;
+          white-space: nowrap;
+        }
+
+        .sp-status-badge--emerald { background: #ecfdf5; border-color: #a7f3d0; color: #047857; }
+        .sp-status-badge--rose { background: #fff1f2; border-color: #fecdd3; color: #be123c; }
+        .sp-status-badge--amber { background: #fffbeb; border-color: #fde68a; color: #b45309; }
+        .sp-status-badge--blue { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+        .sp-status-badge--slate { background: #f8fafc; border-color: #e2e8f0; color: #475569; }
+
+        .sp-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 999px;
+          display: inline-flex;
+          flex-shrink: 0;
+        }
+
+        .sp-dot--emerald { background: #10b981; }
+        .sp-dot--rose { background: #f43f5e; }
+        .sp-dot--amber { background: #f59e0b; }
+        .sp-dot--blue { background: #3b82f6; }
+        .sp-dot--slate { background: #94a3b8; }
+
+        .sp-att-stat {
+          border-radius: 22px;
+          padding: 18px;
+          border: 1px solid transparent;
+          min-height: 106px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
+        }
+
+        .sp-att-stat--emerald { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+        .sp-att-stat--rose { background: #fff1f2; border-color: #fecdd3; color: #9f1239; }
+        .sp-att-stat--amber { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+
+        .sp-lesson-card {
+          border-radius: 24px;
+          border: 1px solid #e8eef7;
+          background: #ffffff;
+          padding: 20px;
+          box-shadow: 0 14px 34px rgba(15,23,42,0.06);
+          transition: all 0.18s;
+        }
+
+        .sp-lesson-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 20px 44px rgba(15,23,42,0.10);
+        }
+
+        .sp-pagination {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          border-top: 1px solid #f1f5f9;
+          margin-top: 18px;
+          padding-top: 16px;
+        }
+
+        .sp-page-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 12px;
+          border: 1px solid #e0e7ff;
+          background: #eef2ff;
+          color: #4f46e5;
+          padding: 8px 12px;
+          font-size: 12px;
+          font-weight: 950;
+          transition: all 0.15s;
+        }
+
+        .sp-page-btn:hover:not(:disabled) {
+          background: #e0e7ff;
+          transform: translateY(-1px);
+        }
+
+        .sp-page-btn:disabled {
+          opacity: 0.48;
+          cursor: not-allowed;
+        }
+
+        .sp-mob-tab {
+          padding: 6px 10px;
+          border-radius: 10px;
+          font-size: 11px;
+          font-weight: 950;
+          border: 1px solid #e2e8f0;
+          background: white;
+          color: #64748b;
+          cursor: pointer;
+          white-space: nowrap;
+          transition: all 0.15s;
+        }
+
+        .sp-mob-tab.active {
+          background: #10b981;
+          color: white;
+          border-color: #10b981;
+        }
+
+        @media (max-width: 1100px) {
+          .sp-filter-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 640px) {
+          .sp-filter-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .sp-status-card {
+            min-width: 100%;
+          }
+        }
+
+        .sp-dark,
+        .sp-dark main,
+        .sp-dark .sp-page-scroll {
+          background: #071224 !important;
+          color: #e2e8f0 !important;
+        }
+
+        .sp-dark .sp-topbar {
+          background: #0b1220 !important;
+          border-bottom-color: rgba(255,255,255,0.08) !important;
+        }
+
+        .sp-dark .sp-sidebar {
+          background: linear-gradient(180deg, #08111f 0%, #0b1220 100%) !important;
+          border-right-color: rgba(255,255,255,0.08) !important;
+          box-shadow: 16px 0 50px rgba(0,0,0,0.24) !important;
+        }
+
+        .sp-dark .sp-sidebar-logo,
+        .sp-dark .sp-student-card,
+        .sp-dark .sp-card,
+        .sp-dark .sp-welcome-card,
+        .sp-dark .sp-hero-stat,
+        .sp-dark .sp-filter-shell,
+        .sp-dark .sp-clock-card,
+        .sp-dark .sp-schedule-card,
+        .sp-dark .sp-lesson-card {
+          background: #0f172a !important;
+          border-color: rgba(255,255,255,0.10) !important;
+          box-shadow: 0 18px 44px rgba(0,0,0,0.24) !important;
+        }
+
+        .sp-dark .sp-hero-panel {
+          background:
+            radial-gradient(circle at 12% 12%, rgba(16, 185, 129, 0.14), transparent 30%),
+            radial-gradient(circle at 86% 8%, rgba(99, 102, 241, 0.26), transparent 34%),
+            linear-gradient(135deg, #101827, #111827) !important;
+          border-color: rgba(255,255,255,0.10) !important;
+        }
+
+        .sp-dark .sp-logo-icon {
+          background: #162033 !important;
+          border-color: rgba(255,255,255,0.10) !important;
+        }
+
+        .sp-dark .sp-nav-btn {
+          color: #cbd5e1 !important;
+        }
+
+        .sp-dark .sp-nav-btn svg {
+          background: #162033 !important;
+          color: #cbd5e1 !important;
+          border-color: rgba(255,255,255,0.10) !important;
+        }
+
+        .sp-dark .sp-nav-btn:hover {
+          background: rgba(255,255,255,0.06) !important;
+          color: #ffffff !important;
+        }
+
+        .sp-dark .sp-nav-btn.active {
+          background: #ffffff !important;
+          color: #4f46e5 !important;
+          border-color: #ffffff !important;
+        }
+
+        .sp-dark .sp-nav-btn.active svg {
+          background: #eef2ff !important;
+          color: #4f46e5 !important;
+          border-color: #dbe5ff !important;
+        }
+
+        .sp-dark .sp-search-input,
+        .sp-dark .sp-select,
+        .sp-dark .sp-input-el {
+          background: #071224 !important;
+          color: #f8fafc !important;
+          border-color: rgba(255,255,255,0.14) !important;
+        }
+
+        .sp-dark .sp-search-input::placeholder,
+        .sp-dark .sp-input-el::placeholder {
+          color: #94a3b8 !important;
+        }
+
+        .sp-dark select option {
+          background: #0f172a !important;
+          color: #ffffff !important;
+        }
+
+        .sp-dark input[type="date"]::-webkit-calendar-picker-indicator {
+          filter: invert(1);
+          opacity: 0.85;
+        }
+
+        .sp-dark .sp-label,
+        .sp-dark .text-slate-500,
+        .sp-dark .text-slate-400 {
+          color: #94a3b8 !important;
+        }
+
+        .sp-dark .text-slate-950,
+        .sp-dark .text-slate-900,
+        .sp-dark .text-slate-800,
+        .sp-dark .text-slate-700,
+        .sp-dark .text-slate-600 {
+          color: #f8fafc !important;
+        }
+
+        .sp-dark .sp-hero-stat .text-emerald-600 {
+          color: #6ee7b7 !important;
+        }
+
+        .sp-dark .sp-hero-stat .text-blue-600 {
+          color: #93c5fd !important;
+        }
+
+        .sp-dark .sp-soft-pill,
+        .sp-dark .sp-time-pill,
+        .sp-dark .sp-count-pill {
+          background: #ffffff !important;
+          color: #0f172a !important;
+          border-color: #e2e8f0 !important;
+        }
+
+        .sp-dark .sp-soft-btn,
+        .sp-dark .sp-page-btn {
+          background: #eef2ff !important;
+          color: #4f46e5 !important;
+          border-color: #dbe5ff !important;
+        }
+
+        .sp-dark .sp-empty-state {
+          background: #071224 !important;
+          border-color: rgba(255,255,255,0.12) !important;
+        }
+
+        .sp-dark .sp-table-head {
+          background: #071224 !important;
+          color: #94a3b8 !important;
+          border-color: rgba(255,255,255,0.10) !important;
+        }
+
+        .sp-dark .sp-table-row:hover {
+          background: rgba(255,255,255,0.04) !important;
+        }
+
+        .sp-dark .divide-slate-50 > :not([hidden]) ~ :not([hidden]) {
+          border-color: rgba(255,255,255,0.08) !important;
+        }
+
+        .sp-dark .border-slate-100,
+        .sp-dark .border-slate-200 {
+          border-color: rgba(255,255,255,0.10) !important;
+        }
+
+        .sp-dark .sp-schedule-card.live {
+          background:
+            radial-gradient(circle at 100% 0%, rgba(34,197,94,0.16), transparent 34%),
+            #0f172a !important;
+          border-color: rgba(134, 239, 172, 0.55) !important;
+        }
+
+        .sp-dark .sp-schedule-card.past {
+          opacity: 0.62;
+        }
+
+        .sp-dark .sp-att-stat--emerald {
+          background: rgba(16, 185, 129, 0.12) !important;
+          border-color: rgba(16, 185, 129, 0.35) !important;
+          color: #6ee7b7 !important;
+        }
+
+        .sp-dark .sp-att-stat--rose {
+          background: rgba(244, 63, 94, 0.12) !important;
+          border-color: rgba(244, 63, 94, 0.35) !important;
+          color: #fda4af !important;
+        }
+
+        .sp-dark .sp-att-stat--amber {
+          background: rgba(245, 158, 11, 0.12) !important;
+          border-color: rgba(245, 158, 11, 0.35) !important;
+          color: #fcd34d !important;
+        }
+
+        .sp-dark .sp-theme-btn {
+          background: #1e293b !important;
+          color: #facc15 !important;
+          border-color: rgba(255,255,255,0.12) !important;
+        }
+
+        .sp-dark .sp-status-card--emerald {
+          background: rgba(16, 185, 129, 0.12) !important;
+          border-color: rgba(16, 185, 129, 0.35) !important;
+          color: #6ee7b7 !important;
+        }
+
+        .sp-dark .sp-status-card--rose {
+          background: rgba(244, 63, 94, 0.12) !important;
+          border-color: rgba(244, 63, 94, 0.35) !important;
+          color: #fda4af !important;
+        }
+
+        .sp-dark .sp-status-card--amber {
+          background: rgba(245, 158, 11, 0.12) !important;
+          border-color: rgba(245, 158, 11, 0.35) !important;
+          color: #fcd34d !important;
+        }
+
+        .sp-dark .sp-status-card--slate {
+          background: rgba(148, 163, 184, 0.12) !important;
+          border-color: rgba(148, 163, 184, 0.28) !important;
+          color: #cbd5e1 !important;
+        }
+
+        .sp-dark .sp-clock-card .text-slate-900 {
+          color: #ffffff !important;
+        }
+
+        .sp-filter-chip {
+          display: inline-flex;
+          min-height: 38px;
+          align-items: center;
+          justify-content: center;
+          border-radius: 14px;
+          border: 1px solid #e2e8f0;
+          background: rgba(255,255,255,0.9);
+          padding: 0 14px;
+          font-size: 12px;
+          font-weight: 800;
+          color: #64748b;
+          transition: 160ms ease;
+        }
+
+        .sp-filter-chip:hover,
+        .sp-filter-chip.active {
+          border-color: #c7d2fe;
+          background: #eef2ff;
+          color: #4f46e5;
+          box-shadow: 0 8px 20px rgba(79,70,229,0.10);
+        }
+
+        .sp-filter-input {
+          min-height: 40px;
+          border-radius: 14px;
+          border: 1px solid #e2e8f0;
+          background: rgba(255,255,255,0.94);
+          padding: 0 13px;
+          font-size: 12px;
+          font-weight: 800;
+          color: #334155;
+          outline: none;
+        }
+
+        .sp-filter-input:focus {
+          border-color: #818cf8;
+          box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+        }
+
+        .sp-dark .sp-filter-chip,
+        .sp-dark .sp-filter-input {
+          border-color: rgba(148,163,184,0.28);
+          background: rgba(15,23,42,0.76);
+          color: #cbd5e1;
+        }
+
+        .sp-dark .sp-filter-chip.active {
+          border-color: rgba(129,140,248,0.55);
+          background: rgba(79,70,229,0.22);
+          color: #c7d2fe;
+        }
+      `;
+
+export default function TuitionStudentPortal({ departmentId, onLogout }: Props) {
+  const [dashboard, setDashboard] = useState<TuitionStudentPortalResponse | null>(null);
+  const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [message, setMessage] = useState("");
+  const [clockNow, setClockNow] = useState(new Date());
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+
+  const [attendanceView, setAttendanceView] = useState<PeriodView>("all");
+  const [attendanceDate, setAttendanceDate] = useState(localDateKey());
+  const [attendanceMonth, setAttendanceMonth] = useState(new Date().getMonth() + 1);
+  const [attendanceYear, setAttendanceYear] = useState(new Date().getFullYear());
+  const [attendancePage, setAttendancePage] = useState(1);
+  const [schedulePage, setSchedulePage] = useState(1);
+
+  const loadDashboard = async (silent = false) => {
+    try {
+      if (!silent) setRefreshing(true);
+      const payload = await getTuitionStudentPortal(departmentId);
+      setDashboard(payload);
+      setMessage("");
+    } catch (error: any) {
+      setMessage(error?.message || "Could not load the Tuition student portal.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadDashboard();
+    const refreshTimer = window.setInterval(() => void loadDashboard(true), 30_000);
+    const clockTimer = window.setInterval(() => setClockNow(new Date()), 1_000);
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.clearInterval(clockTimer);
+    };
+  }, [departmentId]);
+
+  useEffect(() => {
+    setAttendancePage(1);
+  }, [attendanceView, attendanceDate, attendanceMonth, attendanceYear]);
+
+  useAcademyWS((event) => {
+    const type = String(event?.type || "");
+    if (
+      type === "connected" ||
+      type === "academy.update" ||
+      type === "academy_update" ||
+      type === "tuition_attendance_updated" ||
+      type === "tuition_schedule_updated" ||
+      type === "tuition_enrollment_updated" ||
+      type === "attendance_marked"
+    ) {
+      void loadDashboard(true);
+    }
+  });
+
+  const studentName = dashboard?.student.name || dashboard?.user.full_name || dashboard?.user.username || "Student";
+  const teacherNames = dashboard?.student.teacher_names || [];
+  const primaryTeacher = teacherNames[0] || "Teacher not assigned";
+  const subjects = dashboard?.subjects || [];
+  const schedules = dashboard?.schedules || [];
+  const attendance = dashboard?.attendance || [];
+
+  const sortedAttendance = useMemo(() => {
+    return [...attendance].sort((a, b) => {
+      const dateCompare = b.date.localeCompare(a.date);
+      if (dateCompare !== 0) return dateCompare;
+      return String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || ""));
+    });
+  }, [attendance]);
+
+  const filteredAttendance = useMemo(() => {
+    let rows = sortedAttendance;
+    if (attendanceView === "daily") {
+      rows = rows.filter((item) => item.date === attendanceDate);
+    } else if (attendanceView === "weekly") {
+      const range = getWeekRange(attendanceDate);
+      rows = rows.filter((item) => item.date >= range.start && item.date <= range.end);
+    } else if (attendanceView === "monthly") {
+      const prefix = `${attendanceYear}-${String(attendanceMonth).padStart(2, "0")}`;
+      rows = rows.filter((item) => item.date.startsWith(prefix));
+    } else if (attendanceView === "yearly") {
+      rows = rows.filter((item) => item.date.startsWith(`${attendanceYear}-`));
+    }
+    return rows;
+  }, [sortedAttendance, attendanceView, attendanceDate, attendanceMonth, attendanceYear]);
+
+  const sortedSchedules = useMemo(() => {
+    return [...schedules].sort((a, b) => {
+      const dayCompare = WEEKDAY_ORDER.indexOf(a.weekday.toLowerCase()) - WEEKDAY_ORDER.indexOf(b.weekday.toLowerCase());
+      if (dayCompare !== 0) return dayCompare;
+      return a.start_time.localeCompare(b.start_time);
+    });
+  }, [schedules]);
+
+  const liveSchedules = useMemo(
+    () => sortedSchedules.filter((schedule) => getScheduleTiming(schedule, clockNow).isLive),
+    [sortedSchedules, clockNow],
+  );
+
+  const upcomingSchedules = useMemo(() => {
+    return sortedSchedules
+      .map((schedule) => ({ schedule, timing: getScheduleTiming(schedule, clockNow) }))
+      .filter((item) => item.timing.isUpcoming)
+      .sort((a, b) => a.timing.start.getTime() - b.timing.start.getTime())
+      .map((item) => item.schedule);
+  }, [sortedSchedules, clockNow]);
+
+  const nextClass = upcomingSchedules[0] || null;
+  const todayKey = localDateKey(clockNow);
+  const todayAttendance = sortedAttendance.filter((item) => item.date === todayKey);
+  const todayPresent = todayAttendance.filter((item) => item.status === "present").length;
+  const todayStatus = todayAttendance.length === 0
+    ? undefined
+    : todayPresent === todayAttendance.length
+      ? "present"
+      : todayAttendance.some((item) => item.status === "absent")
+        ? "absent"
+        : "leave";
+  const todayClasses = sortedSchedules.filter((schedule) => {
+    const timing = getScheduleTiming(schedule, clockNow);
+    return localDateKey(timing.start) === todayKey;
+  });
+
+  const paginatedAttendance = paginate(filteredAttendance, attendancePage);
+  const paginatedSchedules = paginate(sortedSchedules, schedulePage);
+  const presentCount = filteredAttendance.filter((item) => item.status === "present").length;
+  const absentCount = filteredAttendance.filter((item) => item.status === "absent").length;
+  const leaveCount = filteredAttendance.filter((item) => item.status === "leave").length;
+  const currentTime = clockNow.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+  const angles = clockAngles(clockNow);
+
+  const handleLogout = () => {
+    logoutFromDjango();
+    onLogout();
+  };
+
+  const navItems: Array<{ tab: Tab; label: string; icon: React.ReactNode }> = [
+    { tab: "overview", label: "Overview", icon: <LayoutDashboard size={18} /> },
+    { tab: "attendance", label: "Attendance", icon: <CheckCircle2 size={18} /> },
+    { tab: "assignments", label: "Assignments", icon: <ClipboardList size={18} /> },
+    { tab: "schedule", label: "Schedule", icon: <CalendarDays size={18} /> },
+  ];
+
+  if (loading) {
+    return (
+      <div className="sp-root min-h-screen bg-slate-50 p-4 sm:p-6">
+        <div className="mx-auto max-w-[1400px]">
+          <PageSkeleton variant="portal" cards={6} label="Loading Tuition Student Portal" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`sp-root h-screen flex overflow-hidden ${theme === "dark" ? "sp-dark" : ""}`}>
+      {mobileSidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close sidebar"
+          onClick={() => setMobileSidebarOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-950/45 backdrop-blur-[2px] lg:hidden"
+        />
+      )}
+
+      <aside className={`sp-sidebar sp-mobile-drawer flex flex-col ${mobileSidebarOpen ? "open" : ""}`}>
+        <div className="sp-sidebar-logo relative">
+          <button
+            type="button"
+            onClick={() => setMobileSidebarOpen(false)}
+            className="sp-drawer-close lg:hidden"
+            aria-label="Close menu"
+          >
+            <X size={18} />
+          </button>
+          <div className="sp-logo-icon">
+            <img src="/ivs-logo.png" alt="Iqra Virtual School" className="sp-sidebar-logo-img" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-black text-slate-950 leading-tight truncate">Iqra Virtual School</div>
+            <div className="text-[11px] font-bold text-slate-500 mt-0.5">Tuition Student Portal</div>
+          </div>
+        </div>
+
+        <nav className="flex-1 px-3 py-5 space-y-3">
+          {navItems.map(({ tab, icon, label }) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => {
+                setActiveTab(tab);
+                setMobileSidebarOpen(false);
+              }}
+              className={`sp-nav-btn w-full ${activeTab === tab ? "active" : ""}`}
+            >
+              {icon}
+              <span>{label}</span>
+              {activeTab === tab && <ChevronRight size={16} className="ml-auto opacity-70" />}
+            </button>
+          ))}
+        </nav>
+
+        <div className="px-3 py-4 border-t border-slate-200">
+          <div className="sp-student-card">
+            <div className="sp-avatar-sm">{getInitials(studentName)}</div>
+            <div className="min-w-0">
+              <div className="text-xs font-black text-slate-900 truncate">{studentName}</div>
+              <div className="text-[10px] font-bold text-slate-500 mt-0.5">Tuition student access</div>
+            </div>
+          </div>
+          <button type="button" onClick={handleLogout} className="sp-logout-btn w-full mt-3">
+            <LogOut size={15} />
+            <span>Logout</span>
+          </button>
+        </div>
+      </aside>
+
+      <main className="flex-1 min-w-0 flex flex-col h-screen overflow-hidden">
+        <header className="sp-topbar flex items-center justify-between px-6 py-3">
+          <div className="flex items-center gap-4 min-w-0">
+            <button
+              type="button"
+              onClick={() => setMobileSidebarOpen(true)}
+              className="lg:hidden inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white/90 text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.08)] active:scale-95"
+              aria-label="Open menu"
+            >
+              <Menu size={21} />
+            </button>
+            <div className="hidden lg:block min-w-0">
+              <h1 className="text-lg font-black text-slate-900">
+                {activeTab === "overview" && "Student Dashboard"}
+                {activeTab === "attendance" && "My Attendance"}
+                {activeTab === "assignments" && "My Assignments"}
+                {activeTab === "schedule" && "My Schedule"}
+              </h1>
+              <p className="text-xs font-semibold text-slate-500 mt-0.5">
+                {clockNow.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <ClockCard currentTime={currentTime} now={clockNow} angles={angles} />
+            <button
+              type="button"
+              onClick={() => setTheme((value) => (value === "light" ? "dark" : "light"))}
+              className="sp-theme-btn"
+              title="Toggle portal theme"
+            >
+              {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
+            </button>
+          </div>
+        </header>
+
+        {message && (
+          <div className="mx-6 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-800 flex items-center gap-2">
+            <AlertCircle size={15} />
+            <span>{message}</span>
+            <button type="button" onClick={() => void loadDashboard()} className="ml-auto font-black underline">
+              Retry
+            </button>
+          </div>
+        )}
+
+        <div className="flex-1 min-h-0 overflow-y-auto p-6 sp-page-scroll">
+          {activeTab === "overview" && (
+            <div className="space-y-6">
+              <section className="sp-hero-panel">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                  <HeroStat label="Attendance Classes" value={sortedAttendance.length} icon={<CheckCircle2 size={20} />} tone="emerald" />
+                  <HeroStat label="My Subjects" value={subjects.length} icon={<BookOpen size={20} />} tone="blue" />
+                  <HeroStat label="Today Classes" value={todayClasses.length} icon={<CalendarDays size={20} />} tone="rose" />
+                  <div className="sp-hero-stat">
+                    <div>
+                      <p className="sp-hero-label">Up Next</p>
+                      <h3 className="sp-hero-number text-slate-900">
+                        {nextClass ? formatLocalClassTime(getScheduleTiming(nextClass, clockNow).start) : "—"}
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1">
+                        {nextClass ? `${nextClass.subject_name} · ${countdownLabel(getScheduleTiming(nextClass, clockNow).diffMinutes)}` : "No upcoming class"}
+                      </p>
+                    </div>
+                    <ChevronRight size={20} className="text-slate-400" />
+                  </div>
+                </div>
+              </section>
+
+              <section className="sp-welcome-card">
+                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-5">
+                  <div className="flex items-center gap-4">
+                    <div className="sp-big-avatar">{getInitials(studentName)}</div>
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-950 tracking-tight">Welcome, {studentName}</h2>
+                      <p className="mt-2 text-sm text-slate-600 max-w-2xl">
+                        {teacherNames.length > 1 ? "Your teachers are " : "Your teacher is "}
+                        <span className="font-black text-slate-900">{teacherNames.join(", ") || primaryTeacher}</span>.
+                        Your subjects, class schedule, and class-based attendance are tracked here.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className={statusClasses(todayStatus).card}>
+                    <div className="text-xs font-black uppercase tracking-widest opacity-70">Today Attendance</div>
+                    <div className="mt-2 flex items-center gap-3">
+                      <span className={`h-2.5 w-2.5 rounded-full ${statusClasses(todayStatus).dot}`} />
+                      <div className="text-xl font-black">
+                        {todayAttendance.length ? `${todayPresent}/${todayAttendance.length} Present` : "Not Marked"}
+                      </div>
+                    </div>
+                    <div className="mt-1 text-xs font-semibold opacity-80">{todayKey}</div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-5">
+                <div className="sp-card">
+                  <div className="flex items-center justify-between gap-3 mb-4">
+                    <div>
+                      <h2 className="text-base font-black text-slate-900">My Subjects</h2>
+                      <p className="text-xs text-slate-500 mt-0.5">Every active Tuition enrollment connected to your account.</p>
+                    </div>
+                    <span className="sp-count-pill">{subjects.length} subject{subjects.length === 1 ? "" : "s"}</span>
+                  </div>
+
+                  {subjects.length === 0 ? (
+                    <EmptyState icon={<BookOpen size={28} />} title="No subjects assigned" description="Your coordinator has not connected a Tuition subject yet." />
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {subjects.slice(0, 6).map((subject) => <SubjectCard key={subject.enrollment_id} subject={subject} />)}
+                    </div>
+                  )}
+                </div>
+
+                <div className="sp-card">
+                  <div className="mb-4">
+                    <h2 className="text-base font-black text-slate-900">Attendance Snapshot</h2>
+                    <p className="text-xs text-slate-500 mt-0.5">Class-based attendance across your Tuition subjects.</p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <MiniAttendance label="Present" value={dashboard?.counts.present || 0} tone="emerald" />
+                    <MiniAttendance label="Absent" value={dashboard?.counts.absent || 0} tone="rose" />
+                    <MiniAttendance label="Leave" value={dashboard?.counts.leave || 0} tone="amber" />
+                  </div>
+                  <button type="button" onClick={() => setActiveTab("attendance")} className="sp-save-btn w-full mt-4">View attendance</button>
+                </div>
+              </section>
+
+              <section className="sp-card">
+                <div className="flex items-center justify-between gap-3 mb-4">
+                  <div>
+                    <h2 className="text-base font-black text-slate-900">Today Schedule</h2>
+                    <p className="text-xs text-slate-500 mt-0.5">Live and upcoming classes for today.</p>
+                  </div>
+                  <button type="button" onClick={() => setActiveTab("schedule")} className="sp-soft-btn">Full schedule</button>
+                </div>
+                {todayClasses.length === 0 ? (
+                  <EmptyState icon={<CalendarDays size={28} />} title="No class today" description="Your next scheduled class will appear here." />
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {todayClasses.slice(0, 6).map((schedule) => {
+                      const timing = getScheduleTiming(schedule, clockNow);
+                      return <ScheduleCard key={schedule.id} schedule={schedule} timing={timing} />;
+                    })}
+                  </div>
+                )}
+              </section>
+            </div>
+          )}
+
+          {activeTab === "attendance" && (
+            <div className="space-y-5">
+              <section className="sp-card">
+                <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4">
+                  <div>
+                    <h2 className="text-base font-black text-slate-900">My Class Attendance</h2>
+                    <p className="text-xs text-slate-500 mt-0.5">Each subject class is counted separately.</p>
+                  </div>
+                  <PeriodFilter
+                    view={attendanceView}
+                    setView={setAttendanceView}
+                    date={attendanceDate}
+                    setDate={setAttendanceDate}
+                    month={attendanceMonth}
+                    setMonth={setAttendanceMonth}
+                    year={attendanceYear}
+                    setYear={setAttendanceYear}
+                  />
+                </div>
+              </section>
+
+              <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <SummaryCard label="Present" value={presentCount} tone="emerald" />
+                <SummaryCard label="Absent" value={absentCount} tone="rose" />
+                <SummaryCard label="Leave" value={leaveCount} tone="amber" />
+              </section>
+
+              <section className="sp-card">
+                <div className="flex items-center justify-between gap-4 mb-5">
+                  <div>
+                    <h2 className="text-base font-black text-slate-900">Attendance History</h2>
+                    <p className="text-xs text-slate-500 mt-1">Subject, teacher, date, time, and status for every marked class.</p>
+                  </div>
+                  <span className="sp-count-pill">{filteredAttendance.length} record{filteredAttendance.length === 1 ? "" : "s"}</span>
+                </div>
+
+                {filteredAttendance.length === 0 ? (
+                  <EmptyState icon={<CheckCircle2 size={28} />} title="No attendance records" description="No class attendance matches the selected period." />
+                ) : (
+                  <>
+                    <div className="space-y-3">
+                      {paginatedAttendance.items.map((item) => <AttendanceRow key={item.id} item={item} />)}
+                    </div>
+                    <Pagination page={paginatedAttendance.safePage} totalPages={paginatedAttendance.totalPages} onChange={setAttendancePage} />
+                  </>
+                )}
+              </section>
+            </div>
+          )}
+
+          {activeTab === "assignments" && (
+            <div className="space-y-5">
+              <section className="sp-card">
+                <div>
+                  <h2 className="text-base font-black text-slate-900">My Assignments</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">Assignments will be connected in the next portal update.</p>
+                </div>
+              </section>
+              <section className="sp-card min-h-[420px] flex items-center justify-center">
+                <EmptyState
+                  icon={<ClipboardList size={34} />}
+                  title="Assignments are coming next"
+                  description="The Assignments tab is ready in the Tuition Student Portal. Assignment creation, due dates, files, submissions, and teacher feedback will be added later."
+                />
+              </section>
+            </div>
+          )}
+
+          {activeTab === "schedule" && (
+            <div className="space-y-5">
+              <section className="sp-card">
+                <div>
+                  <h2 className="text-base font-black text-slate-900">My Tuition Schedule</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">Your subjects, teachers, class days, timings, and meeting links.</p>
+                </div>
+              </section>
+
+              <section className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+                <div className="space-y-4">
+                  <SectionTitle title="Live Now" detail={`${liveSchedules.length} class${liveSchedules.length === 1 ? "" : "es"}`} live />
+                  {liveSchedules.length === 0 ? (
+                    <EmptyState icon={<CalendarDays size={28} />} title="No live class right now" description="Your next class appears in the Up Next column." />
+                  ) : (
+                    liveSchedules.map((schedule) => <ScheduleCard key={schedule.id} schedule={schedule} timing={getScheduleTiming(schedule, clockNow)} large />)
+                  )}
+                </div>
+
+                <div className="space-y-4">
+                  <SectionTitle title="Up Next" detail={nextClass ? formatLocalClassTime(getScheduleTiming(nextClass, clockNow).start) : "—"} />
+                  {upcomingSchedules.length === 0 ? (
+                    <EmptyState icon={<CalendarDays size={28} />} title="No upcoming class" description="Your coordinator has not scheduled another class." />
+                  ) : (
+                    upcomingSchedules.slice(0, 4).map((schedule) => <ScheduleCard key={schedule.id} schedule={schedule} timing={getScheduleTiming(schedule, clockNow)} large />)
+                  )}
+                </div>
+              </section>
+
+              <section className="sp-card">
+                <div className="flex items-center justify-between gap-4 mb-5">
+                  <div>
+                    <h2 className="text-base font-black text-slate-900">All Scheduled Classes</h2>
+                    <p className="text-xs text-slate-500 mt-1">Times are converted to your device's local time.</p>
+                  </div>
+                  <span className="sp-count-pill">{sortedSchedules.length} class{sortedSchedules.length === 1 ? "" : "es"}</span>
+                </div>
+
+                {sortedSchedules.length === 0 ? (
+                  <EmptyState icon={<CalendarDays size={28} />} title="No schedule found" description="Your coordinator has not assigned a Tuition schedule yet." />
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {paginatedSchedules.items.map((schedule) => <ScheduleCard key={schedule.id} schedule={schedule} timing={getScheduleTiming(schedule, clockNow)} />)}
+                    </div>
+                    <Pagination page={paginatedSchedules.safePage} totalPages={paginatedSchedules.totalPages} onChange={setSchedulePage} />
+                  </>
+                )}
+              </section>
+            </div>
+          )}
+        </div>
+      </main>
+
+      <style>{STYLES}</style>
+    </div>
+  );
+}
+
+function HeroStat({ label, value, icon, tone }: { label: string; value: React.ReactNode; icon: React.ReactNode; tone: "emerald" | "blue" | "rose" }) {
+  const palette = {
+    emerald: "bg-emerald-50 text-emerald-600",
+    blue: "bg-blue-50 text-blue-600",
+    rose: "bg-rose-50 text-rose-600",
+  }[tone];
+  const number = { emerald: "text-emerald-600", blue: "text-blue-600", rose: "text-rose-600" }[tone];
+  return (
+    <div className="sp-hero-stat">
+      <div>
+        <p className="sp-hero-label">{label}</p>
+        <h3 className={`sp-hero-number ${number}`}>{value}</h3>
+      </div>
+      <div className={`sp-hero-icon ${palette}`}>{icon}</div>
+    </div>
+  );
+}
+
+function ClockCard({ currentTime, now, angles }: { currentTime: string; now: Date; angles: { hour: number; minute: number; second: number } }) {
+  return (
+    <div className="sp-clock-card hidden sm:flex">
+      <div className="sp-analog-clock">
+        <span className="sp-clock-hand sp-hour" style={{ transform: `rotate(${angles.hour}deg)` }} />
+        <span className="sp-clock-hand sp-minute" style={{ transform: `rotate(${angles.minute}deg)` }} />
+        <span className="sp-clock-hand sp-second" style={{ transform: `rotate(${angles.second}deg)` }} />
+        <span className="sp-clock-center" />
+      </div>
+      <div>
+        <div className="text-sm font-black text-slate-900">{currentTime}</div>
+        <div className="text-[10px] font-bold text-slate-500">{now.toLocaleDateString("en-US", { weekday: "long" })}</div>
+      </div>
+    </div>
+  );
+}
+
+function SubjectCard({ subject }: { subject: TuitionStudentPortalSubject }) {
+  return (
+    <article className="rounded-3xl border border-slate-200 bg-white px-4 py-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600"><GraduationCap size={18} /></div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-black text-slate-900 truncate">{subject.subject_name || "Subject"}</h3>
+              <p className="text-xs font-semibold text-slate-500 truncate">{subject.class_name || "Tuition class"}</p>
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-bold text-slate-600">
+            <span className="sp-soft-pill">{subject.teacher_name || "Teacher"}</span>
+            <span className="sp-soft-pill">{subject.schedule_count} schedule{subject.schedule_count === 1 ? "" : "s"}</span>
+          </div>
+        </div>
+        <span className="sp-count-pill">{subject.program_type === "crash" ? "Crash" : "Regular"}</span>
+      </div>
+    </article>
+  );
+}
+
+function MiniAttendance({ label, value, tone }: { label: string; value: number; tone: "emerald" | "rose" | "amber" }) {
+  const palette = {
+    emerald: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    rose: "bg-rose-50 text-rose-700 border-rose-200",
+    amber: "bg-amber-50 text-amber-700 border-amber-200",
+  }[tone];
+  return (
+    <div className={`rounded-2xl border px-3 py-3 text-center ${palette}`}>
+      <div className="text-xl font-black">{value}</div>
+      <div className="text-[10px] font-black uppercase tracking-wide">{label}</div>
+    </div>
+  );
+}
+
+function SummaryCard({ label, value, tone }: { label: string; value: number; tone: "emerald" | "rose" | "amber" }) {
+  const palette = {
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    rose: "border-rose-200 bg-rose-50 text-rose-700",
+    amber: "border-amber-200 bg-amber-50 text-amber-700",
+  }[tone];
+  return <div className={`rounded-[26px] border px-5 py-4 ${palette}`}><div className="text-xs font-black uppercase tracking-wider opacity-70">{label}</div><div className="mt-2 text-3xl font-black">{value}</div></div>;
+}
+
+function AttendanceRow({ item }: { item: TuitionStudentPortalAttendance }) {
+  const palette = statusClasses(item.status);
+  return (
+    <article className="rounded-3xl border border-slate-200 bg-white px-4 py-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="text-sm font-black text-slate-900">{item.subject_name || "Tuition class"}</h3>
+            <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-black ${palette.badge}`}>
+              <span className={`h-2 w-2 rounded-full ${palette.dot}`} />
+              {statusLabel(item.status)}
+            </span>
+          </div>
+          <p className="mt-1 text-xs font-semibold text-slate-500">
+            {item.class_name || "Class"} · Teacher: <span className="font-black text-slate-700">{item.teacher_name || "—"}</span>
+          </p>
+        </div>
+        <div className="text-left md:text-right">
+          <div className="text-sm font-black text-slate-800">{formatDate(item.date)}</div>
+          <div className="mt-1 text-xs font-semibold text-slate-500">
+            {item.start_time ? `${formatTime(item.start_time)}–${formatTime(item.end_time)}` : "Time unavailable"}
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function ScheduleCard({ schedule, timing, large = false }: { schedule: TuitionStudentPortalSchedule; timing: ScheduleTiming; large?: boolean }) {
+  return (
+    <article className={`sp-schedule-card ${timing.isLive ? "live" : ""}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className={`${large ? "text-base" : "text-sm"} font-black text-slate-900 truncate`}>{schedule.subject_name || "Tuition class"}</h3>
+            {timing.isLive && <span className="sp-live-badge"><span className="sp-dot sp-dot--emerald" />Live</span>}
+            {timing.isUpcoming && <span className="sp-countdown-badge">{countdownLabel(timing.diffMinutes)}</span>}
+          </div>
+          <p className="text-xs text-slate-500 mt-2">Teacher: <span className="font-black text-slate-700">{schedule.teacher_name}</span></p>
+          <p className="text-xs text-slate-500 mt-1">{schedule.class_name}</p>
+        </div>
+        <span className="sp-time-pill shrink-0">{formatLocalClassTime(timing.start)}–{formatLocalClassTime(timing.end)}</span>
+      </div>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <span className="sp-soft-pill">{formatLocalClassDate(timing.start)}</span>
+        <span className="sp-soft-pill">{timing.duration} min</span>
+        {schedule.meeting_link && (
+          <a href={schedule.meeting_link} target="_blank" rel="noreferrer" className="sp-soft-pill inline-flex items-center gap-1.5 text-indigo-600">
+            <Video size={13} /> Join class
+          </a>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function SectionTitle({ title, detail, live = false }: { title: string; detail: string; live?: boolean }) {
+  return (
+    <div className="flex items-center justify-between">
+      <h3 className="sp-section-title">{live && <span className="h-2 w-2 rounded-full bg-rose-500" />}{title}{!live && <ChevronRight size={15} />}</h3>
+      <span className="sp-time-pill">{detail}</span>
+    </div>
+  );
+}
+
+function PeriodFilter({ view, setView, date, setDate, month, setMonth, year, setYear }: {
+  view: PeriodView;
+  setView: (value: PeriodView) => void;
+  date: string;
+  setDate: (value: string) => void;
+  month: number;
+  setMonth: (value: number) => void;
+  year: number;
+  setYear: (value: number) => void;
+}) {
+  const years = Array.from({ length: 7 }, (_, index) => new Date().getFullYear() - 3 + index);
+  return (
+    <div className="flex flex-col gap-3 sm:items-end">
+      <div className="flex flex-wrap gap-2">
+        {(["all", "daily", "weekly", "monthly", "yearly"] as PeriodView[]).map((item) => (
+          <button key={item} type="button" onClick={() => setView(item)} className={`sp-filter-chip ${view === item ? "active" : ""}`}>
+            {item.charAt(0).toUpperCase() + item.slice(1)}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {(view === "daily" || view === "weekly") && <input type="date" value={date} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setDate(event.target.value)} className="sp-filter-input" />}
+        {view === "monthly" && (
+          <select value={month} onChange={(event: React.ChangeEvent<HTMLSelectElement>) => setMonth(Number(event.target.value))} className="sp-filter-input">
+            {Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={index + 1}>{new Date(2000, index, 1).toLocaleDateString("en-US", { month: "long" })}</option>)}
+          </select>
+        )}
+        {(view === "monthly" || view === "yearly") && (
+          <select value={year} onChange={(event: React.ChangeEvent<HTMLSelectElement>) => setYear(Number(event.target.value))} className="sp-filter-input">
+            {years.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Pagination({ page, totalPages, onChange }: { page: number; totalPages: number; onChange: (page: number) => void }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="mt-5 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
+      <button type="button" disabled={page <= 1} onClick={() => onChange(page - 1)} className="sp-soft-btn disabled:opacity-40">Previous</button>
+      <span className="text-xs font-black text-slate-500">Page {page} of {totalPages}</span>
+      <button type="button" disabled={page >= totalPages} onClick={() => onChange(page + 1)} className="sp-soft-btn disabled:opacity-40">Next</button>
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
+  return (
+    <div className="flex min-h-[190px] flex-col items-center justify-center rounded-[28px] border border-dashed border-slate-200 bg-slate-50/70 px-6 py-8 text-center">
+      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-slate-400 shadow-sm">{icon}</div>
+      <h3 className="mt-4 text-sm font-black text-slate-800">{title}</h3>
+      <p className="mt-2 max-w-md text-xs font-semibold leading-6 text-slate-500">{description}</p>
+    </div>
+  );
+}

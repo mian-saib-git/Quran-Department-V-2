@@ -1,0 +1,153 @@
+import React, { useEffect, useState } from "react";
+import { CalendarDays, CheckCircle2, Loader2, SearchCheck, X } from "lucide-react";
+
+import {
+  getQuranSalaryAudit,
+  type QuranSalaryAuditResponse,
+} from "../services/djangoApiService";
+
+const STATUS_STYLE: Record<string, string> = {
+  present: "bg-emerald-100 text-emerald-700",
+  absent: "bg-rose-100 text-rose-700",
+  leave: "bg-amber-100 text-amber-700",
+  not_marked: "bg-slate-100 text-slate-400",
+};
+
+function formatDate(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
+}
+
+export default function QuranSalaryProofModal({
+  teacherId,
+  metric,
+  month,
+  year,
+  onClose,
+}: {
+  teacherId: number;
+  metric: string;
+  month: number;
+  year: number;
+  onClose: () => void;
+}) {
+  const [data, setData] = useState<QuranSalaryAuditResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    getQuranSalaryAudit({ teacher_id: teacherId, metric, month, year })
+      .then((response) => {
+        if (!cancelled) setData(response);
+      })
+      .catch((reason: any) => {
+        if (!cancelled) setError(reason?.message || "Could not load calculation proof.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [teacherId, metric, month, year]);
+
+  return (
+    <div className="fixed inset-0 z-[140] flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+      <div className="max-h-[94vh] w-full overflow-hidden rounded-t-[30px] border border-white/70 bg-slate-50 shadow-2xl sm:max-w-6xl sm:rounded-[32px]">
+        <header className="flex items-start justify-between gap-4 border-b border-slate-200 bg-white p-5 sm:p-6">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.15em] text-indigo-600">
+              <SearchCheck size={16} /> Calculation proof
+            </div>
+            <h3 className="mt-1 break-words text-xl font-black text-slate-950 sm:text-2xl">
+              {data?.label || "Loading proof..."}
+            </h3>
+            <p className="mt-1 text-sm font-semibold text-slate-500">
+              {data ? `${data.teacher.name} · ${data.month}/${data.year} · ${data.count} record${data.count === 1 ? "" : "s"}` : "Student-level source records and attendance logs."}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 hover:bg-slate-50">
+            <X size={20} />
+          </button>
+        </header>
+
+        <div className="max-h-[calc(94vh-116px)] overflow-y-auto p-4 sm:p-6">
+          {loading && (
+            <div className="flex min-h-[260px] items-center justify-center rounded-[26px] border border-slate-200 bg-white text-sm font-bold text-slate-500">
+              <Loader2 className="mr-2 animate-spin" size={18} /> Loading verified source records...
+            </div>
+          )}
+          {error && <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">{error}</div>}
+          {!loading && !error && data && data.rows.length === 0 && (
+            <div className="rounded-[26px] border border-slate-200 bg-white p-10 text-center text-sm font-bold text-slate-500">No source records were counted for this metric.</div>
+          )}
+
+          <div className="space-y-3">
+            {data?.rows.map((row) => {
+              const open = expanded === row.student_id;
+              return (
+                <article key={row.student_id} className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
+                  <button
+                    type="button"
+                    onClick={() => setExpanded(open ? null : row.student_id)}
+                    className="grid w-full grid-cols-1 gap-3 p-4 text-left sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] sm:items-center"
+                  >
+                    <div className="min-w-0">
+                      <div className="break-words font-black text-slate-950">{row.student_name}</div>
+                      <div className="mt-1 break-all text-xs font-bold text-slate-500">@{row.username} · Joined {row.enrollment_date}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-[11px] font-black">
+                      <span className="rounded-full bg-indigo-50 px-3 py-1.5 text-indigo-700">{row.student_type_label}</span>
+                      <span className="rounded-full bg-slate-100 px-3 py-1.5 text-slate-700">{row.class_status_label}</span>
+                      <span className="rounded-full bg-cyan-50 px-3 py-1.5 text-cyan-700">{row.active_sessions}/{row.full_month_sessions} sessions</span>
+                    </div>
+                    <span className="text-xs font-black text-indigo-600">{open ? "Hide logs" : "View logs"}</span>
+                  </button>
+
+                  {open && (
+                    <div className="border-t border-slate-200 bg-slate-50/70 p-4">
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        <div className="rounded-2xl bg-white p-3 text-xs font-bold text-slate-600"><b className="block text-base text-emerald-600">{row.attendance_summary.present}</b>Present</div>
+                        <div className="rounded-2xl bg-white p-3 text-xs font-bold text-slate-600"><b className="block text-base text-rose-600">{row.attendance_summary.absent}</b>Absent</div>
+                        <div className="rounded-2xl bg-white p-3 text-xs font-bold text-slate-600"><b className="block text-base text-amber-600">{row.attendance_summary.leave}</b>Leave</div>
+                        <div className="rounded-2xl bg-white p-3 text-xs font-bold text-slate-600"><b className="block text-base text-indigo-600">{row.attendance_summary.marked}</b>Marked days</div>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-slate-600">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1.5"><CalendarDays size={14} /> {row.class_days.join(", ") || "No schedule days"}</span>
+                        <span className="rounded-full bg-white px-3 py-1.5">{row.time_slots.join(", ") || "No time recorded"}</span>
+                        <span className="rounded-full bg-white px-3 py-1.5">Assigned {row.assignment_start} to {row.assignment_end}</span>
+                      </div>
+
+                      <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-3">
+                        <div className="flex min-w-max gap-2">
+                          {row.attendance.map((day) => (
+                            <div key={day.date} className="w-[72px] shrink-0 text-center">
+                              <div className={`rounded-xl px-1 py-2 text-[10px] font-black uppercase ${STATUS_STYLE[day.status] || STATUS_STYLE.not_marked}`}>
+                                {day.status === "not_marked" ? "—" : day.status.slice(0, 3)}
+                              </div>
+                              <div className="mt-1 text-[10px] font-bold text-slate-500">{formatDate(day.date)}</div>
+                              <div className="mt-1 flex items-center justify-center gap-1 text-[9px] font-bold text-slate-400">
+                                {day.scheduled ? "Class" : ""}{day.lesson_logged ? <CheckCircle2 size={10} className="text-emerald-500" /> : null}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

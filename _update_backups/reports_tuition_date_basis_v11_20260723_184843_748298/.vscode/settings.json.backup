@@ -1,0 +1,40 @@
+{
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingImports": "error",
+    "reportMissingModuleSource": "warning"
+  },
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/venv/Scripts/python.exe",
+  "python.terminal.activateEnvironment": true,
+  "python.analysis.autoSearchPaths": true,
+  "python.analysis.indexing": true,
+  "python.analysis.useLibraryCodeForTypes": true,
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/backend"
+  ],
+  "python.analysis.diagnosticMode": "workspace",
+  "python.analysis.typeCheckingMode": "off",
+  "python.analysis.exclude": [
+    "**/venv/**",
+    "**/__pycache__/**",
+    "**/migrations/**",
+    "**/*.bak",
+    "**/_update_backups/**",
+    "**/node_modules/**",
+    "**/dist/**"
+  ],
+  "files.exclude": {
+    "**/_update_backups": true,
+    "**/backend/venv": true,
+    "**/dist": true
+  },
+  "search.exclude": {
+    "**/_update_backups": true,
+    "**/backend/venv": true,
+    "**/dist": true
+  },
+  "files.watcherExclude": {
+    "**/_update_backups/**": true,
+    "**/backend/venv/**": true,
+    "**/dist/**": true
+  }
+}

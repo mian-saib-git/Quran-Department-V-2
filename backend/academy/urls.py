@@ -1,5 +1,15 @@
 from django.urls import path
 
+from .attendance_v2_api import QuranTeacherSessionAttendanceView
+
+from .quran_management_api import (
+    DroppedLeaveStudentsView,
+    QuranSalaryAuditView,
+    QuranSalaryDashboardView,
+    QuranSalarySettingsView,
+    QuranSalaryPdfDownloadView,
+)
+
 from .views import (
     AcademyHealthView,
     DashboardView,
@@ -19,6 +29,12 @@ LessonAccessRequestDetailView,
 )
 
 urlpatterns = [
+    path("dropped-leave/", DroppedLeaveStudentsView.as_view(), name="academy_dropped_leave"),
+    path("teacher-salary/", QuranSalaryDashboardView.as_view(), name="academy_teacher_salary"),
+    path("teacher-salary/settings/", QuranSalarySettingsView.as_view(), name="academy_teacher_salary_settings"),
+    path("teacher-salary/audit/", QuranSalaryAuditView.as_view(), name="academy_teacher_salary_audit"),
+    path("teacher-salary/pdf-download/", QuranSalaryPdfDownloadView.as_view(), name="academy_teacher_salary_pdf_download"),
+
     path("health/", AcademyHealthView.as_view(), name="academy_health"),
     path("dashboard/", DashboardView.as_view(), name="academy_dashboard"),
 
@@ -47,6 +63,11 @@ path("lesson-access-requests/<int:pk>/", LessonAccessRequestDetailView.as_view()
     path("assistant/", GeminiAssistantView.as_view(), name="academy_assistant"),
 
     # Attendance API
+    path(
+        "teacher-session-attendance-v2/",
+        QuranTeacherSessionAttendanceView.as_view(),
+        name="academy_teacher_session_attendance_v2",
+    ),
     path("attendance/", AttendanceListCreateView.as_view(), name="academy_attendance"),
     path("attendance/<int:pk>/", AttendanceDeleteView.as_view(), name="academy_attendance_delete"),
 

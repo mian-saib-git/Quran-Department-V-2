@@ -1,0 +1,1363 @@
+// IVS_TUITION_STUDENT_PORTAL_V32
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  AlertCircle,
+  ArrowRight,
+  BookOpen,
+  CalendarDays,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  ClipboardList,
+  Clock3,
+  GraduationCap,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  Moon,
+  RefreshCw,
+  Search,
+  Sparkles,
+  Sun,
+  UserRound,
+  Video,
+  X,
+  XCircle,
+} from "lucide-react";
+
+import { logoutFromDjango } from "../../services/djangoApiService";
+import {
+  getTuitionStudentPortal,
+  type TuitionStudentPortalAttendance,
+  type TuitionStudentPortalResponse,
+  type TuitionStudentPortalSchedule,
+  type TuitionStudentPortalSubject,
+} from "../../services/tuitionApiService";
+import { useAcademyWS } from "../../hooks/useAcademyWS";
+import { PageSkeleton } from "../ui/SkeletonLoaders";
+
+type Props = {
+  departmentId?: number;
+  themeMode: "light" | "dark";
+  onToggleTheme: () => void;
+  onLogout: () => void;
+};
+
+type PortalTab = "overview" | "attendance" | "assignments" | "schedule";
+type AttendancePeriod = "all" | "daily" | "weekly" | "monthly" | "yearly";
+type AttendanceStatus = "all" | "present" | "absent" | "leave";
+
+type ScheduleTiming = {
+  start: Date;
+  end: Date;
+  durationMinutes: number;
+  minutesUntil: number;
+  isLive: boolean;
+  isUpcoming: boolean;
+};
+
+const ATTENDANCE_PAGE_SIZE = 8;
+const SCHEDULE_PAGE_SIZE = 8;
+const WEEKDAYS = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+] as const;
+
+function localDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatDate(value: string) {
+  if (!value) return "Not available";
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function formatClockTime(date: Date) {
+  return date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function formatScheduleDate(date: Date) {
+  return date.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function initials(value: string) {
+  return (
+    String(value || "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((part) => part[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "ST"
+  );
+}
+
+function titleCase(value: string) {
+  const clean = String(value || "").trim();
+  return clean ? clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase() : "";
+}
+
+function weekRange(value: string) {
+  const selected = new Date(`${value}T00:00:00`);
+  const start = new Date(selected);
+  start.setDate(selected.getDate() - selected.getDay());
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return { start: localDateKey(start), end: localDateKey(end) };
+}
+
+function paginate<T>(rows: T[], page: number, pageSize: number) {
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(Math.max(page, 1), totalPages);
+  const startIndex = (safePage - 1) * pageSize;
+  return {
+    rows: rows.slice(startIndex, startIndex + pageSize),
+    page: safePage,
+    totalPages,
+  };
+}
+
+function scheduleDuration(schedule: TuitionStudentPortalSchedule) {
+  const [startHour, startMinute] = schedule.start_time.split(":").map(Number);
+  const [endHour, endMinute] = schedule.end_time.split(":").map(Number);
+  const startTotal = (Number.isFinite(startHour) ? startHour : 0) * 60 + (Number.isFinite(startMinute) ? startMinute : 0);
+  let endTotal = (Number.isFinite(endHour) ? endHour : 0) * 60 + (Number.isFinite(endMinute) ? endMinute : 0);
+  if (endTotal <= startTotal) endTotal += 24 * 60;
+  return Math.max(1, endTotal - startTotal);
+}
+
+function zonedParts(date: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    weekday: "long",
+  });
+  const parts = formatter.formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || "";
+  return {
+    year: Number(get("year")),
+    month: Number(get("month")),
+    day: Number(get("day")),
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+    second: Number(get("second")),
+    weekday: get("weekday").toLowerCase(),
+  };
+}
+
+function timeZoneOffsetMs(date: Date, timeZone: string) {
+  const parts = zonedParts(date, timeZone);
+  return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second) - date.getTime();
+}
+
+function zonedLocalToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+) {
+  const desired = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  let candidate = desired;
+  for (let index = 0; index < 3; index += 1) {
+    candidate = desired - timeZoneOffsetMs(new Date(candidate), timeZone);
+  }
+  return new Date(candidate);
+}
+
+function addUtcDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function getScheduleTiming(schedule: TuitionStudentPortalSchedule, now = new Date()): ScheduleTiming {
+  const timeZone = schedule.timezone_name || "Asia/Karachi";
+  const nowParts = zonedParts(now, timeZone);
+  const currentDayIndex = WEEKDAYS.indexOf(nowParts.weekday as (typeof WEEKDAYS)[number]);
+  const targetDayIndex = WEEKDAYS.indexOf(String(schedule.weekday || "").toLowerCase() as (typeof WEEKDAYS)[number]);
+  const safeCurrentIndex = currentDayIndex >= 0 ? currentDayIndex : 0;
+  const safeTargetIndex = targetDayIndex >= 0 ? targetDayIndex : safeCurrentIndex;
+  const daysUntil = (safeTargetIndex - safeCurrentIndex + 7) % 7;
+  const localDate = addUtcDays(new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day)), daysUntil);
+  const [hourRaw, minuteRaw] = schedule.start_time.split(":").map(Number);
+  let start = zonedLocalToUtc(
+    localDate.getUTCFullYear(),
+    localDate.getUTCMonth() + 1,
+    localDate.getUTCDate(),
+    Number.isFinite(hourRaw) ? hourRaw : 0,
+    Number.isFinite(minuteRaw) ? minuteRaw : 0,
+    timeZone,
+  );
+  const durationMinutes = scheduleDuration(schedule);
+  let end = new Date(start.getTime() + durationMinutes * 60_000);
+
+  const previousStart = new Date(start.getTime() - 7 * 24 * 60 * 60_000);
+  const previousEnd = new Date(previousStart.getTime() + durationMinutes * 60_000);
+  if (now >= previousStart && now < previousEnd) {
+    start = previousStart;
+    end = previousEnd;
+  } else if (now >= end) {
+    start = new Date(start.getTime() + 7 * 24 * 60 * 60_000);
+    end = new Date(start.getTime() + durationMinutes * 60_000);
+  }
+
+  const minutesUntil = Math.ceil((start.getTime() - now.getTime()) / 60_000);
+  return {
+    start,
+    end,
+    durationMinutes,
+    minutesUntil,
+    isLive: now >= start && now < end,
+    isUpcoming: now < start,
+  };
+}
+
+function countdownLabel(minutes: number) {
+  if (minutes <= 1) return "Starting now";
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 24 * 60) {
+    const hours = Math.floor(minutes / 60);
+    const remainder = minutes % 60;
+    return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+  }
+  const days = Math.floor(minutes / (24 * 60));
+  return `${days} day${days === 1 ? "" : "s"}`;
+}
+
+function attendanceTone(status: string) {
+  if (status === "present") {
+    return {
+      dot: "bg-emerald-500",
+      badge: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/50 dark:text-emerald-300",
+      icon: CheckCircle2,
+    };
+  }
+  if (status === "absent") {
+    return {
+      dot: "bg-rose-500",
+      badge: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/70 dark:bg-rose-950/50 dark:text-rose-300",
+      icon: XCircle,
+    };
+  }
+  return {
+    dot: "bg-amber-500",
+    badge: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/50 dark:text-amber-300",
+    icon: Clock3,
+  };
+}
+
+const CARD = "rounded-[28px] border border-slate-200/80 bg-white/90 shadow-[0_18px_60px_rgba(15,23,42,0.07)] backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/88 dark:shadow-[0_18px_60px_rgba(0,0,0,0.28)]";
+const FIELD = "h-11 rounded-2xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:focus:border-indigo-500 dark:focus:ring-indigo-950";
+
+export default function TuitionStudentPortal({
+  departmentId,
+  themeMode,
+  onToggleTheme,
+  onLogout,
+}: Props) {
+  const [data, setData] = useState<TuitionStudentPortalResponse | null>(null);
+  const [activeTab, setActiveTab] = useState<PortalTab>("overview");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const [now, setNow] = useState(new Date());
+
+  const [attendancePeriod, setAttendancePeriod] = useState<AttendancePeriod>("all");
+  const [attendanceDate, setAttendanceDate] = useState(localDateKey());
+  const [attendanceMonth, setAttendanceMonth] = useState(new Date().getMonth() + 1);
+  const [attendanceYear, setAttendanceYear] = useState(new Date().getFullYear());
+  const [attendanceStatus, setAttendanceStatus] = useState<AttendanceStatus>("all");
+  const [attendanceSubject, setAttendanceSubject] = useState("all");
+  const [attendanceSearch, setAttendanceSearch] = useState("");
+  const [attendancePage, setAttendancePage] = useState(1);
+
+  const [scheduleDay, setScheduleDay] = useState("all");
+  const [scheduleSubject, setScheduleSubject] = useState("all");
+  const [scheduleSearch, setScheduleSearch] = useState("");
+  const [schedulePage, setSchedulePage] = useState(1);
+
+  const loadPortal = async (silent = false) => {
+    try {
+      if (!silent) setRefreshing(true);
+      const response = await getTuitionStudentPortal(departmentId);
+      setData(response);
+      setError("");
+    } catch (caught: unknown) {
+      const message = caught instanceof Error ? caught.message : "Could not load the Tuition Student Portal.";
+      setError(message);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadPortal();
+    const refreshTimer = window.setInterval(() => void loadPortal(true), 30_000);
+    const clockTimer = window.setInterval(() => setNow(new Date()), 1_000);
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.clearInterval(clockTimer);
+    };
+  }, [departmentId]);
+
+  useAcademyWS((event) => {
+    const type = String(event?.type || "");
+    if (
+      type === "connected" ||
+      type === "academy.update" ||
+      type === "academy_update" ||
+      type === "tuition_attendance_updated" ||
+      type === "tuition_schedule_updated" ||
+      type === "tuition_enrollment_updated" ||
+      type === "attendance_marked"
+    ) {
+      void loadPortal(true);
+    }
+  });
+
+  useEffect(() => {
+    setAttendancePage(1);
+  }, [attendancePeriod, attendanceDate, attendanceMonth, attendanceYear, attendanceStatus, attendanceSubject, attendanceSearch]);
+
+  useEffect(() => {
+    setSchedulePage(1);
+  }, [scheduleDay, scheduleSubject, scheduleSearch]);
+
+  const studentName = data?.student.name || data?.user.full_name || data?.user.username || "Student";
+  const subjects = data?.subjects || [];
+  const schedules = data?.schedules || [];
+  const attendance = data?.attendance || [];
+
+  const subjectNames = useMemo(
+    () => Array.from(new Set(subjects.map((item) => item.subject_name).filter(Boolean))).sort(),
+    [subjects],
+  );
+
+  const scheduleItems = useMemo(
+    () =>
+      schedules
+        .map((schedule) => ({ schedule, timing: getScheduleTiming(schedule, now) }))
+        .sort((a, b) => a.timing.start.getTime() - b.timing.start.getTime()),
+    [schedules, now],
+  );
+
+  const liveClasses = scheduleItems.filter((item) => item.timing.isLive);
+  const nextClass = scheduleItems.find((item) => item.timing.isUpcoming) || null;
+  const todayKey = localDateKey(now);
+  const todaySchedule = scheduleItems.filter((item) => localDateKey(item.timing.start) === todayKey);
+
+  const sortedAttendance = useMemo(
+    () =>
+      [...attendance].sort((a, b) => {
+        const dateDiff = b.date.localeCompare(a.date);
+        if (dateDiff !== 0) return dateDiff;
+        return String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || ""));
+      }),
+    [attendance],
+  );
+
+  const filteredAttendance = useMemo(() => {
+    const query = attendanceSearch.trim().toLowerCase();
+    let rows = sortedAttendance;
+    if (attendancePeriod === "daily") {
+      rows = rows.filter((item) => item.date === attendanceDate);
+    } else if (attendancePeriod === "weekly") {
+      const range = weekRange(attendanceDate);
+      rows = rows.filter((item) => item.date >= range.start && item.date <= range.end);
+    } else if (attendancePeriod === "monthly") {
+      const prefix = `${attendanceYear}-${String(attendanceMonth).padStart(2, "0")}`;
+      rows = rows.filter((item) => item.date.startsWith(prefix));
+    } else if (attendancePeriod === "yearly") {
+      rows = rows.filter((item) => item.date.startsWith(`${attendanceYear}-`));
+    }
+    if (attendanceStatus !== "all") rows = rows.filter((item) => item.status === attendanceStatus);
+    if (attendanceSubject !== "all") rows = rows.filter((item) => item.subject_name === attendanceSubject);
+    if (query) {
+      rows = rows.filter((item) =>
+        [item.subject_name, item.class_name, item.teacher_name, item.date, item.weekday]
+          .join(" ")
+          .toLowerCase()
+          .includes(query),
+      );
+    }
+    return rows;
+  }, [sortedAttendance, attendancePeriod, attendanceDate, attendanceMonth, attendanceYear, attendanceStatus, attendanceSubject, attendanceSearch]);
+
+  const filteredSchedule = useMemo(() => {
+    const query = scheduleSearch.trim().toLowerCase();
+    return scheduleItems.filter(({ schedule }) => {
+      if (scheduleDay !== "all" && String(schedule.weekday).toLowerCase() !== scheduleDay) return false;
+      if (scheduleSubject !== "all" && schedule.subject_name !== scheduleSubject) return false;
+      if (query) {
+        return [schedule.subject_name, schedule.class_name, schedule.teacher_name, schedule.weekday]
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      }
+      return true;
+    });
+  }, [scheduleItems, scheduleDay, scheduleSubject, scheduleSearch]);
+
+  const attendanceTotals = useMemo(() => {
+    const present = filteredAttendance.filter((item) => item.status === "present").length;
+    const absent = filteredAttendance.filter((item) => item.status === "absent").length;
+    const leave = filteredAttendance.filter((item) => item.status === "leave").length;
+    const marked = present + absent + leave;
+    const attendanceRate = present + absent > 0 ? Math.round((present / (present + absent)) * 100) : 0;
+    return { present, absent, leave, marked, attendanceRate };
+  }, [filteredAttendance]);
+
+  const allAttendanceRate = useMemo(() => {
+    const present = attendance.filter((item) => item.status === "present").length;
+    const absent = attendance.filter((item) => item.status === "absent").length;
+    return present + absent > 0 ? Math.round((present / (present + absent)) * 100) : 0;
+  }, [attendance]);
+
+  const attendancePagination = paginate(filteredAttendance, attendancePage, ATTENDANCE_PAGE_SIZE);
+  const schedulePagination = paginate(filteredSchedule, schedulePage, SCHEDULE_PAGE_SIZE);
+
+  const navItems: Array<{ tab: PortalTab; label: string; icon: React.ComponentType<{ size?: number }> }> = [
+    { tab: "overview", label: "Overview", icon: LayoutDashboard },
+    { tab: "attendance", label: "Attendance", icon: CheckCircle2 },
+    { tab: "assignments", label: "Assignments", icon: ClipboardList },
+    { tab: "schedule", label: "Schedule", icon: CalendarDays },
+  ];
+
+  const handleLogout = () => {
+    logoutFromDjango();
+    onLogout();
+  };
+
+  if (loading) {
+    return (
+      <div className={`${themeMode === "dark" ? "dark" : ""} min-h-screen bg-slate-50 p-4 dark:bg-slate-950 sm:p-6`}>
+        <div className="mx-auto max-w-[1500px]">
+          <PageSkeleton variant="portal" cards={6} label="Loading Tuition Student Portal" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`${themeMode === "dark" ? "dark" : ""} h-screen overflow-hidden bg-slate-50 font-sans text-slate-900 dark:bg-slate-950 dark:text-slate-100`}>
+      <div className="pointer-events-none fixed inset-0 overflow-hidden">
+        <div className="absolute -left-24 top-0 h-96 w-96 rounded-full bg-indigo-300/20 blur-3xl dark:bg-indigo-900/20" />
+        <div className="absolute -right-20 top-1/3 h-96 w-96 rounded-full bg-cyan-300/20 blur-3xl dark:bg-cyan-900/15" />
+      </div>
+
+      {mobileMenuOpen && (
+        <button
+          type="button"
+          aria-label="Close menu"
+          onClick={() => setMobileMenuOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-sm lg:hidden"
+        />
+      )}
+
+      <div className="relative flex h-full">
+        <aside
+          className={`fixed inset-y-0 left-0 z-50 flex w-[286px] flex-col border-r border-white/70 bg-white/92 p-4 shadow-2xl backdrop-blur-2xl transition-transform duration-300 dark:border-slate-800 dark:bg-slate-950/94 lg:static lg:translate-x-0 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full"}`}
+        >
+          <div className="flex items-center gap-3 rounded-[24px] border border-slate-200/80 bg-white p-3 shadow-[0_14px_40px_rgba(15,23,42,0.08)] dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] border border-indigo-100 bg-gradient-to-br from-indigo-50 to-cyan-50 dark:border-indigo-900 dark:from-indigo-950 dark:to-cyan-950">
+              <img src="/tuition-logo.png" alt="Tuition Department" className="h-11 w-11 object-contain" />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-black text-slate-950 dark:text-white">Iqra Virtual School</p>
+              <p className="mt-0.5 text-[11px] font-extrabold uppercase tracking-[0.16em] text-indigo-600 dark:text-indigo-300">Tuition Student</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(false)}
+              className="ml-auto flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 lg:hidden"
+              aria-label="Close navigation"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <nav className="mt-6 flex-1 space-y-2">
+            {navItems.map(({ tab, label, icon: Icon }) => {
+              const active = activeTab === tab;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => {
+                    setActiveTab(tab);
+                    setMobileMenuOpen(false);
+                  }}
+                  className={`group flex w-full items-center gap-3 rounded-[20px] border px-3 py-3 text-left transition ${
+                    active
+                      ? "border-indigo-200 bg-gradient-to-r from-indigo-50 to-cyan-50 text-indigo-700 shadow-[0_12px_28px_rgba(79,70,229,0.12)] dark:border-indigo-800 dark:from-indigo-950/80 dark:to-cyan-950/60 dark:text-indigo-200"
+                      : "border-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-950 dark:text-slate-400 dark:hover:border-slate-800 dark:hover:bg-slate-900 dark:hover:text-white"
+                  }`}
+                >
+                  <span className={`flex h-11 w-11 items-center justify-center rounded-2xl border ${active ? "border-indigo-200 bg-white text-indigo-600 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-300" : "border-slate-200 bg-white text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400"}`}>
+                    <Icon size={19} />
+                  </span>
+                  <span className="text-sm font-black">{label}</span>
+                  {active && <ChevronRight size={17} className="ml-auto" />}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
+            <div className="flex items-center gap-3 rounded-[20px] border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 to-cyan-500 text-sm font-black text-white shadow-lg shadow-indigo-500/20">
+                {initials(studentName)}
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-black text-slate-900 dark:text-white">{studentName}</p>
+                <p className="truncate text-[11px] font-bold text-slate-500 dark:text-slate-400">Student account</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="flex w-full items-center justify-center gap-2 rounded-[18px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-black text-rose-700 transition hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300"
+            >
+              <LogOut size={17} /> Logout
+            </button>
+          </div>
+        </aside>
+
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <header className="z-20 flex min-h-[78px] items-center justify-between border-b border-slate-200/80 bg-white/82 px-4 backdrop-blur-2xl dark:border-slate-800 dark:bg-slate-950/82 sm:px-6 lg:px-8">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(true)}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 lg:hidden"
+                aria-label="Open navigation"
+              >
+                <Menu size={20} />
+              </button>
+              <div className="min-w-0">
+                <h1 className="truncate text-lg font-black tracking-tight text-slate-950 dark:text-white sm:text-xl">
+                  {activeTab === "overview" && "Student Dashboard"}
+                  {activeTab === "attendance" && "My Attendance"}
+                  {activeTab === "assignments" && "My Assignments"}
+                  {activeTab === "schedule" && "My Schedule"}
+                </h1>
+                <p className="mt-0.5 hidden truncate text-xs font-bold text-slate-500 dark:text-slate-400 sm:block">
+                  {now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 sm:gap-3">
+              <div className="hidden rounded-[18px] border border-slate-200 bg-white px-4 py-2 text-right shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:block">
+                <p className="text-sm font-black text-slate-950 dark:text-white">{formatClockTime(now)}</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.15em] text-slate-400">Local time</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadPortal()}
+                disabled={refreshing}
+                className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:-translate-y-0.5 hover:text-indigo-600 disabled:opacity-60 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300"
+                aria-label="Refresh portal"
+                title="Refresh portal"
+              >
+                <RefreshCw size={18} className={refreshing ? "animate-spin" : ""} />
+              </button>
+              <button
+                type="button"
+                onClick={onToggleTheme}
+                className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:-translate-y-0.5 hover:text-indigo-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300"
+                aria-label="Toggle theme"
+                title="Toggle theme"
+              >
+                {themeMode === "light" ? <Moon size={18} /> : <Sun size={18} />}
+              </button>
+            </div>
+          </header>
+
+          {error && (
+            <div className="mx-4 mt-4 flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-200 sm:mx-6 lg:mx-8">
+              <AlertCircle size={18} className="shrink-0" />
+              <span className="min-w-0 flex-1">{error}</span>
+              <button type="button" onClick={() => void loadPortal()} className="font-black underline underline-offset-4">Retry</button>
+            </div>
+          )}
+
+          <div className="student-portal-scroll flex-1 overflow-y-auto px-4 py-5 pb-24 sm:px-6 sm:py-6 lg:px-8 lg:pb-8">
+            <div className="mx-auto max-w-[1560px]">
+              {activeTab === "overview" && (
+                <OverviewTab
+                  data={data}
+                  studentName={studentName}
+                  subjects={subjects}
+                  schedules={scheduleItems}
+                  liveClasses={liveClasses}
+                  nextClass={nextClass}
+                  todaySchedule={todaySchedule}
+                  attendanceRate={allAttendanceRate}
+                  onOpenAttendance={() => setActiveTab("attendance")}
+                  onOpenSchedule={() => setActiveTab("schedule")}
+                />
+              )}
+
+              {activeTab === "attendance" && (
+                <AttendanceTab
+                  rows={attendancePagination.rows}
+                  totalRows={filteredAttendance.length}
+                  totals={attendanceTotals}
+                  subjectNames={subjectNames}
+                  period={attendancePeriod}
+                  setPeriod={setAttendancePeriod}
+                  date={attendanceDate}
+                  setDate={setAttendanceDate}
+                  month={attendanceMonth}
+                  setMonth={setAttendanceMonth}
+                  year={attendanceYear}
+                  setYear={setAttendanceYear}
+                  status={attendanceStatus}
+                  setStatus={setAttendanceStatus}
+                  subject={attendanceSubject}
+                  setSubject={setAttendanceSubject}
+                  search={attendanceSearch}
+                  setSearch={setAttendanceSearch}
+                  page={attendancePagination.page}
+                  totalPages={attendancePagination.totalPages}
+                  setPage={setAttendancePage}
+                />
+              )}
+
+              {activeTab === "assignments" && <AssignmentsTab subjects={subjects} />}
+
+              {activeTab === "schedule" && (
+                <ScheduleTab
+                  rows={schedulePagination.rows}
+                  totalRows={filteredSchedule.length}
+                  liveClasses={liveClasses}
+                  nextClass={nextClass}
+                  subjectNames={subjectNames}
+                  day={scheduleDay}
+                  setDay={setScheduleDay}
+                  subject={scheduleSubject}
+                  setSubject={setScheduleSubject}
+                  search={scheduleSearch}
+                  setSearch={setScheduleSearch}
+                  page={schedulePagination.page}
+                  totalPages={schedulePagination.totalPages}
+                  setPage={setSchedulePage}
+                />
+              )}
+            </div>
+          </div>
+
+          <nav className="fixed inset-x-3 bottom-3 z-30 grid grid-cols-4 gap-1 rounded-[24px] border border-white/80 bg-white/92 p-2 shadow-[0_18px_60px_rgba(15,23,42,0.22)] backdrop-blur-2xl dark:border-slate-800 dark:bg-slate-900/94 lg:hidden">
+            {navItems.map(({ tab, label, icon: Icon }) => {
+              const active = activeTab === tab;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  className={`flex min-w-0 flex-col items-center gap-1 rounded-[17px] px-1 py-2 text-[10px] font-black transition ${active ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20" : "text-slate-500 dark:text-slate-400"}`}
+                >
+                  <Icon size={18} />
+                  <span className="truncate">{label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </main>
+      </div>
+
+      <style>{`
+        .student-portal-scroll { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+        .student-portal-scroll::-webkit-scrollbar { width: 10px; }
+        .student-portal-scroll::-webkit-scrollbar-track { background: transparent; }
+        .student-portal-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; border: 3px solid transparent; background-clip: padding-box; }
+        .dark .student-portal-scroll { scrollbar-color: #334155 transparent; }
+        .dark .student-portal-scroll::-webkit-scrollbar-thumb { background: #334155; border: 3px solid transparent; background-clip: padding-box; }
+      `}</style>
+    </div>
+  );
+}
+
+function OverviewTab({
+  data,
+  studentName,
+  subjects,
+  schedules,
+  liveClasses,
+  nextClass,
+  todaySchedule,
+  attendanceRate,
+  onOpenAttendance,
+  onOpenSchedule,
+}: {
+  data: TuitionStudentPortalResponse | null;
+  studentName: string;
+  subjects: TuitionStudentPortalSubject[];
+  schedules: Array<{ schedule: TuitionStudentPortalSchedule; timing: ScheduleTiming }>;
+  liveClasses: Array<{ schedule: TuitionStudentPortalSchedule; timing: ScheduleTiming }>;
+  nextClass: { schedule: TuitionStudentPortalSchedule; timing: ScheduleTiming } | null;
+  todaySchedule: Array<{ schedule: TuitionStudentPortalSchedule; timing: ScheduleTiming }>;
+  attendanceRate: number;
+  onOpenAttendance: () => void;
+  onOpenSchedule: () => void;
+}) {
+  const teacherNames = data?.student.teacher_names || [];
+  return (
+    <div className="space-y-6">
+      <section className="relative overflow-hidden rounded-[34px] bg-gradient-to-br from-indigo-700 via-indigo-600 to-cyan-500 p-6 text-white shadow-[0_28px_80px_rgba(79,70,229,0.28)] sm:p-8">
+        <div className="pointer-events-none absolute -right-16 -top-20 h-64 w-64 rounded-full border-[42px] border-white/10" />
+        <div className="pointer-events-none absolute -bottom-24 left-1/3 h-64 w-64 rounded-full bg-white/10 blur-2xl" />
+        <div className="relative grid gap-7 xl:grid-cols-[1.3fr_0.7fr] xl:items-center">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/10 px-3 py-1.5 text-xs font-black backdrop-blur">
+              <Sparkles size={14} /> Tuition learning space
+            </div>
+            <div className="mt-5 flex items-center gap-4">
+              <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-[26px] border border-white/25 bg-white/15 text-2xl font-black shadow-xl backdrop-blur sm:h-24 sm:w-24 sm:text-3xl">
+                {initials(studentName)}
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-extrabold text-indigo-100">Welcome back</p>
+                <h2 className="mt-1 truncate text-2xl font-black tracking-tight sm:text-4xl">{studentName}</h2>
+                <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-indigo-100">
+                  Track your attendance, subjects, weekly classes, and upcoming academic work from one focused dashboard.
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex flex-wrap gap-2">
+              {(teacherNames.length ? teacherNames : ["Teacher not assigned"]).map((teacher) => (
+                <span key={teacher} className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-2 text-xs font-black backdrop-blur">
+                  <UserRound size={14} /> {teacher}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-[28px] border border-white/20 bg-white/12 p-5 backdrop-blur-xl">
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-indigo-100">
+              {liveClasses.length ? "Live class" : "Next class"}
+            </p>
+            {liveClasses[0] ? (
+              <ClassSpotlight item={liveClasses[0]} live />
+            ) : nextClass ? (
+              <ClassSpotlight item={nextClass} />
+            ) : (
+              <div className="mt-4 rounded-2xl border border-white/20 bg-white/10 p-5 text-sm font-bold text-indigo-100">
+                No upcoming class is currently scheduled.
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="Active subjects" value={subjects.length} detail="Your current enrollments" icon={BookOpen} tone="indigo" />
+        <MetricCard label="Weekly classes" value={schedules.length} detail="Scheduled class sessions" icon={CalendarDays} tone="cyan" />
+        <MetricCard label="Attendance rate" value={`${attendanceRate}%`} detail="Present versus absent" icon={CheckCircle2} tone="emerald" />
+        <MetricCard label="Today classes" value={todaySchedule.length} detail="Based on local time" icon={Clock3} tone="amber" />
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className={`${CARD} p-5 sm:p-6`}>
+          <SectionHeading
+            icon={GraduationCap}
+            title="My Subjects"
+            description="Every active subject connected to your Tuition enrollment."
+            badge={`${subjects.length} total`}
+          />
+          {subjects.length ? (
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
+              {subjects.map((subject, index) => <SubjectCard key={subject.enrollment_id} subject={subject} index={index} />)}
+            </div>
+          ) : (
+            <EmptyState icon={BookOpen} title="No subject assigned" description="Your Tuition coordinator has not connected an active subject to this account yet." />
+          )}
+        </div>
+
+        <div className={`${CARD} p-5 sm:p-6`}>
+          <SectionHeading
+            icon={CheckCircle2}
+            title="Attendance Health"
+            description="A clear snapshot of your class attendance."
+          />
+          <div className="mt-6 flex flex-col items-center gap-6 sm:flex-row xl:flex-col 2xl:flex-row">
+            <div
+              className="relative flex h-40 w-40 shrink-0 items-center justify-center rounded-full"
+              style={{ background: `conic-gradient(#10b981 ${attendanceRate * 3.6}deg, rgba(148,163,184,0.18) 0deg)` }}
+            >
+              <div className="flex h-28 w-28 flex-col items-center justify-center rounded-full bg-white shadow-inner dark:bg-slate-900">
+                <span className="text-3xl font-black text-slate-950 dark:text-white">{attendanceRate}%</span>
+                <span className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">attendance</span>
+              </div>
+            </div>
+            <div className="grid w-full grid-cols-3 gap-2">
+              <TinyStatus label="Present" value={data?.counts.present || 0} tone="emerald" />
+              <TinyStatus label="Absent" value={data?.counts.absent || 0} tone="rose" />
+              <TinyStatus label="Leave" value={data?.counts.leave || 0} tone="amber" />
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenAttendance}
+            className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:-translate-y-0.5 hover:bg-indigo-700 dark:bg-white dark:text-slate-950 dark:hover:bg-indigo-100"
+          >
+            Open full attendance <ArrowRight size={17} />
+          </button>
+        </div>
+      </section>
+
+      <section className={`${CARD} p-5 sm:p-6`}>
+        <SectionHeading
+          icon={CalendarDays}
+          title="Today’s Learning Plan"
+          description="Your classes are shown in your current device timezone."
+          action={
+            <button type="button" onClick={onOpenSchedule} className="text-xs font-black text-indigo-600 hover:text-indigo-700 dark:text-indigo-300">
+              Full schedule
+            </button>
+          }
+        />
+        {todaySchedule.length ? (
+          <div className="mt-5 grid gap-3 lg:grid-cols-2">
+            {todaySchedule.map((item) => <ScheduleCard key={item.schedule.id} item={item} />)}
+          </div>
+        ) : (
+          <EmptyState icon={CalendarDays} title="No classes today" description="Your next scheduled class will appear in the dashboard spotlight above." />
+        )}
+      </section>
+    </div>
+  );
+}
+
+function AttendanceTab({
+  rows,
+  totalRows,
+  totals,
+  subjectNames,
+  period,
+  setPeriod,
+  date,
+  setDate,
+  month,
+  setMonth,
+  year,
+  setYear,
+  status,
+  setStatus,
+  subject,
+  setSubject,
+  search,
+  setSearch,
+  page,
+  totalPages,
+  setPage,
+}: {
+  rows: TuitionStudentPortalAttendance[];
+  totalRows: number;
+  totals: { present: number; absent: number; leave: number; marked: number; attendanceRate: number };
+  subjectNames: string[];
+  period: AttendancePeriod;
+  setPeriod: (value: AttendancePeriod) => void;
+  date: string;
+  setDate: (value: string) => void;
+  month: number;
+  setMonth: (value: number) => void;
+  year: number;
+  setYear: (value: number) => void;
+  status: AttendanceStatus;
+  setStatus: (value: AttendanceStatus) => void;
+  subject: string;
+  setSubject: (value: string) => void;
+  search: string;
+  setSearch: (value: string) => void;
+  page: number;
+  totalPages: number;
+  setPage: (value: number) => void;
+}) {
+  const years = Array.from({ length: 9 }, (_, index) => new Date().getFullYear() - 4 + index);
+  return (
+    <div className="space-y-6">
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="Attendance rate" value={`${totals.attendanceRate}%`} detail="Present versus absent" icon={CheckCircle2} tone="indigo" />
+        <MetricCard label="Present" value={totals.present} detail="Classes attended" icon={CheckCircle2} tone="emerald" />
+        <MetricCard label="Absent" value={totals.absent} detail="Classes missed" icon={XCircle} tone="rose" />
+        <MetricCard label="Leave" value={totals.leave} detail="Approved leave" icon={Clock3} tone="amber" />
+      </section>
+
+      <section className={`${CARD} p-5 sm:p-6`}>
+        <SectionHeading icon={Search} title="Attendance Filters" description="Find the exact subject, date, or class attendance record you need." badge={`${totalRows} records`} />
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <label className="relative xl:col-span-2">
+            <Search size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search subject, teacher, class..." className={`${FIELD} w-full pl-10`} />
+          </label>
+          <select value={subject} onChange={(event) => setSubject(event.target.value)} className={FIELD}>
+            <option value="all">All subjects</option>
+            {subjectNames.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+          <select value={status} onChange={(event) => setStatus(event.target.value as AttendanceStatus)} className={FIELD}>
+            <option value="all">All statuses</option>
+            <option value="present">Present</option>
+            <option value="absent">Absent</option>
+            <option value="leave">Leave</option>
+          </select>
+        </div>
+
+        <div className="mt-4 flex flex-col gap-3 rounded-[22px] border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/70 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-wrap gap-2">
+            {(["all", "daily", "weekly", "monthly", "yearly"] as AttendancePeriod[]).map((item) => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => setPeriod(item)}
+                className={`rounded-xl px-3 py-2 text-xs font-black transition ${period === item ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20" : "bg-white text-slate-600 hover:text-indigo-600 dark:bg-slate-900 dark:text-slate-300"}`}
+              >
+                {titleCase(item)}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(period === "daily" || period === "weekly") && <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className={FIELD} />}
+            {period === "monthly" && (
+              <select value={month} onChange={(event) => setMonth(Number(event.target.value))} className={FIELD}>
+                {Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={index + 1}>{new Date(2000, index, 1).toLocaleDateString("en-US", { month: "long" })}</option>)}
+              </select>
+            )}
+            {(period === "monthly" || period === "yearly") && (
+              <select value={year} onChange={(event) => setYear(Number(event.target.value))} className={FIELD}>
+                {years.map((item) => <option key={item} value={item}>{item}</option>)}
+              </select>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className={`${CARD} overflow-hidden`}>
+        <div className="hidden overflow-x-auto lg:block">
+          <table className="w-full min-w-[900px] border-collapse text-left">
+            <thead className="bg-slate-50 text-[11px] font-black uppercase tracking-[0.13em] text-slate-500 dark:bg-slate-950 dark:text-slate-400">
+              <tr>
+                <th className="px-6 py-4">Date</th>
+                <th className="px-6 py-4">Subject and class</th>
+                <th className="px-6 py-4">Teacher</th>
+                <th className="px-6 py-4">Class time</th>
+                <th className="px-6 py-4">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {rows.map((item) => <AttendanceTableRow key={item.id} item={item} />)}
+            </tbody>
+          </table>
+        </div>
+        <div className="space-y-3 p-4 lg:hidden">
+          {rows.map((item) => <AttendanceMobileCard key={item.id} item={item} />)}
+        </div>
+        {!rows.length && <EmptyState icon={ClipboardList} title="No attendance records found" description="Try changing the date, subject, status, or search filters." />}
+        <Pagination page={page} totalPages={totalPages} setPage={setPage} />
+      </section>
+    </div>
+  );
+}
+
+function AssignmentsTab({ subjects }: { subjects: TuitionStudentPortalSubject[] }) {
+  return (
+    <div className="space-y-6">
+      <section className="relative overflow-hidden rounded-[34px] bg-gradient-to-br from-violet-700 via-indigo-700 to-cyan-600 p-7 text-white shadow-[0_28px_80px_rgba(79,70,229,0.25)] sm:p-10">
+        <div className="pointer-events-none absolute -right-12 -top-16 h-64 w-64 rounded-full border-[40px] border-white/10" />
+        <div className="relative max-w-3xl">
+          <div className="flex h-16 w-16 items-center justify-center rounded-[22px] border border-white/25 bg-white/15 shadow-xl backdrop-blur">
+            <ClipboardList size={30} />
+          </div>
+          <p className="mt-6 text-xs font-black uppercase tracking-[0.2em] text-indigo-100">Prepared for the next phase</p>
+          <h2 className="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Assignments workspace</h2>
+          <p className="mt-4 max-w-2xl text-sm font-semibold leading-7 text-indigo-100 sm:text-base">
+            This tab is ready for upcoming assignment creation, due dates, submissions, teacher feedback, marks, and attached learning files. No placeholder data is shown, so every future assignment will be real and connected to your subjects.
+          </p>
+        </div>
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-3">
+        <FeaturePreview icon={BookOpen} title="Subject assignments" description={`Assignments will be connected to your ${subjects.length || 0} active subject${subjects.length === 1 ? "" : "s"}.`} />
+        <FeaturePreview icon={Clock3} title="Deadlines" description="Due dates, countdowns, and overdue status will be clear at a glance." />
+        <FeaturePreview icon={CheckCircle2} title="Submission tracking" description="Submission status, marks, and teacher feedback will stay organized." />
+      </section>
+
+      <section className={`${CARD} p-6 sm:p-8`}>
+        <EmptyState icon={ClipboardList} title="No assignments yet" description="The Assignments data workflow will be added in a later update without changing your attendance, subjects, or schedule." />
+      </section>
+    </div>
+  );
+}
+
+function ScheduleTab({
+  rows,
+  totalRows,
+  liveClasses,
+  nextClass,
+  subjectNames,
+  day,
+  setDay,
+  subject,
+  setSubject,
+  search,
+  setSearch,
+  page,
+  totalPages,
+  setPage,
+}: {
+  rows: Array<{ schedule: TuitionStudentPortalSchedule; timing: ScheduleTiming }>;
+  totalRows: number;
+  liveClasses: Array<{ schedule: TuitionStudentPortalSchedule; timing: ScheduleTiming }>;
+  nextClass: { schedule: TuitionStudentPortalSchedule; timing: ScheduleTiming } | null;
+  subjectNames: string[];
+  day: string;
+  setDay: (value: string) => void;
+  subject: string;
+  setSubject: (value: string) => void;
+  search: string;
+  setSearch: (value: string) => void;
+  page: number;
+  totalPages: number;
+  setPage: (value: number) => void;
+}) {
+  return (
+    <div className="space-y-6">
+      <section className="grid gap-4 xl:grid-cols-2">
+        <SpotlightCard title="Live Now" item={liveClasses[0] || null} live empty="No class is live right now." />
+        <SpotlightCard title="Up Next" item={nextClass} empty="No upcoming class is scheduled." />
+      </section>
+
+      <section className={`${CARD} p-5 sm:p-6`}>
+        <SectionHeading icon={Search} title="Schedule Filters" description="Search and organize your weekly Tuition timetable." badge={`${totalRows} classes`} />
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <label className="relative xl:col-span-2">
+            <Search size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search subject, teacher, class..." className={`${FIELD} w-full pl-10`} />
+          </label>
+          <select value={subject} onChange={(event) => setSubject(event.target.value)} className={FIELD}>
+            <option value="all">All subjects</option>
+            {subjectNames.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+          <select value={day} onChange={(event) => setDay(event.target.value)} className={FIELD}>
+            <option value="all">All days</option>
+            {WEEKDAYS.map((weekday) => <option key={weekday} value={weekday}>{titleCase(weekday)}</option>)}
+          </select>
+        </div>
+      </section>
+
+      <section className={`${CARD} p-5 sm:p-6`}>
+        <SectionHeading icon={CalendarDays} title="Weekly Timetable" description="Class times are converted to your current device timezone." />
+        {rows.length ? (
+          <div className="mt-5 grid gap-3 lg:grid-cols-2">
+            {rows.map((item) => <ScheduleCard key={item.schedule.id} item={item} />)}
+          </div>
+        ) : (
+          <EmptyState icon={CalendarDays} title="No scheduled classes found" description="Try changing the day, subject, or search filters." />
+        )}
+        <Pagination page={page} totalPages={totalPages} setPage={setPage} />
+      </section>
+    </div>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  detail,
+  icon: Icon,
+  tone,
+}: {
+  label: string;
+  value: React.ReactNode;
+  detail: string;
+  icon: React.ComponentType<{ size?: number }>;
+  tone: "indigo" | "cyan" | "emerald" | "rose" | "amber";
+}) {
+  const palettes = {
+    indigo: "from-indigo-500 to-violet-600 shadow-indigo-500/20",
+    cyan: "from-cyan-500 to-sky-600 shadow-cyan-500/20",
+    emerald: "from-emerald-500 to-teal-600 shadow-emerald-500/20",
+    rose: "from-rose-500 to-pink-600 shadow-rose-500/20",
+    amber: "from-amber-400 to-orange-500 shadow-amber-500/20",
+  } as const;
+  return (
+    <article className={`${CARD} flex items-center gap-4 p-4 sm:p-5`}>
+      <div className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-gradient-to-br text-white shadow-xl ${palettes[tone]}`}>
+        <Icon size={24} />
+      </div>
+      <div className="min-w-0">
+        <p className="text-[11px] font-black uppercase tracking-[0.15em] text-slate-400">{label}</p>
+        <p className="mt-1 text-2xl font-black text-slate-950 dark:text-white">{value}</p>
+        <p className="mt-0.5 truncate text-xs font-bold text-slate-500 dark:text-slate-400">{detail}</p>
+      </div>
+    </article>
+  );
+}
+
+function SectionHeading({
+  icon: Icon,
+  title,
+  description,
+  badge,
+  action,
+}: {
+  icon: React.ComponentType<{ size?: number }>;
+  title: string;
+  description: string;
+  badge?: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-start gap-3">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-300">
+          <Icon size={20} />
+        </div>
+        <div>
+          <h2 className="text-base font-black text-slate-950 dark:text-white sm:text-lg">{title}</h2>
+          <p className="mt-1 text-xs font-semibold leading-5 text-slate-500 dark:text-slate-400">{description}</p>
+        </div>
+      </div>
+      {badge && <span className="self-start rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-black text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 sm:self-auto">{badge}</span>}
+      {action}
+    </div>
+  );
+}
+
+function SubjectCard({ subject, index }: { subject: TuitionStudentPortalSubject; index: number }) {
+  const accents = [
+    "from-indigo-500 to-violet-600",
+    "from-cyan-500 to-sky-600",
+    "from-emerald-500 to-teal-600",
+    "from-amber-400 to-orange-500",
+    "from-rose-500 to-pink-600",
+  ];
+  const accent = accents[index % accents.length];
+  return (
+    <article className="group rounded-[24px] border border-slate-200 bg-slate-50/70 p-4 transition hover:-translate-y-0.5 hover:bg-white hover:shadow-lg dark:border-slate-800 dark:bg-slate-950/60 dark:hover:bg-slate-900">
+      <div className="flex items-start gap-3">
+        <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px] bg-gradient-to-br text-white shadow-lg ${accent}`}>
+          <BookOpen size={21} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <h3 className="truncate text-sm font-black text-slate-950 dark:text-white">{subject.subject_name || "Subject"}</h3>
+              <p className="mt-1 truncate text-xs font-bold text-slate-500 dark:text-slate-400">{subject.class_name || "Tuition class"}</p>
+            </div>
+            <span className="shrink-0 rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-indigo-600 dark:border-indigo-900 dark:bg-indigo-950 dark:text-indigo-300">
+              {subject.program_type === "crash" ? "Crash" : "Regular"}
+            </span>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-bold text-slate-600 dark:text-slate-300">
+            <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 dark:border-slate-700 dark:bg-slate-900">{subject.teacher_name || "Teacher pending"}</span>
+            <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 dark:border-slate-700 dark:bg-slate-900">{subject.schedule_count} class slot{subject.schedule_count === 1 ? "" : "s"}</span>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function ClassSpotlight({ item, live = false }: { item: { schedule: TuitionStudentPortalSchedule; timing: ScheduleTiming }; live?: boolean }) {
+  return (
+    <div className="mt-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="truncate text-xl font-black">{item.schedule.subject_name || "Tuition class"}</h3>
+          <p className="mt-1 truncate text-sm font-semibold text-indigo-100">{item.schedule.class_name} · {item.schedule.teacher_name}</p>
+        </div>
+        <span className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-black ${live ? "bg-emerald-400 text-emerald-950" : "bg-white/15 text-white"}`}>
+          {live ? "LIVE" : countdownLabel(item.timing.minutesUntil)}
+        </span>
+      </div>
+      <div className="mt-5 flex flex-wrap items-center gap-3 text-xs font-black text-indigo-50">
+        <span className="rounded-full border border-white/20 bg-white/10 px-3 py-2">{formatScheduleDate(item.timing.start)}</span>
+        <span className="rounded-full border border-white/20 bg-white/10 px-3 py-2">{formatClockTime(item.timing.start)}–{formatClockTime(item.timing.end)}</span>
+        <span className="rounded-full border border-white/20 bg-white/10 px-3 py-2">{item.timing.durationMinutes} min</span>
+      </div>
+      {item.schedule.meeting_link && (
+        <a href={item.schedule.meeting_link} target="_blank" rel="noreferrer" className="mt-5 inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-black text-indigo-700 shadow-lg transition hover:-translate-y-0.5">
+          <Video size={18} /> Join class
+        </a>
+      )}
+    </div>
+  );
+}
+
+function ScheduleCard({ item }: { item: { schedule: TuitionStudentPortalSchedule; timing: ScheduleTiming } }) {
+  const { schedule, timing } = item;
+  return (
+    <article className={`rounded-[24px] border p-4 transition hover:-translate-y-0.5 hover:shadow-lg ${timing.isLive ? "border-emerald-300 bg-emerald-50/80 dark:border-emerald-800 dark:bg-emerald-950/30" : "border-slate-200 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-950/60"}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="truncate text-sm font-black text-slate-950 dark:text-white">{schedule.subject_name || "Tuition class"}</h3>
+            {timing.isLive && <span className="rounded-full bg-emerald-500 px-2.5 py-1 text-[10px] font-black text-white">LIVE</span>}
+          </div>
+          <p className="mt-1 truncate text-xs font-bold text-slate-500 dark:text-slate-400">{schedule.class_name} · {schedule.teacher_name}</p>
+        </div>
+        <span className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+          {formatClockTime(timing.start)}
+        </span>
+      </div>
+      <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-600 dark:text-slate-300">
+        <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 dark:border-slate-700 dark:bg-slate-900">{formatScheduleDate(timing.start)}</span>
+        <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 dark:border-slate-700 dark:bg-slate-900">{formatClockTime(timing.start)}–{formatClockTime(timing.end)}</span>
+        <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 dark:border-slate-700 dark:bg-slate-900">{timing.durationMinutes} min</span>
+        {schedule.meeting_link && (
+          <a href={schedule.meeting_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 font-black text-indigo-600 dark:border-indigo-900 dark:bg-indigo-950 dark:text-indigo-300">
+            <Video size={13} /> Join
+          </a>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function SpotlightCard({
+  title,
+  item,
+  live = false,
+  empty,
+}: {
+  title: string;
+  item: { schedule: TuitionStudentPortalSchedule; timing: ScheduleTiming } | null;
+  live?: boolean;
+  empty: string;
+}) {
+  return (
+    <section className={`${CARD} overflow-hidden p-5 sm:p-6`}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className={`h-2.5 w-2.5 rounded-full ${live ? "bg-emerald-500" : "bg-indigo-500"}`} />
+          <h2 className="text-base font-black text-slate-950 dark:text-white">{title}</h2>
+        </div>
+        {item && <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">{live ? "Active" : countdownLabel(item.timing.minutesUntil)}</span>}
+      </div>
+      {item ? <div className="mt-4"><ScheduleCard item={item} /></div> : <p className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm font-bold text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">{empty}</p>}
+    </section>
+  );
+}
+
+function TinyStatus({ label, value, tone }: { label: string; value: number; tone: "emerald" | "rose" | "amber" }) {
+  const palettes = {
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300",
+    rose: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300",
+    amber: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300",
+  };
+  return (
+    <div className={`rounded-2xl border p-3 text-center ${palettes[tone]}`}>
+      <p className="text-xl font-black">{value}</p>
+      <p className="mt-1 text-[10px] font-black uppercase tracking-wider">{label}</p>
+    </div>
+  );
+}
+
+function AttendanceTableRow({ item }: { item: TuitionStudentPortalAttendance }) {
+  const tone = attendanceTone(item.status);
+  const StatusIcon = tone.icon;
+  return (
+    <tr className="transition hover:bg-slate-50/80 dark:hover:bg-slate-950/60">
+      <td className="px-6 py-4 text-sm font-black text-slate-800 dark:text-slate-100">{formatDate(item.date)}</td>
+      <td className="px-6 py-4">
+        <p className="text-sm font-black text-slate-950 dark:text-white">{item.subject_name || "Tuition class"}</p>
+        <p className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">{item.class_name || "Class"}</p>
+      </td>
+      <td className="px-6 py-4 text-sm font-bold text-slate-600 dark:text-slate-300">{item.teacher_name || "Not available"}</td>
+      <td className="px-6 py-4 text-sm font-bold text-slate-600 dark:text-slate-300">{item.start_time ? `${item.start_time.slice(0, 5)}–${item.end_time.slice(0, 5)}` : "Not available"}</td>
+      <td className="px-6 py-4">
+        <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-black ${tone.badge}`}>
+          <StatusIcon size={14} /> {titleCase(item.status)}
+        </span>
+      </td>
+    </tr>
+  );
+}
+
+function AttendanceMobileCard({ item }: { item: TuitionStudentPortalAttendance }) {
+  const tone = attendanceTone(item.status);
+  const StatusIcon = tone.icon;
+  return (
+    <article className="rounded-[22px] border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="truncate text-sm font-black text-slate-950 dark:text-white">{item.subject_name || "Tuition class"}</h3>
+          <p className="mt-1 truncate text-xs font-bold text-slate-500 dark:text-slate-400">{item.class_name || "Class"} · {item.teacher_name || "Teacher"}</p>
+        </div>
+        <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-black ${tone.badge}`}>
+          <StatusIcon size={12} /> {titleCase(item.status)}
+        </span>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2 text-[11px] font-bold text-slate-600 dark:text-slate-300">
+        <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 dark:border-slate-700 dark:bg-slate-900">{formatDate(item.date)}</span>
+        {item.start_time && <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 dark:border-slate-700 dark:bg-slate-900">{item.start_time.slice(0, 5)}–{item.end_time.slice(0, 5)}</span>}
+      </div>
+    </article>
+  );
+}
+
+function FeaturePreview({ icon: Icon, title, description }: { icon: React.ComponentType<{ size?: number }>; title: string; description: string }) {
+  return (
+    <article className={`${CARD} p-5`}>
+      <div className="flex h-12 w-12 items-center justify-center rounded-[18px] bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-300"><Icon size={22} /></div>
+      <h3 className="mt-4 text-sm font-black text-slate-950 dark:text-white">{title}</h3>
+      <p className="mt-2 text-xs font-semibold leading-6 text-slate-500 dark:text-slate-400">{description}</p>
+    </article>
+  );
+}
+
+function Pagination({ page, totalPages, setPage }: { page: number; totalPages: number; setPage: (value: number) => void }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-between border-t border-slate-100 px-4 py-4 dark:border-slate-800 sm:px-6">
+      <button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)} className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"><ChevronLeft size={15} /> Previous</button>
+      <span className="text-xs font-black text-slate-500 dark:text-slate-400">Page {page} of {totalPages}</span>
+      <button type="button" disabled={page >= totalPages} onClick={() => setPage(page + 1)} className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">Next <ChevronRight size={15} /></button>
+    </div>
+  );
+}
+
+function EmptyState({ icon: Icon, title, description }: { icon: React.ComponentType<{ size?: number }>; title: string; description: string }) {
+  return (
+    <div className="m-4 flex min-h-[190px] flex-col items-center justify-center rounded-[26px] border border-dashed border-slate-200 bg-slate-50/70 px-6 py-8 text-center dark:border-slate-800 dark:bg-slate-950/50">
+      <div className="flex h-14 w-14 items-center justify-center rounded-[20px] border border-slate-200 bg-white text-slate-400 shadow-sm dark:border-slate-700 dark:bg-slate-900"><Icon size={25} /></div>
+      <h3 className="mt-4 text-sm font-black text-slate-900 dark:text-white">{title}</h3>
+      <p className="mt-2 max-w-lg text-xs font-semibold leading-6 text-slate-500 dark:text-slate-400">{description}</p>
+    </div>
+  );
+}

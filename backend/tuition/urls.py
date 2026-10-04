@@ -1,0 +1,158 @@
+from django.urls import path
+
+from .management_api import (
+    TuitionDashboardView,
+    TuitionManagerDetailView,
+    TuitionManagerListCreateView,
+)
+
+from .views import (
+    TuitionAccountDetailView,
+    TuitionAccountListCreateView,
+    TuitionEnrollmentDetailView,
+    TuitionEnrollmentListCreateView,
+    TuitionFoundationView,
+    TuitionLinkableAccountListView,
+    TuitionOptionsView,
+    TuitionTeacherCapabilityListView,
+    TuitionStudentBundleView,
+    TuitionStudentPortalView,
+    TuitionTeacherPortalView,
+    TuitionSchedulingMatrixView,
+    TuitionScheduleListCreateView,
+    TuitionScheduleDetailView,
+    TuitionAvailabilityListCreateView,
+    TuitionAvailabilityDetailView,
+)
+
+
+urlpatterns = [
+    path(
+        "teacher-portal/",
+        TuitionTeacherPortalView.as_view(),
+        name="tuition_teacher_portal",
+    ),
+
+    path(
+        "student-portal/",
+        TuitionStudentPortalView.as_view(),
+        name="tuition_student_portal",
+    ),
+
+    path(
+        "dashboard/",
+        TuitionDashboardView.as_view(),
+        name="tuition_dashboard",
+    ),
+
+    path(
+        "managers/",
+        TuitionManagerListCreateView.as_view(),
+        name="tuition_managers",
+    ),
+
+    path(
+        "managers/<int:user_id>/",
+        TuitionManagerDetailView.as_view(),
+        name="tuition_manager_detail",
+    ),
+
+
+    path(
+        "foundation/",
+        TuitionFoundationView.as_view(),
+        name="tuition_foundation",
+    ),
+
+    path(
+        "accounts/",
+        TuitionAccountListCreateView.as_view(),
+        name="tuition_accounts",
+    ),
+
+    path(
+        "accounts/linkable/",
+        TuitionLinkableAccountListView.as_view(),
+        name="tuition_linkable_accounts",
+    ),
+
+    path(
+        "accounts/<int:user_id>/",
+        TuitionAccountDetailView.as_view(),
+        name="tuition_account_detail",
+    ),
+
+    path(
+        "options/",
+        TuitionOptionsView.as_view(),
+        name="tuition_options",
+    ),
+
+    path(
+        "teacher-capabilities/",
+        TuitionTeacherCapabilityListView.as_view(),
+        name="tuition_teacher_capabilities",
+    ),
+
+    path(
+        "enrollments/",
+        TuitionEnrollmentListCreateView.as_view(),
+        name="tuition_enrollments",
+    ),
+
+    path(
+        "enrollments/<int:enrollment_id>/",
+        TuitionEnrollmentDetailView.as_view(),
+        name="tuition_enrollment_detail",
+    ),
+
+    path(
+        "scheduling/",
+        TuitionSchedulingMatrixView.as_view(),
+        name="tuition_scheduling_matrix",
+    ),
+
+    path(
+        "schedules/",
+        TuitionScheduleListCreateView.as_view(),
+        name="tuition_schedules",
+    ),
+
+    path(
+        "schedules/<int:schedule_id>/",
+        TuitionScheduleDetailView.as_view(),
+        name="tuition_schedule_detail",
+    ),
+
+    path(
+        "availability/",
+        TuitionAvailabilityListCreateView.as_view(),
+        name="tuition_availability",
+    ),
+
+    path(
+        "availability/<int:availability_id>/",
+        TuitionAvailabilityDetailView.as_view(),
+        name="tuition_availability_detail",
+    ),
+
+    path(
+        "students/bundle/",
+        TuitionStudentBundleView.as_view(),
+        name="tuition_student_bundle_create",
+    ),
+
+    path(
+        "students/<int:user_id>/bundle/",
+        TuitionStudentBundleView.as_view(),
+        name="tuition_student_bundle_detail",
+    ),
+
+]
+
+from .views import TuitionAttendanceListCreateView, TuitionAttendanceDetailView
+
+urlpatterns += [
+    path("attendance/", TuitionAttendanceListCreateView.as_view(), name="tuition_attendance"),
+    path("attendance/<int:attendance_id>/", TuitionAttendanceDetailView.as_view(), name="tuition_attendance_detail"),
+]

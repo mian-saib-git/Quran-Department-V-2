@@ -1,0 +1,502 @@
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Award,
+  Calculator,
+  CheckCircle2,
+  ChevronRight,
+  CircleDollarSign,
+  Clock3,
+  Coins,
+  Edit3,
+  FileCheck2,
+  GraduationCap,
+  Languages,
+  MoonStar,
+  Plus,
+  RefreshCw,
+  Save,
+  Settings2,
+  Sparkles,
+  Trash2,
+  UserRoundCheck,
+  UsersRound,
+  X,
+} from "lucide-react";
+
+import {
+  getQuranSalaryDashboard,
+  updateQuranSalarySettings,
+  updateQuranSalarySlip,
+  type AchievementPayout,
+  type QuranSalaryConfiguration,
+  type QuranSalaryDashboardResponse,
+  type QuranTeacherSalarySlip,
+  type SalaryTier,
+} from "../services/djangoApiService";
+import { useAcademyWS } from "../hooks/useAcademyWS";
+
+const PKR = new Intl.NumberFormat("en-PK", {
+  style: "currency",
+  currency: "PKR",
+  maximumFractionDigits: 0,
+});
+
+function money(value: unknown) {
+  const number = Number(value || 0);
+  return PKR.format(Number.isFinite(number) ? number : 0);
+}
+
+function monthLabel(month: number, year: number) {
+  return new Date(year, month - 1, 1).toLocaleDateString(undefined, {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function NumberInput({ value, onChange, className = "" }: { value: any; onChange: (value: string) => void; className?: string }) {
+  return (
+    <input
+      type="number"
+      min="0"
+      step="1"
+      value={value ?? ""}
+      onChange={(event) => onChange(event.target.value)}
+      className={`w-full rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-black text-slate-900 outline-none focus:border-indigo-300 ${className}`}
+    />
+  );
+}
+
+function Metric({ label, value, accent = "indigo" }: { label: string; value: React.ReactNode; accent?: "indigo" | "emerald" | "amber" | "rose" | "cyan" }) {
+  const styles = {
+    indigo: "border-indigo-100 bg-indigo-50 text-indigo-700",
+    emerald: "border-emerald-100 bg-emerald-50 text-emerald-700",
+    amber: "border-amber-100 bg-amber-50 text-amber-700",
+    rose: "border-rose-100 bg-rose-50 text-rose-700",
+    cyan: "border-cyan-100 bg-cyan-50 text-cyan-700",
+  };
+  return (
+    <div className={`rounded-2xl border px-3 py-3 ${styles[accent]}`}>
+      <div className="text-[10px] font-black uppercase tracking-[0.12em] opacity-70">{label}</div>
+      <div className="mt-1 text-lg font-black">{value}</div>
+    </div>
+  );
+}
+
+function SalarySlipModal({
+  slip,
+  onClose,
+  onSaved,
+}: {
+  slip: QuranTeacherSalarySlip;
+  onClose: () => void;
+  onSaved: (slip: QuranTeacherSalarySlip) => void;
+}) {
+  const snapshot = slip.calculated_snapshot || {};
+  const calculated = snapshot.calculated_components || {};
+  const [behaviorGood, setBehaviorGood] = useState(Boolean(slip.behavior_good));
+  const [status, setStatus] = useState<"draft" | "processed">(slip.status);
+  const [note, setNote] = useState(slip.admin_note || "");
+  const [overrides, setOverrides] = useState<Record<string, string>>(() => {
+    const rows: Record<string, string> = {};
+    Object.entries(slip.override_values || {}).forEach(([key, value]) => {
+      rows[key] = String(value ?? "");
+    });
+    return rows;
+  });
+  const [bonuses, setBonuses] = useState<Array<{ reason: string; amount: string }>>(
+    (slip.other_bonuses || []).map((item) => ({ reason: item.reason, amount: String(item.amount) }))
+  );
+  const [halfRows, setHalfRows] = useState<Array<{ student_id: number; student_name: string; amount: string }>>(
+    (snapshot.half_class_rows || []).map((item: any) => ({
+      student_id: Number(item.student_id),
+      student_name: String(item.student_name || "Student"),
+      amount: String(
+        (slip.half_class_overrides || []).find((row) => Number(row.student_id) === Number(item.student_id))?.amount ?? item.amount ?? 0
+      ),
+    }))
+  );
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const componentRows = [
+    ["base_salary", "Base class salary", calculated.base_salary],
+    ["english_bonus", "English language bonus", calculated.english_bonus],
+    ["lesson_bonus", "Lesson filled bonus", calculated.lesson_bonus],
+    ["night_bonus", "Night shift bonus", calculated.night_bonus],
+    ["reference_bonus", "Reference bonus", calculated.reference_bonus],
+    ["achievement_bonus", "Achievement payout", calculated.achievement_bonus],
+    ["final_total", "Final salary override", snapshot.final_total],
+  ] as const;
+
+  const save = async () => {
+    setSaving(true);
+    setMessage("");
+    try {
+      const cleanedOverrides: Record<string, number> = {};
+      Object.entries(overrides).forEach(([key, value]) => {
+        if (String(value).trim() !== "") cleanedOverrides[key] = Number(value || 0);
+      });
+      const saved = await updateQuranSalarySlip(slip.id, {
+        behavior_good: behaviorGood,
+        status,
+        admin_note: note,
+        override_values: cleanedOverrides,
+        other_bonuses: bonuses
+          .filter((item) => item.reason.trim() && Number(item.amount || 0) !== 0)
+          .map((item) => ({ reason: item.reason.trim(), amount: Number(item.amount || 0) })),
+        half_class_overrides: halfRows.map((item) => ({
+          student_id: item.student_id,
+          amount: Number(item.amount || 0),
+        })),
+      });
+      onSaved(saved);
+      onClose();
+    } catch (error: any) {
+      setMessage(error?.message || "Could not save salary slip.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+      <div className="max-h-[94vh] w-full overflow-y-auto rounded-t-[30px] border border-white/70 bg-slate-50 shadow-2xl sm:max-w-5xl sm:rounded-[32px]">
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white/95 p-5 backdrop-blur-xl sm:p-6">
+          <div>
+            <div className="text-xs font-black uppercase tracking-[0.16em] text-indigo-600">Monthly salary slip</div>
+            <h3 className="mt-1 text-xl font-black text-slate-950 sm:text-2xl">{slip.teacher_name}</h3>
+            <p className="mt-1 text-sm font-semibold text-slate-500">{monthLabel(slip.month, slip.year)} · @{slip.teacher_username}</p>
+          </div>
+          <button type="button" onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 hover:bg-slate-50">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="space-y-5 p-4 sm:p-6">
+          {message && <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">{message}</div>}
+
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <Metric label="Active classes" value={snapshot.final_active_classes || 0} />
+            <Metric label="Achievement" value={`${snapshot.achievement_points || 0}/10`} accent="emerald" />
+            <Metric label="Calculated" value={money(slip.calculated_total)} accent="cyan" />
+            <Metric label="Final salary" value={money(slip.final_total)} accent="amber" />
+          </div>
+
+          <section className="rounded-[26px] border border-slate-200 bg-white p-4 sm:p-5">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600"><Edit3 size={19} /></div>
+              <div>
+                <h4 className="font-black text-slate-950">Calculated values and overrides</h4>
+                <p className="text-xs font-semibold text-slate-500">Leave an override blank to use the automatic calculation.</p>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+              {componentRows.map(([key, label, value]) => (
+                <label key={key} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex items-center justify-between gap-3 text-xs font-black text-slate-600">
+                    <span>{label}</span><span className="text-slate-950">Auto: {money(value)}</span>
+                  </div>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="Use automatic value"
+                    value={overrides[key] || ""}
+                    onChange={(event) => setOverrides((prev) => ({ ...prev, [key]: event.target.value }))}
+                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:border-indigo-300"
+                  />
+                </label>
+              ))}
+            </div>
+          </section>
+
+          {halfRows.length > 0 && (
+            <section className="rounded-[26px] border border-amber-200 bg-amber-50/60 p-4 sm:p-5">
+              <h4 className="font-black text-amber-950">Half-month classes</h4>
+              <p className="mt-1 text-xs font-semibold text-amber-700">Enter the manual salary amount for each half-month class.</p>
+              <div className="mt-4 space-y-2">
+                {halfRows.map((item, index) => (
+                  <div key={item.student_id} className="grid grid-cols-1 gap-2 rounded-2xl border border-amber-200 bg-white p-3 sm:grid-cols-[1fr_180px] sm:items-center">
+                    <div className="font-black text-slate-900">{item.student_name}</div>
+                    <NumberInput value={item.amount} onChange={(value) => setHalfRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, amount: value } : row))} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          <section className="rounded-[26px] border border-slate-200 bg-white p-4 sm:p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h4 className="font-black text-slate-950">Other bonuses</h4>
+                <p className="text-xs font-semibold text-slate-500">Every custom bonus requires a reason.</p>
+              </div>
+              <button type="button" onClick={() => setBonuses((rows) => [...rows, { reason: "", amount: "" }])} className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700">
+                <Plus size={14} /> Add bonus
+              </button>
+            </div>
+            <div className="mt-4 space-y-2">
+              {bonuses.length === 0 && <div className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No custom bonuses added.</div>}
+              {bonuses.map((item, index) => (
+                <div key={index} className="grid grid-cols-1 gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_170px_44px]">
+                  <input value={item.reason} onChange={(event) => setBonuses((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, reason: event.target.value } : row))} placeholder="Bonus reason" className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none focus:border-indigo-300" />
+                  <NumberInput value={item.amount} onChange={(value) => setBonuses((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, amount: value } : row))} />
+                  <button type="button" onClick={() => setBonuses((rows) => rows.filter((_, rowIndex) => rowIndex !== index))} className="flex h-10 w-10 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600"><Trash2 size={17} /></button>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <label className="flex items-center justify-between gap-4 rounded-[24px] border border-emerald-200 bg-emerald-50 p-4">
+              <div>
+                <div className="font-black text-emerald-950">Good behavior rating</div>
+                <div className="mt-1 text-xs font-semibold text-emerald-700">Adds one achievement point when enabled.</div>
+              </div>
+              <input type="checkbox" checked={behaviorGood} onChange={(event) => setBehaviorGood(event.target.checked)} className="h-5 w-5 accent-emerald-600" />
+            </label>
+            <label className="rounded-[24px] border border-slate-200 bg-white p-4">
+              <div className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Salary status</div>
+              <select value={status} onChange={(event) => setStatus(event.target.value as any)} className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-black outline-none">
+                <option value="draft">Draft</option>
+                <option value="processed">Processed</option>
+              </select>
+            </label>
+          </section>
+
+          <label className="block rounded-[24px] border border-slate-200 bg-white p-4">
+            <div className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Admin note</div>
+            <textarea value={note} onChange={(event) => setNote(event.target.value)} className="mt-2 min-h-[90px] w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold outline-none focus:border-indigo-300" placeholder="Optional salary processing note..." />
+          </label>
+        </div>
+
+        <div className="sticky bottom-0 flex flex-col-reverse gap-2 border-t border-slate-200 bg-white/95 p-4 backdrop-blur-xl sm:flex-row sm:justify-end sm:p-5">
+          <button type="button" onClick={onClose} className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-600">Cancel</button>
+          <button type="button" onClick={() => void save()} disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-6 py-3 text-sm font-black text-white shadow-lg shadow-indigo-200 disabled:opacity-60">
+            {saving ? <RefreshCw className="animate-spin" size={17} /> : <Save size={17} />} Save Salary Slip
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TierEditor({ title, rows, onChange }: { title: string; rows: SalaryTier[]; onChange: (rows: SalaryTier[]) => void }) {
+  return (
+    <div className="rounded-[24px] border border-slate-200 bg-white p-4">
+      <h4 className="font-black text-slate-950">{title}</h4>
+      <div className="mt-3 space-y-2">
+        {rows.map((row, index) => (
+          <div key={index} className="grid grid-cols-3 gap-2">
+            <label><span className="text-[10px] font-black uppercase text-slate-400">Min</span><NumberInput value={row.min} onChange={(value) => onChange(rows.map((item, i) => i === index ? { ...item, min: Number(value || 0) } : item))} /></label>
+            <label><span className="text-[10px] font-black uppercase text-slate-400">Max</span><input type="number" min="0" value={row.max ?? ""} placeholder="No max" onChange={(event) => onChange(rows.map((item, i) => i === index ? { ...item, max: event.target.value === "" ? null : Number(event.target.value) } : item))} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-black outline-none focus:border-indigo-300" /></label>
+            <label><span className="text-[10px] font-black uppercase text-slate-400">PKR/Class</span><NumberInput value={row.rate} onChange={(value) => onChange(rows.map((item, i) => i === index ? { ...item, rate: Number(value || 0) } : item))} /></label>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanel({ config, onSaved }: { config: QuranSalaryConfiguration; onSaved: (config: QuranSalaryConfiguration) => void }) {
+  const [draft, setDraft] = useState<QuranSalaryConfiguration>(() => JSON.parse(JSON.stringify(config)));
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => setDraft(JSON.parse(JSON.stringify(config))), [config]);
+
+  const save = async () => {
+    setSaving(true); setMessage("");
+    try {
+      const saved = await updateQuranSalarySettings(draft);
+      onSaved(saved);
+      setMessage("Salary settings saved successfully.");
+    } catch (error: any) {
+      setMessage(error?.message || "Could not save salary settings.");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      {message && <div className={`rounded-2xl border p-4 text-sm font-bold ${message.includes("successfully") ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-rose-200 bg-rose-50 text-rose-700"}`}>{message}</div>}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <TierEditor title="Tier A · More than 3 days/week" rows={draft.standard_tiers} onChange={(rows) => setDraft({ ...draft, standard_tiers: rows })} />
+        <TierEditor title="Tier B · Exactly 3 days/week" rows={draft.three_day_tiers} onChange={(rows) => setDraft({ ...draft, three_day_tiers: rows })} />
+      </div>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <section className="rounded-[24px] border border-slate-200 bg-white p-4">
+          <h4 className="font-black text-slate-950">Flat bonus rates</h4>
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {[
+              ["english", "English / class"],
+              ["lesson_filled", "Lesson filled / student"],
+              ["night", "Night shift / class"],
+              ["reference", "Reference / student"],
+            ].map(([key, label]) => (
+              <label key={key}><span className="text-xs font-black text-slate-600">{label}</span><NumberInput value={(draft.bonus_rates as any)[key]} onChange={(value) => setDraft({ ...draft, bonus_rates: { ...draft.bonus_rates, [key]: Number(value || 0) } })} /></label>
+            ))}
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <label><span className="text-xs font-black text-slate-600">Night starts</span><input type="time" value={draft.night_start} onChange={(event) => setDraft({ ...draft, night_start: event.target.value })} className="mt-1 w-full rounded-2xl border border-slate-200 px-3 py-2.5 font-black" /></label>
+            <label><span className="text-xs font-black text-slate-600">Night ends</span><input type="time" value={draft.night_end} onChange={(event) => setDraft({ ...draft, night_end: event.target.value })} className="mt-1 w-full rounded-2xl border border-slate-200 px-3 py-2.5 font-black" /></label>
+          </div>
+        </section>
+        <section className="rounded-[24px] border border-slate-200 bg-white p-4">
+          <h4 className="font-black text-slate-950">Achievement payouts</h4>
+          <div className="mt-3 space-y-3">
+            {draft.achievement_payouts.map((row: AchievementPayout, index: number) => (
+              <div key={index} className="grid grid-cols-3 gap-2">
+                <label><span className="text-[10px] font-black uppercase text-slate-400">Min points</span><NumberInput value={row.min_points} onChange={(value) => setDraft({ ...draft, achievement_payouts: draft.achievement_payouts.map((item, i) => i === index ? { ...item, min_points: Number(value || 0) } : item) })} /></label>
+                <label><span className="text-[10px] font-black uppercase text-slate-400">Max points</span><NumberInput value={row.max_points} onChange={(value) => setDraft({ ...draft, achievement_payouts: draft.achievement_payouts.map((item, i) => i === index ? { ...item, max_points: Number(value || 0) } : item) })} /></label>
+                <label><span className="text-[10px] font-black uppercase text-slate-400">Payout</span><NumberInput value={row.amount} onChange={(value) => setDraft({ ...draft, achievement_payouts: draft.achievement_payouts.map((item, i) => i === index ? { ...item, amount: Number(value || 0) } : item) })} /></label>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+      <div className="flex justify-end">
+        <button type="button" onClick={() => void save()} disabled={saving} className="inline-flex items-center gap-2 rounded-2xl bg-indigo-600 px-6 py-3 text-sm font-black text-white shadow-lg shadow-indigo-200 disabled:opacity-60">
+          {saving ? <RefreshCw className="animate-spin" size={17} /> : <Save size={17} />} Save Configuration
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function TeacherSalaryManagement() {
+  const today = new Date();
+  const [month, setMonth] = useState(today.getMonth() + 1);
+  const [year, setYear] = useState(today.getFullYear());
+  const [data, setData] = useState<QuranSalaryDashboardResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [view, setView] = useState<"dashboard" | "settings">("dashboard");
+  const [selectedSlip, setSelectedSlip] = useState<QuranTeacherSalarySlip | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true); setMessage("");
+    try { setData(await getQuranSalaryDashboard(month, year)); }
+    catch (error: any) { setMessage(error?.message || "Could not load teacher salaries."); }
+    finally { setLoading(false); }
+  }, [month, year]);
+
+  useEffect(() => { void load(); }, [load]);
+  useAcademyWS((event) => {
+    const name = String((event as any)?.event || "");
+    if (name.includes("salary") || name.includes("attendance") || name.includes("account")) void load();
+  });
+
+  const total = data?.summary.total_payout || 0;
+  const teacherRows = data?.teachers || [];
+  const settings = data?.configuration || null;
+
+  const years = useMemo(() => Array.from({ length: 7 }, (_, index) => today.getFullYear() - 3 + index), []);
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-[30px] border border-slate-200/80 bg-white/90 p-5 shadow-[0_18px_55px_rgba(15,23,42,0.08)] sm:p-6">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-indigo-100 bg-indigo-50 text-indigo-600"><CircleDollarSign size={24} /></div>
+            <div>
+              <h2 className="text-xl font-black text-slate-950 sm:text-2xl">Teacher Salary Management</h2>
+              <p className="mt-1 text-sm font-semibold text-slate-500">Automatic class counts, salary tiers, bonuses, achievement points, and admin overrides.</p>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <select value={month} onChange={(event) => setMonth(Number(event.target.value))} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black outline-none">
+              {Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={index + 1}>{new Date(2026, index, 1).toLocaleDateString(undefined, { month: "long" })}</option>)}
+            </select>
+            <select value={year} onChange={(event) => setYear(Number(event.target.value))} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black outline-none">{years.map((item) => <option key={item}>{item}</option>)}</select>
+            <button type="button" onClick={() => void load()} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700"><RefreshCw size={17} className={loading ? "animate-spin" : ""} /> Refresh</button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Metric label="Teachers" value={data?.summary.teachers || 0} />
+          <Metric label="Draft slips" value={data?.summary.draft || 0} accent="amber" />
+          <Metric label="Processed" value={data?.summary.processed || 0} accent="emerald" />
+          <Metric label="Total payout" value={money(total)} accent="cyan" />
+        </div>
+
+        <div className="mt-5 inline-flex rounded-2xl border border-slate-200 bg-slate-50 p-1">
+          <button type="button" onClick={() => setView("dashboard")} className={`rounded-xl px-4 py-2 text-sm font-black ${view === "dashboard" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"}`}><Calculator className="mr-1.5 inline" size={16} />Salary Dashboard</button>
+          <button type="button" onClick={() => setView("settings")} className={`rounded-xl px-4 py-2 text-sm font-black ${view === "settings" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"}`}><Settings2 className="mr-1.5 inline" size={16} />Configuration</button>
+        </div>
+      </section>
+
+      {message && <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">{message}</div>}
+
+      {view === "settings" && settings ? (
+        <SettingsPanel config={settings} onSaved={(config) => setData((prev) => prev ? { ...prev, configuration: config } : prev)} />
+      ) : loading && !data ? (
+        <div className="flex min-h-[360px] items-center justify-center rounded-[30px] border border-slate-200 bg-white text-sm font-bold text-slate-500"><RefreshCw className="mr-2 animate-spin" size={18} /> Calculating monthly salaries...</div>
+      ) : (
+        <div className="space-y-4">
+          {teacherRows.map((slip) => {
+            const snapshot: any = slip.calculated_snapshot || {};
+            const type = snapshot.student_type_breakdown || {};
+            const statuses = snapshot.class_status_breakdown || {};
+            return (
+              <article key={slip.id} className="overflow-hidden rounded-[30px] border border-slate-200/80 bg-white shadow-[0_16px_45px_rgba(15,23,42,0.06)]">
+                <div className="flex flex-col gap-4 border-b border-slate-200 p-5 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-indigo-100 bg-indigo-50 text-indigo-600"><GraduationCap size={23} /></div>
+                    <div className="min-w-0">
+                      <h3 className="break-words text-lg font-black text-slate-950">{slip.teacher_name}</h3>
+                      <p className="mt-1 text-xs font-bold text-slate-500">@{slip.teacher_username} · {slip.status === "processed" ? "Processed" : "Draft"}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <div className="rounded-2xl bg-slate-950 px-4 py-3 text-white">
+                      <div className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">Final payout</div>
+                      <div className="text-xl font-black">{money(slip.final_total)}</div>
+                    </div>
+                    <button type="button" onClick={() => setSelectedSlip(slip)} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-black text-white shadow-lg shadow-indigo-200"><Edit3 size={17} /> Review &amp; Override</button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 p-5 xl:grid-cols-3">
+                  <section className="rounded-[24px] border border-slate-200 bg-slate-50/70 p-4">
+                    <div className="flex items-center gap-2 font-black text-slate-950"><UsersRound size={18} className="text-indigo-600" /> Student Type Breakdown</div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-slate-600">
+                      <div>Old Students <b className="float-right text-slate-950">{type.old_students || 0}</b></div>
+                      <div>New Trials <b className="float-right text-slate-950">{type.new_trials || 0}</b></div>
+                      <div>Transferred In <b className="float-right text-slate-950">{type.transferred_from_teacher || 0}</b></div>
+                      <div>Returned Leave <b className="float-right text-slate-950">{type.returns_from_leave || 0}</b></div>
+                      <div className="col-span-2">Transferred Out <b className="float-right text-slate-950">{type.transferred_to_other_teachers || 0}</b></div>
+                    </div>
+                  </section>
+
+                  <section className="rounded-[24px] border border-slate-200 bg-slate-50/70 p-4">
+                    <div className="flex items-center gap-2 font-black text-slate-950"><FileCheck2 size={18} className="text-emerald-600" /> Class Status Breakdown</div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-slate-600">
+                      <div>Running <b className="float-right text-slate-950">{statuses.running || 0}</b></div>
+                      <div>On Leave <b className="float-right text-slate-950">{statuses.on_leave || 0}</b></div>
+                      <div>Old Dropped <b className="float-right text-slate-950">{statuses.old_dropped || 0}</b></div>
+                      <div>Trial Dropped <b className="float-right text-slate-950">{statuses.trial_dropped || 0}</b></div>
+                      <div>Other Dropped <b className="float-right text-slate-950">{statuses.old_dropped_other || 0}</b></div>
+                      <div>Not Counted <b className="float-right text-slate-950">{statuses.not_counted || 0}</b></div>
+                    </div>
+                  </section>
+
+                  <section className="rounded-[24px] border border-slate-200 bg-slate-50/70 p-4">
+                    <div className="flex items-center gap-2 font-black text-slate-950"><Award size={18} className="text-amber-600" /> Salary &amp; Performance</div>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <Metric label="Active" value={snapshot.final_active_classes || 0} />
+                      <Metric label="Points" value={`${snapshot.achievement_points || 0}/10`} accent="emerald" />
+                      <Metric label="English" value={snapshot.english_class_count || 0} accent="cyan" />
+                      <Metric label="Night" value={snapshot.night_class_count || 0} accent="amber" />
+                    </div>
+                  </section>
+                </div>
+              </article>
+            );
+          })}
+          {teacherRows.length === 0 && <div className="rounded-[30px] border border-slate-200 bg-white p-12 text-center text-sm font-bold text-slate-500">No Quran teachers found for this department.</div>}
+        </div>
+      )}
+
+      {selectedSlip && <SalarySlipModal slip={selectedSlip} onClose={() => setSelectedSlip(null)} onSaved={(saved) => setData((prev) => prev ? { ...prev, teachers: prev.teachers.map((item) => item.id === saved.id ? saved : item) } : prev)} />}
+    </div>
+  );
+}

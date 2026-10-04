@@ -1,0 +1,308 @@
+import React, { useMemo } from "react";
+import { AttendanceRecord, AttendanceStatus, Student, Teacher } from "../types";
+import { Check, X, Clock3 } from "lucide-react";
+
+type Props = {
+  student: Student;
+  teacher?: Teacher;
+  attendanceToday?: AttendanceRecord;
+  teacherAttendanceToday?: AttendanceRecord;
+
+  onMarkAttendance: (studentId: string, status: AttendanceStatus) => void;
+  onUnmarkAttendance: (studentId: string) => void;
+
+  onMarkTeacherAttendance: (teacherId: string, status: AttendanceStatus) => void;
+  onUnmarkTeacherAttendance: (teacherId: string) => void;
+
+  isCurrentSession: boolean;
+};
+
+const formatTime12 = (time24: string): string => {
+  const [h, m] = String(time24 || "").split(":");
+  const hh = Number(h);
+  if (!Number.isFinite(hh) || !m) return time24;
+  const ampm = hh >= 12 ? "PM" : "AM";
+  let h12 = hh % 12;
+  if (h12 === 0) h12 = 12;
+  return `${h12}:${m} ${ampm}`;
+};
+
+const daysToLabel = (days?: string[]) => {
+  const n = days?.length ?? 0;
+  if (!n) return "—";
+  return `${n} day${n === 1 ? "" : "s"} / week`;
+};
+
+// ✅ Smart helper: minutes until a class starts (for Up Next)
+const minutesUntil = (time24: string) => {
+  const [h, m] = String(time24 || "").split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+
+  const now = new Date();
+  const target = new Date();
+  target.setHours(h, m, 0, 0);
+
+  const diff = Math.round((target.getTime() - now.getTime()) / 60000);
+  return diff;
+};
+
+function MiniBadge({
+  children,
+  tone = "neutral",
+}: {
+  children: React.ReactNode;
+  tone?: "neutral" | "live" | "next";
+}) {
+  const base =
+    "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold border transition-all";
+  const cls =
+    tone === "live"
+      ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+      : tone === "next"
+      ? "bg-indigo-50 text-indigo-700 border-indigo-100"
+      : "bg-white/80 text-slate-600 border-slate-200";
+  return <span className={`${base} ${cls}`}>{children}</span>;
+}
+
+function ActionButton({
+  active,
+  tone,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  tone: "present" | "absent" | "leave";
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  const base =
+    "group w-full rounded-xl border px-3 py-2.5 text-sm font-semibold transition-all flex items-center justify-center gap-2";
+
+  const styles = {
+    present: active
+      ? "bg-emerald-500 border-emerald-500 text-white shadow-[0_10px_18px_rgba(16,185,129,0.20)]"
+      : "bg-white/70 border-emerald-100 text-emerald-700 hover:bg-emerald-50",
+    absent: active
+      ? "bg-rose-500 border-rose-500 text-white shadow-[0_10px_18px_rgba(244,63,94,0.18)]"
+      : "bg-white/70 border-rose-100 text-rose-700 hover:bg-rose-50",
+    leave: active
+      ? "bg-amber-500 border-amber-500 text-white shadow-[0_10px_18px_rgba(245,158,11,0.18)]"
+      : "bg-white/70 border-amber-100 text-amber-800 hover:bg-amber-50",
+  } as const;
+
+  return (
+    <button type="button" onClick={onClick} className={`${base} ${styles[tone]}`}>
+      <span className="transition-transform group-hover:scale-[1.03]">{icon}</span>
+      {label}
+    </button>
+  );
+}
+
+export function ClassCard({
+  student,
+  teacher,
+  attendanceToday,
+  teacherAttendanceToday,
+  onMarkAttendance,
+  onUnmarkAttendance,
+  onMarkTeacherAttendance,
+  onUnmarkTeacherAttendance,
+  isCurrentSession,
+}: Props) {
+  const timeLabel = useMemo(() => formatTime12(student.timeSlot), [student.timeSlot]);
+
+  const studentStatus = attendanceToday?.status ?? null;
+  const teacherStatus = teacherAttendanceToday?.status ?? null;
+
+  // ✅ Smart Up Next label
+  const mins = useMemo(() => minutesUntil(student.timeSlot), [student.timeSlot]);
+  const upNextLabel =
+    mins === null ? "Starts soon" : mins <= 0 ? "Starting" : `${mins} min`;
+
+  // ✅ Slightly softer ring
+  const ring = isCurrentSession ? "ring-1 ring-emerald-200/70" : "ring-1 ring-indigo-200/60";
+
+  return (
+    <div
+      className={`
+        relative overflow-hidden rounded-2xl
+        bg-white/70 backdrop-blur-xl
+        border border-white/70
+        shadow-[0_14px_34px_rgba(15,23,42,0.10)]
+        ${ring}
+        transition-all
+        hover:shadow-[0_18px_44px_rgba(15,23,42,0.14)]
+      `}
+    >
+      {/* Soft corner glow */}
+      <div className="pointer-events-none absolute -top-24 -right-24 h-52 w-52 rounded-full bg-emerald-200/18 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-24 -left-24 h-56 w-56 rounded-full bg-indigo-200/14 blur-3xl" />
+
+      {/* HEADER (more compact + smarter) */}
+      <div className="relative px-4 py-3 sm:px-5 sm:py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h4 className="text-[15px] sm:text-base font-extrabold text-slate-900 truncate">
+                {student.name}
+              </h4>
+
+              {isCurrentSession ? (
+                <MiniBadge tone="live">
+                  <span className="inline-block h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                  Live
+                </MiniBadge>
+              ) : (
+                <MiniBadge tone="next">Up Next</MiniBadge>
+              )}
+            </div>
+
+            <div className="mt-1 text-sm text-slate-600 truncate">
+              <span className="text-emerald-700 font-semibold">With:</span>{" "}
+              <span className="font-medium text-slate-800">{teacher?.name ?? "—"}</span>
+            </div>
+
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <MiniBadge>{daysToLabel(student.classDays)}</MiniBadge>
+
+              {/* ✅ Up Next: show cute countdown badge (NOT attendance) */}
+              {!isCurrentSession && (
+                <MiniBadge tone="next">
+                  <span className="font-extrabold">⏳</span>
+                  <span className="font-bold">{upNextLabel}</span>
+                </MiniBadge>
+              )}
+            </div>
+          </div>
+
+          {/* time badge */}
+          <div className="shrink-0">
+            <div
+              className="
+                inline-flex items-center gap-2
+                rounded-full
+                bg-white/85
+                border border-slate-200
+                px-3 py-1.5
+                text-xs font-extrabold text-slate-700
+                shadow-[0_10px_18px_rgba(15,23,42,0.06)]
+              "
+            >
+              <Clock3 size={14} className="text-slate-500" />
+              {timeLabel}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ✅ Only Live cards show attendance controls */}
+      {isCurrentSession && (
+        <>
+          <div className="h-px bg-gradient-to-r from-transparent via-slate-200/70 to-transparent" />
+
+          <div className="relative px-4 py-4 sm:px-5 sm:py-5 space-y-4">
+            {/* Teacher attendance */}
+            <div className="rounded-2xl bg-white/60 border border-white/70 p-4 shadow-[0_12px_24px_rgba(15,23,42,0.06)]">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-sm font-extrabold text-slate-800">Teacher Attendance</div>
+
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-semibold text-slate-500">
+                    {teacherStatus ? `Marked: ${teacherStatus}` : "Unmarked"}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => teacher && onUnmarkTeacherAttendance(teacher.id)}
+                    className="text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors"
+                    title="Clear"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <ActionButton
+                  tone="present"
+                  active={teacherStatus === AttendanceStatus.PRESENT}
+                  icon={<Check size={16} />}
+                  label="Present"
+                  onClick={() =>
+                    teacher && onMarkTeacherAttendance(teacher.id, AttendanceStatus.PRESENT)
+                  }
+                />
+                <ActionButton
+                  tone="absent"
+                  active={teacherStatus === AttendanceStatus.ABSENT}
+                  icon={<X size={16} />}
+                  label="Absent"
+                  onClick={() =>
+                    teacher && onMarkTeacherAttendance(teacher.id, AttendanceStatus.ABSENT)
+                  }
+                />
+                <ActionButton
+                  tone="leave"
+                  active={teacherStatus === AttendanceStatus.LEAVE}
+                  icon={<Clock3 size={16} />}
+                  label="Leave"
+                  onClick={() =>
+                    teacher && onMarkTeacherAttendance(teacher.id, AttendanceStatus.LEAVE)
+                  }
+                />
+              </div>
+            </div>
+
+            {/* Student attendance */}
+            <div className="rounded-2xl bg-white/60 border border-white/70 p-4 shadow-[0_12px_24px_rgba(15,23,42,0.06)]">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-sm font-extrabold text-slate-800">Student Attendance</div>
+
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-semibold text-slate-500">
+                    {studentStatus ? `Marked: ${studentStatus}` : "Unmarked"}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => onUnmarkAttendance(student.id)}
+                    className="text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors"
+                    title="Clear"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <ActionButton
+                  tone="present"
+                  active={studentStatus === AttendanceStatus.PRESENT}
+                  icon={<Check size={16} />}
+                  label="Present"
+                  onClick={() => onMarkAttendance(student.id, AttendanceStatus.PRESENT)}
+                />
+                <ActionButton
+                  tone="absent"
+                  active={studentStatus === AttendanceStatus.ABSENT}
+                  icon={<X size={16} />}
+                  label="Absent"
+                  onClick={() => onMarkAttendance(student.id, AttendanceStatus.ABSENT)}
+                />
+                <ActionButton
+                  tone="leave"
+                  active={studentStatus === AttendanceStatus.LEAVE}
+                  icon={<Clock3 size={16} />}
+                  label="Leave"
+                  onClick={() => onMarkAttendance(student.id, AttendanceStatus.LEAVE)}
+                />
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}

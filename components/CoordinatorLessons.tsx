@@ -34,6 +34,7 @@ import {
 
 import { useAcademyWS } from "../hooks/useAcademyWS";
 
+import { PageSkeleton } from "./ui/SkeletonLoaders";
 type AccessType = "add" | "edit";
 
 type PermissionRow = LessonAccessPermissionPayload & {
@@ -239,6 +240,8 @@ const [lessons, setLessons] = useState<LessonPayload[]>([]);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
+  const [summaryTeacherId, setSummaryTeacherId] =
+    useState("");
   const [summaryStudentId, setSummaryStudentId] =
     useState("");
   const [summarySubject, setSummarySubject] =
@@ -548,6 +551,46 @@ const studentOptions = useMemo(() => {
       )
     ).sort((a, b) => a.localeCompare(b));
   }, [allLessons]);
+
+  const summaryStudentOptions = useMemo(() => {
+    if (!summaryTeacherId) return [];
+
+    return studentOptions.filter(
+      student =>
+        String(student.teacher_id) ===
+        String(summaryTeacherId)
+    );
+  }, [studentOptions, summaryTeacherId]);
+
+  const summarySubjectOptions = useMemo(() => {
+    if (!summaryStudentId) return [];
+
+    return Array.from(
+      new Set(
+        allLessons
+          .filter(lesson => {
+            const matchesStudent =
+              String(lesson.student_id) ===
+              String(summaryStudentId);
+
+            const matchesTeacher =
+              !summaryTeacherId ||
+              String(lesson.teacher_id) ===
+                String(summaryTeacherId);
+
+            return matchesStudent && matchesTeacher;
+          })
+          .map(lesson =>
+            String(lesson.subject || "").trim()
+          )
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+  }, [
+    allLessons,
+    summaryStudentId,
+    summaryTeacherId,
+  ]);
 
   const filteredLessons = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -884,6 +927,11 @@ const handleDisablePermission = async (
     setMessage("");
     setSummaryResult(null);
 
+    if (!summaryTeacherId) {
+      setMessage("Please select a teacher.");
+      return;
+    }
+
     if (!summaryStudentId) {
       setMessage("Please select a student.");
       return;
@@ -909,6 +957,7 @@ const handleDisablePermission = async (
       const generated =
         await generateMonthlyLessonSummary({
           student_id: Number(summaryStudentId),
+          teacher_id: Number(summaryTeacherId),
           start_date: summaryStartDate,
           end_date: summaryEndDate,
           subject: summarySubject,
@@ -984,57 +1033,57 @@ const handleDisablePermission = async (
         </div>
       )}
 
-      <section className="rounded-[28px] border border-slate-200/70 bg-white/85 p-2 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => setWorkspaceTab("lessons")}
-            className={`rounded-2xl px-5 py-4 text-left transition ${
-              workspaceTab === "lessons"
-                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200"
-                : "bg-white text-slate-600 hover:bg-slate-50"
-            }`}
-          >
-            <div className="flex items-center gap-2 text-sm font-black">
-              <BookOpen size={17} />
-              Lessons & Summaries
+      <section className="rounded-[26px] border border-slate-200/80 bg-white/90 p-4 shadow-[0_14px_40px_rgba(15,23,42,0.06)] backdrop-blur-xl">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-200/70">
+              <BookOpen size={19} />
             </div>
 
-            <div
-              className={`mt-1 text-xs font-semibold ${
+            <div>
+              <h3 className="text-sm font-black text-slate-950">
+                Lesson Control Workspace
+              </h3>
+
+              <p className="mt-0.5 text-xs font-semibold text-slate-500">
+                Manage lesson records, summaries and teacher requests
+              </p>
+            </div>
+          </div>
+
+          <div className="inline-flex w-full rounded-2xl border border-slate-200/80 bg-slate-100/80 p-1.5 xl:w-auto">
+            <button
+              type="button"
+              onClick={() => setWorkspaceTab("lessons")}
+              className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black transition-all xl:flex-none ${
                 workspaceTab === "lessons"
-                  ? "text-indigo-100"
-                  : "text-slate-400"
+                  ? "bg-white text-indigo-700 shadow-[0_6px_18px_rgba(79,70,229,0.14)] ring-1 ring-indigo-100"
+                  : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
               }`}
             >
-              Daily lesson history, filters and generated summaries
-            </div>
-          </button>
+              <BookOpen size={15} />
+              Lessons & Summaries
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setWorkspaceTab("requests")}
-            className={`rounded-2xl px-5 py-4 text-left transition ${
-              workspaceTab === "requests"
-                ? "bg-violet-600 text-white shadow-lg shadow-violet-200"
-                : "bg-white text-slate-600 hover:bg-slate-50"
-            }`}
-          >
-            <div className="flex items-center gap-2 text-sm font-black">
-              <Bell size={17} />
-              Requests & Notifications
-            </div>
-
-            <div
-              className={`mt-1 text-xs font-semibold ${
+            <button
+              type="button"
+              onClick={() => setWorkspaceTab("requests")}
+              className={`relative inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black transition-all xl:flex-none ${
                 workspaceTab === "requests"
-                  ? "text-violet-100"
-                  : "text-slate-400"
+                  ? "bg-white text-violet-700 shadow-[0_6px_18px_rgba(109,40,217,0.14)] ring-1 ring-violet-100"
+                  : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
               }`}
             >
-              Teacher activity and lesson permission requests
-            </div>
-          </button>
+              <Bell size={15} />
+              Requests & Notifications
+
+              {pendingRequests.length > 0 && (
+                <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-black text-white">
+                  {pendingRequests.length}
+                </span>
+              )}
+            </button>
+          </div>
         </div>
       </section>
 
@@ -1231,35 +1280,49 @@ const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLess
 
       {workspaceTab === "lessons" && (
         <>
-          <section className="rounded-[28px] border border-slate-200/70 bg-white/85 p-2 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={() =>
-                  setLessonContentTab("daily")
-                }
-                className={`rounded-2xl px-5 py-3 text-sm font-black transition ${
-                  lessonContentTab === "daily"
-                    ? "bg-slate-900 text-white shadow"
-                    : "bg-white text-slate-500 hover:bg-slate-50"
-                }`}
-              >
-                Daily Lessons
-              </button>
+          <section className="rounded-[24px] border border-slate-200/80 bg-white/90 p-3 shadow-[0_12px_34px_rgba(15,23,42,0.05)]">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="px-1">
+                <h3 className="text-sm font-black text-slate-900">
+                  Lesson Records
+                </h3>
 
-              <button
-                type="button"
-                onClick={() =>
-                  setLessonContentTab("summaries")
-                }
-                className={`rounded-2xl px-5 py-3 text-sm font-black transition ${
-                  lessonContentTab === "summaries"
-                    ? "bg-slate-900 text-white shadow"
-                    : "bg-white text-slate-500 hover:bg-slate-50"
-                }`}
-              >
-                Generated Summaries
-              </button>
+                <p className="mt-0.5 text-xs font-semibold text-slate-400">
+                  Review daily activity or generate a private summary
+                </p>
+              </div>
+
+              <div className="inline-flex w-full rounded-2xl bg-slate-100 p-1 md:w-auto">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setLessonContentTab("daily")
+                  }
+                  className={`inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2 text-xs font-black transition-all md:flex-none ${
+                    lessonContentTab === "daily"
+                      ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+                      : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <CalendarDays size={14} />
+                  Daily Lessons
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setLessonContentTab("summaries")
+                  }
+                  className={`inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2 text-xs font-black transition-all md:flex-none ${
+                    lessonContentTab === "summaries"
+                      ? "bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md shadow-indigo-200"
+                      : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <BookOpen size={14} />
+                  Generated Summaries
+                </button>
+              </div>
             </div>
           </section>
 
@@ -1286,58 +1349,138 @@ const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLess
               </div>
 
               <div className="grid grid-cols-1 gap-6 p-6 xl:grid-cols-[360px_1fr]">
-                <div className="space-y-4 rounded-3xl border border-slate-200 bg-slate-50/70 p-5">
+                <div className="space-y-4 rounded-3xl border border-slate-200/80 bg-gradient-to-b from-white to-slate-50/80 p-5 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-black text-slate-900">
+                        Summary Details
+                      </h4>
+
+                      <p className="mt-0.5 text-xs font-semibold text-slate-400">
+                        Complete each step in order
+                      </p>
+                    </div>
+
+                    <span className="rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-indigo-600">
+                      Private
+                    </span>
+                  </div>
+
                   <div>
-                    <label className="mb-1.5 block text-xs font-black uppercase tracking-wide text-slate-500">
-                      Student
-                    </label>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <label className="text-xs font-black uppercase tracking-wide text-slate-500">
+                        Teacher
+                      </label>
+
+                      <span className="text-[10px] font-black text-indigo-500">
+                        Step 1
+                      </span>
+                    </div>
 
                     <select
-                      value={summaryStudentId}
+                      value={summaryTeacherId}
                       onChange={event => {
-                        setSummaryStudentId(
+                        setSummaryTeacherId(
                           event.target.value
                         );
+                        setSummaryStudentId("");
+                        setSummarySubject("");
                         setSummaryResult(null);
                       }}
-                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-indigo-200"
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
                     >
                       <option value="">
-                        Select student
+                        Select teacher
                       </option>
 
-                      {studentOptions.map(student => (
+                      {teachers.map(teacher => (
                         <option
-                          key={student.id}
-                          value={student.id}
+                          key={teacher.id}
+                          value={teacher.id}
                         >
-                          {student.name} —{" "}
-                          {student.teacher_name}
+                          {teacher.name}
                         </option>
                       ))}
                     </select>
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-xs font-black uppercase tracking-wide text-slate-500">
-                      Subject
-                    </label>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <label className="text-xs font-black uppercase tracking-wide text-slate-500">
+                        Student
+                      </label>
+
+                      <span className="text-[10px] font-black text-indigo-500">
+                        Step 2
+                      </span>
+                    </div>
+
+                    <select
+                      value={summaryStudentId}
+                      disabled={!summaryTeacherId}
+                      onChange={event => {
+                        setSummaryStudentId(
+                          event.target.value
+                        );
+                        setSummarySubject("");
+                        setSummaryResult(null);
+                      }}
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      <option value="">
+                        {summaryTeacherId
+                          ? "Select student"
+                          : "Select teacher first"}
+                      </option>
+
+                      {summaryStudentOptions.map(student => (
+                        <option
+                          key={student.id}
+                          value={student.id}
+                        >
+                          {student.name}
+                        </option>
+                      ))}
+                    </select>
+
+                    {summaryTeacherId &&
+                      summaryStudentOptions.length === 0 && (
+                        <p className="mt-1.5 text-xs font-semibold text-amber-600">
+                          No students with lesson records were found
+                          for this teacher.
+                        </p>
+                      )}
+                  </div>
+
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <label className="text-xs font-black uppercase tracking-wide text-slate-500">
+                        Subject
+                      </label>
+
+                      <span className="text-[10px] font-black text-indigo-500">
+                        Step 3
+                      </span>
+                    </div>
 
                     <select
                       value={summarySubject}
+                      disabled={!summaryStudentId}
                       onChange={event => {
                         setSummarySubject(
                           event.target.value
                         );
                         setSummaryResult(null);
                       }}
-                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-indigo-200"
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-800 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                     >
                       <option value="">
-                        All subjects
+                        {summaryStudentId
+                          ? "All learned subjects"
+                          : "Select student first"}
                       </option>
 
-                      {subjectOptions.map(subject => (
+                      {summarySubjectOptions.map(subject => (
                         <option
                           key={subject}
                           value={subject}
@@ -1346,6 +1489,13 @@ const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLess
                         </option>
                       ))}
                     </select>
+
+                    {summaryStudentId && (
+                      <p className="mt-1.5 text-xs font-semibold text-slate-400">
+                        Only subjects found in this student’s
+                        lesson records are shown.
+                      </p>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
@@ -1393,6 +1543,7 @@ const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLess
                     }
                     disabled={
                       summarySaving ||
+                      !summaryTeacherId ||
                       !summaryStudentId ||
                       !summaryStartDate ||
                       !summaryEndDate
@@ -1443,6 +1594,10 @@ const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLess
                             <h4 className="mt-1 text-xl font-black text-slate-950">
                               {summaryResult.student_name}
                             </h4>
+
+                            <p className="mt-1 text-xs font-bold text-indigo-600">
+                              Teacher: {summaryResult.teacher_name}
+                            </p>
 
                             <p className="mt-1 text-sm font-semibold text-slate-500">
                               {formatDate(
@@ -1657,25 +1812,57 @@ const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLess
               </option>
             </select>
 
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={event =>
-                setDateFrom(event.target.value)
-              }
-              title="From date"
-              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
-            />
+            <div className="rounded-2xl border border-slate-200/90 bg-slate-50/80 p-3 md:col-span-2 xl:col-span-2">
+              <div className="mb-3 flex items-start gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600">
+                  <CalendarDays size={16} />
+                </div>
 
-            <input
-              type="date"
-              value={dateTo}
-              onChange={event =>
-                setDateTo(event.target.value)
-              }
-              title="To date"
-              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
-            />
+                <div>
+                  <div className="text-xs font-black text-slate-800">
+                    Lesson date range
+                  </div>
+
+                  <p className="mt-0.5 text-[11px] font-semibold leading-5 text-slate-400">
+                    Optional — filter lesson records between two dates.
+                    Leave both empty to show every lesson.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1.5 block text-[11px] font-black uppercase tracking-wide text-slate-500">
+                    From lesson date
+                  </span>
+
+                  <input
+                    type="date"
+                    value={dateFrom}
+                    onChange={event =>
+                      setDateFrom(event.target.value)
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-[11px] font-black uppercase tracking-wide text-slate-500">
+                    To lesson date
+                  </span>
+
+                  <input
+                    type="date"
+                    value={dateTo}
+                    min={dateFrom || undefined}
+                    onChange={event =>
+                      setDateTo(event.target.value)
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                  />
+                </label>
+              </div>
+            </div>
           </div>
 
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
@@ -2153,11 +2340,7 @@ function MiniBlock({ label, value }: { label: string; value: string | number }) 
 }
 
 function LoadingState({ label }: { label: string }) {
-  return (
-    <div className="p-12 flex items-center justify-center text-slate-500">
-      <Loader2 size={24} className="animate-spin mr-2" />{label}
-    </div>
-  );
+  return <PageSkeleton variant="lessons" rows={6} compact label={label} className="p-3 sm:p-5" />;
 }
 
 function EmptyState({ title, subtitle }: { title: string; subtitle: string }) {

@@ -1,0 +1,19 @@
+{
+  "update": "tuition_student_portal_customization_v33",
+  "applied_at": "2026-07-27T16:50:15.815179",
+  "project_root": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)",
+  "backup_root": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\_update_backups\\tuition_student_portal_customization_v33_20260727_165015_739884",
+  "changed_files": [
+    "components/tuition/TuitionStudentPortal.tsx",
+    "components/tuition/lanyard/Lanyard.tsx",
+    "components/tuition/lanyard/Lanyard.css",
+    "components/tuition/lanyard/card.glb",
+    "components/tuition/lanyard/lanyard.png",
+    "vite.config.ts",
+    "vite-env.d.ts",
+    "global.d.ts"
+  ],
+  "quran_student_portal_unchanged": true,
+  "quran_teacher_portal_unchanged": true,
+  "database_migration_required": false
+}

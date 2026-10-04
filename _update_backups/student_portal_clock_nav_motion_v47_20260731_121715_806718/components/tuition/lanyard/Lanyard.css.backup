@@ -1,0 +1,176 @@
+/* IVS_TUITION_STUDENT_PORTAL_V46_CLOCK_THROW_TOGGLE_POLISH */
+.lanyard-wrapper {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.lanyard-wrapper canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: visible;
+  outline: none;
+  pointer-events: none;
+}
+
+.tuition-overview-lanyard-layer {
+  position: absolute;
+  top: -92px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  min-height: calc(100% + 92px);
+  z-index: 70;
+  overflow: visible;
+  pointer-events: none;
+  isolation: isolate;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body.lanyard-drag-active,
+body.lanyard-drag-active * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -webkit-touch-callout: none !important;
+  cursor: grabbing !important;
+}
+
+@media (max-width: 1439px) {
+  .tuition-overview-lanyard-layer {
+    top: -76px;
+    min-height: calc(100% + 76px);
+  }
+}
+
+@media (max-width: 1023px) {
+  .tuition-overview-lanyard-layer {
+    top: -58px;
+    right: -8px;
+    left: -8px;
+    min-height: calc(100% + 58px);
+  }
+}
+
+@media (max-width: 639px) {
+  .tuition-overview-lanyard-layer {
+    top: -36px;
+    right: -6px;
+    left: -6px;
+    min-height: calc(100% + 36px);
+  }
+
+  .lanyard-wrapper {
+    touch-action: pan-y;
+  }
+}
+
+/* IVS_TUITION_STUDENT_PORTAL_V46_CLOCK_THROW_TOGGLE_POLISH */
+.tuition-global-lanyard-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  overflow: visible;
+  pointer-events: none;
+  isolation: isolate;
+  user-select: none;
+  -webkit-user-select: none;
+  transform-origin: 50% 0%;
+  will-change: transform, opacity;
+}
+
+.tuition-global-lanyard-layer.motion-idle.is-visible,
+.tuition-global-lanyard-layer.is-visible:not(.motion-showing) {
+  transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  opacity: 1;
+  visibility: visible;
+}
+
+.tuition-global-lanyard-layer.motion-showing {
+  visibility: visible;
+  animation: tuition-lanyard-thrown-down 1080ms cubic-bezier(0.18, 0.82, 0.18, 1) both;
+}
+
+.tuition-global-lanyard-layer.motion-hiding {
+  animation: tuition-lanyard-caught-up 760ms cubic-bezier(0.55, 0.02, 0.82, 0.42) both;
+}
+
+.tuition-global-lanyard-layer.is-hidden.motion-idle {
+  transform: translate3d(-2%, -128%, 0) rotate(7deg) scale(0.95);
+  opacity: 0;
+  visibility: hidden;
+}
+
+.tuition-global-lanyard-layer.is-hidden,
+.tuition-global-lanyard-layer.is-hidden *,
+.lanyard-wrapper.is-noninteractive,
+.lanyard-wrapper.is-noninteractive * {
+  cursor: default !important;
+}
+
+@keyframes tuition-lanyard-thrown-down {
+  0% {
+    transform: translate3d(-2.5%, -128%, 0) rotate(-8deg) scale(0.94);
+    opacity: 0;
+  }
+  24% {
+    opacity: 1;
+  }
+  63% {
+    transform: translate3d(1.2%, 6%, 0) rotate(3deg) scale(1.015);
+    opacity: 1;
+  }
+  78% {
+    transform: translate3d(-0.7%, -2.2%, 0) rotate(-1.7deg) scale(0.995);
+  }
+  90% {
+    transform: translate3d(0.3%, 1%, 0) rotate(0.7deg) scale(1.003);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+@keyframes tuition-lanyard-caught-up {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+    opacity: 1;
+    visibility: visible;
+  }
+  18% {
+    transform: translate3d(0.4%, 4.5%, 0) rotate(1.8deg) scale(1.01);
+  }
+  42% {
+    transform: translate3d(-0.8%, -15%, 0) rotate(-3deg) scale(0.99);
+    opacity: 1;
+  }
+  99% {
+    visibility: visible;
+  }
+  100% {
+    transform: translate3d(2%, -130%, 0) rotate(8deg) scale(0.94);
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tuition-global-lanyard-layer.motion-showing,
+  .tuition-global-lanyard-layer.motion-hiding {
+    animation-duration: 1ms !important;
+  }
+}

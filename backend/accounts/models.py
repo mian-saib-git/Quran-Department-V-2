@@ -64,6 +64,12 @@ class Feature(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
+    department_type = models.CharField(
+        max_length=50,
+        choices=Department.DepartmentType.choices,
+        default=Department.DepartmentType.GENERAL,
+        db_index=True,
+    )
 
     sort_order = models.PositiveIntegerField(default=0)
 
@@ -193,3 +199,336 @@ class UserDepartmentRole(models.Model):
     def __str__(self):
         scope = self.department.name if self.department else self.institution.name
         return f"{self.user.username} - {scope} - {self.role}"
+
+class CoordinatorTabAccess(models.Model):
+    """Department-admin visibility rules for an individual coordinator.
+
+    Main Admin feature switches remain the higher-level authority. A missing
+    row means the coordinator keeps access, which safely preserves existing
+    accounts after this feature is deployed.
+    """
+
+    coordinator = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="coordinator_tab_access",
+        limit_choices_to={"role": User.Role.COORDINATOR},
+    )
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.CASCADE,
+        related_name="coordinator_tab_access",
+    )
+    tab_key = models.CharField(max_length=120)
+    is_visible = models.BooleanField(default=True)
+    updated_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="updated_coordinator_tab_access",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["department__name", "coordinator__username", "tab_key"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["coordinator", "department", "tab_key"],
+                name="unique_coordinator_tab_access",
+            )
+        ]
+
+    def __str__(self):
+        status = "Visible" if self.is_visible else "Hidden"
+        return f"{self.coordinator.username} - {self.department.name} - {self.tab_key} - {status}"
+
+
+class PlatformSetting(models.Model):
+    """Safe, runtime-editable platform settings.
+
+    Only keys explicitly handled by the platform settings service are used.
+    Secret values are encrypted before being stored and are never returned to
+    the browser.
+    """
+
+    key = models.CharField(max_length=120, unique=True)
+    value = models.JSONField(default=dict, blank=True)
+    encrypted_value = models.TextField(blank=True)
+    updated_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="updated_platform_settings",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["key"]
+
+    def __str__(self):
+        return self.key
+
+
+class PlatformAuditLog(models.Model):
+    actor = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="platform_audit_events",
+    )
+    category = models.CharField(max_length=80, db_index=True)
+    action = models.CharField(max_length=120, db_index=True)
+    summary = models.CharField(max_length=500)
+    target_type = models.CharField(max_length=80, blank=True)
+    target_id = models.CharField(max_length=120, blank=True)
+    target_label = models.CharField(max_length=255, blank=True)
+    details = models.JSONField(default=dict, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["category", "created_at"], name="accounts_pl_categor_5e148a_idx"),
+            models.Index(fields=["action", "created_at"], name="accounts_pl_action_256e91_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.created_at:%Y-%m-%d %H:%M} - {self.summary}"
+
+
+class PlatformBackup(models.Model):
+    class Source(models.TextChoices):
+        GENERATED = "generated", "Generated"
+        UPLOADED = "uploaded", "Uploaded"
+        PRE_RESTORE = "pre_restore", "Pre-restore"
+
+    class Status(models.TextChoices):
+        READY = "ready", "Ready"
+        VALIDATED = "validated", "Validated"
+        FAILED = "failed", "Failed"
+
+    filename = models.CharField(max_length=255, unique=True)
+    original_filename = models.CharField(max_length=255, blank=True)
+    source = models.CharField(
+        max_length=30,
+        choices=Source.choices,
+        default=Source.GENERATED,
+    )
+    status = models.CharField(
+        max_length=30,
+        choices=Status.choices,
+        default=Status.READY,
+    )
+    size_bytes = models.BigIntegerField(default=0)
+    checksum_sha256 = models.CharField(max_length=64, blank=True)
+    database_name = models.CharField(max_length=255, blank=True)
+    postgres_version = models.CharField(max_length=120, blank=True)
+    validation_message = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="platform_backups",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return self.filename
+
+
+class PlatformMaintenanceWindow(models.Model):
+    class ScopeType(models.TextChoices):
+        PLATFORM = "platform", "Entire Platform"
+        INSTITUTION = "institution", "Institution"
+        DEPARTMENT = "department", "Department"
+
+    scope_type = models.CharField(
+        max_length=20,
+        choices=ScopeType.choices,
+        default=ScopeType.DEPARTMENT,
+        db_index=True,
+    )
+    institution = models.ForeignKey(
+        Institution,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="maintenance_windows",
+    )
+    department = models.ForeignKey(
+        Department,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="maintenance_windows",
+    )
+    title = models.CharField(max_length=160, default="Scheduled maintenance")
+    message = models.TextField(
+        default="This portal is temporarily unavailable while scheduled maintenance is completed. Please try again soon."
+    )
+    is_active = models.BooleanField(default=True, db_index=True)
+    starts_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    ends_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_maintenance_windows",
+    )
+    updated_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="updated_maintenance_windows",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-is_active", "-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["scope_type", "is_active"], name="accounts_mt_scope_a_idx"),
+            models.Index(fields=["institution", "is_active"], name="accounts_mt_institu_idx"),
+            models.Index(fields=["department", "is_active"], name="accounts_mt_departm_idx"),
+        ]
+
+    def __str__(self):
+        target = self.department or self.institution or "Entire platform"
+        return f"{target} - {self.title}"
+
+
+class PlatformNotice(models.Model):
+    class ScopeType(models.TextChoices):
+        PLATFORM = "platform", "All Institutions"
+        INSTITUTION = "institution", "Institution"
+        DEPARTMENT = "department", "Department"
+
+    class Audience(models.TextChoices):
+        ALL = "all", "Everyone"
+        PORTAL_ADMIN = "portal_admin", "Portal Admins"
+        COORDINATOR = "coordinator", "Coordinators"
+        TEACHER = "teacher", "Teachers"
+        STUDENT = "student", "Students"
+
+    class DeliveryMode(models.TextChoices):
+        ONCE = "once", "Show Once"
+        ONE_DAY = "one_day", "Show for 24 Hours"
+        CUSTOM = "custom", "Custom Time"
+
+    class Severity(models.TextChoices):
+        INFO = "info", "Information"
+        SUCCESS = "success", "Success"
+        WARNING = "warning", "Important"
+        CRITICAL = "critical", "Critical"
+
+    title = models.CharField(max_length=180)
+    message = models.TextField()
+    severity = models.CharField(
+        max_length=20,
+        choices=Severity.choices,
+        default=Severity.INFO,
+        db_index=True,
+    )
+    audience = models.CharField(
+        max_length=30,
+        choices=Audience.choices,
+        default=Audience.ALL,
+        db_index=True,
+    )
+    delivery_mode = models.CharField(
+        max_length=20,
+        choices=DeliveryMode.choices,
+        default=DeliveryMode.ONCE,
+        db_index=True,
+    )
+    scope_type = models.CharField(
+        max_length=20,
+        choices=ScopeType.choices,
+        default=ScopeType.PLATFORM,
+        db_index=True,
+    )
+    institution = models.ForeignKey(
+        Institution,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="platform_notices",
+    )
+    department = models.ForeignKey(
+        Department,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="platform_notices",
+    )
+    is_active = models.BooleanField(default=True, db_index=True)
+    starts_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    ends_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_platform_notices",
+    )
+    updated_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="updated_platform_notices",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-is_active", "-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["scope_type", "is_active"], name="accounts_no_scope_a_idx"),
+            models.Index(fields=["audience", "is_active"], name="accounts_no_audienc_idx"),
+            models.Index(fields=["starts_at", "ends_at"], name="accounts_no_window_idx"),
+        ]
+
+    def __str__(self):
+        return self.title
+
+
+class PlatformNoticeReceipt(models.Model):
+    notice = models.ForeignKey(
+        PlatformNotice,
+        on_delete=models.CASCADE,
+        related_name="receipts",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="platform_notice_receipts",
+    )
+    dismissed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-dismissed_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["notice", "user"],
+                name="unique_platform_notice_receipt",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["user", "dismissed_at"], name="accounts_nr_user_di_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.notice.title}"

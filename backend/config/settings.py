@@ -16,6 +16,7 @@ ALLOWED_HOSTS = [
 ]
 
 INSTALLED_APPS = [
+    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -32,9 +33,11 @@ INSTALLED_APPS = [
 
     "accounts",
     "academy",
+    "tuition",
 ]
 
 MIDDLEWARE = [
+    "accounts.middleware.DynamicCorsMiddleware",
     "corsheaders.middleware.CorsMiddleware",
 
     "django.middleware.security.SecurityMiddleware",
@@ -103,6 +106,10 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Backups are streamed to disk; this only controls in-memory request buffering.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 20 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
+
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
@@ -127,7 +134,7 @@ CSRF_TRUSTED_ORIGINS = [
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "accounts.authentication.MaintenanceAwareJWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
@@ -161,20 +168,34 @@ X_FRAME_OPTIONS = "DENY"
 # WebSocket / Django Channels
 ASGI_APPLICATION = "config.asgi.application"
 
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": [("127.0.0.1", 6379)]},
+# Local development defaults to the in-memory channel layer.
+# Redis is only enabled when DJANGO_CHANNEL_LAYER=redis.
+CHANNEL_LAYER_MODE = os.getenv(
+    "DJANGO_CHANNEL_LAYER",
+    "memory",
+).strip().lower()
+
+if CHANNEL_LAYER_MODE == "redis":
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [
+                    os.getenv(
+                        "REDIS_URL",
+                        "redis://127.0.0.1:6379/0",
+                    )
+                ],
+            },
+        },
     }
-}
-# Note: For production use Redis:
-# pip install channels-redis
-# CHANNEL_LAYERS = {
-#     "default": {
-#         "BACKEND": "channels_redis.core.RedisChannelLayer",
-#         "CONFIG": {"hosts": [("127.0.0.1", 6379)]},
-#     }
-# }
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        },
+    }
+
 
 # ============================================================
 # Production Security Settings

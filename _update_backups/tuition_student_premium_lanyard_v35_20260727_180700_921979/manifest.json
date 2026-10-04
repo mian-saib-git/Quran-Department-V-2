@@ -1,0 +1,16 @@
+{
+  "update": "tuition_student_premium_lanyard_v35",
+  "applied_at": "2026-07-27T18:07:01.010949",
+  "project_root": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)",
+  "backup_root": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\_update_backups\\tuition_student_premium_lanyard_v35_20260727_180700_921979",
+  "changed_files": [
+    "components/tuition/TuitionStudentPortal.tsx",
+    "components/tuition/lanyard/Lanyard.tsx",
+    "components/tuition/lanyard/Lanyard.css",
+    "components/tuition/lanyard/lanyard.png"
+  ],
+  "department_settings_type_fix_applied": false,
+  "quran_student_portal_unchanged": true,
+  "quran_teacher_portal_unchanged": true,
+  "database_migration_required": false
+}

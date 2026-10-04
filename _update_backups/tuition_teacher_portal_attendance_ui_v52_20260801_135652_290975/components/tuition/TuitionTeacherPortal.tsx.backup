@@ -1,0 +1,1025 @@
+// IVS_TUITION_TEACHER_PORTAL_V51
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  AlertCircle,
+  ArrowRight,
+  BookOpen,
+  CalendarDays,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Clock3,
+  GraduationCap,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  Moon,
+  RefreshCw,
+  Search,
+  Sun,
+  TimerReset,
+  UserRound,
+  UsersRound,
+  Video,
+  X,
+  XCircle,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+
+import { logoutFromDjango } from "../../services/djangoApiService";
+import {
+  getTuitionTeacherPortal,
+  type TuitionTeacherPortalAttendance,
+  type TuitionTeacherPortalClass,
+  type TuitionTeacherPortalResponse,
+} from "../../services/tuitionApiService";
+import { useAcademyWS } from "../../hooks/useAcademyWS";
+import { PageSkeleton } from "../ui/SkeletonLoaders";
+
+type Props = {
+  departmentId?: number;
+  themeMode: "light" | "dark";
+  onToggleTheme: () => void;
+  onLogout: () => void;
+};
+
+type PortalTab = "overview" | "classes" | "attendance";
+type AttendancePeriod = "daily" | "weekly" | "monthly";
+type AttendanceStatus = "all" | "present" | "absent" | "leave";
+
+type ScheduleTiming = {
+  start: Date;
+  end: Date;
+  isLive: boolean;
+  isUpcoming: boolean;
+  secondsUntil: number;
+};
+
+const WEEKDAYS = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+] as const;
+const CLASS_PAGE_SIZE = 8;
+const ATTENDANCE_PAGE_SIZE = 10;
+
+const CARD =
+  "rounded-[28px] border border-slate-200 bg-white shadow-[0_16px_44px_rgba(15,23,42,0.06)] dark:border-slate-800 dark:bg-slate-900 dark:shadow-[0_16px_44px_rgba(0,0,0,0.28)]";
+const FIELD =
+  "h-11 rounded-2xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition [color-scheme:light] focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:[color-scheme:dark] dark:focus:border-indigo-500 dark:focus:ring-indigo-950";
+
+function localDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatPortalDate(date: Date) {
+  const day = date.toLocaleDateString("en-US", { weekday: "long" });
+  const full = date.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+  return `${day} . ${full}`;
+}
+
+function formatDate(value: string) {
+  if (!value) return "Not available";
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function formatTime(date: Date) {
+  return date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function initials(value: string) {
+  return (
+    String(value || "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((item) => item[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "TR"
+  );
+}
+
+function titleCase(value: string) {
+  const clean = String(value || "").trim();
+  return clean ? clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase() : "";
+}
+
+function paginate<T>(rows: T[], page: number, size: number) {
+  const totalPages = Math.max(1, Math.ceil(rows.length / size));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const start = (safePage - 1) * size;
+  return { rows: rows.slice(start, start + size), page: safePage, totalPages };
+}
+
+function weekRange(value: string) {
+  const selected = new Date(`${value}T00:00:00`);
+  const start = new Date(selected);
+  start.setDate(selected.getDate() - selected.getDay());
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return { start: localDateKey(start), end: localDateKey(end) };
+}
+
+function scheduleDuration(item: TuitionTeacherPortalClass) {
+  const [sh, sm] = item.start_time.split(":").map(Number);
+  const [eh, em] = item.end_time.split(":").map(Number);
+  const start = (Number.isFinite(sh) ? sh : 0) * 60 + (Number.isFinite(sm) ? sm : 0);
+  let end = (Number.isFinite(eh) ? eh : 0) * 60 + (Number.isFinite(em) ? em : 0);
+  if (end <= start) end += 24 * 60;
+  return Math.max(1, end - start);
+}
+
+function zonedParts(date: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    weekday: "long",
+  });
+  const parts = formatter.formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || "";
+  return {
+    year: Number(get("year")),
+    month: Number(get("month")),
+    day: Number(get("day")),
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+    second: Number(get("second")),
+    weekday: get("weekday").toLowerCase(),
+  };
+}
+
+function timeZoneOffsetMs(date: Date, timeZone: string) {
+  const parts = zonedParts(date, timeZone);
+  return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second) - date.getTime();
+}
+
+function zonedLocalToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+) {
+  const desired = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  let candidate = desired;
+  for (let index = 0; index < 3; index += 1) {
+    candidate = desired - timeZoneOffsetMs(new Date(candidate), timeZone);
+  }
+  return new Date(candidate);
+}
+
+function addUtcDays(date: Date, days: number) {
+  const result = new Date(date);
+  result.setUTCDate(result.getUTCDate() + days);
+  return result;
+}
+
+function getScheduleTiming(item: TuitionTeacherPortalClass, now = new Date()): ScheduleTiming {
+  const timeZone = item.timezone_name || "Asia/Karachi";
+  const parts = zonedParts(now, timeZone);
+  const currentDay = WEEKDAYS.indexOf(parts.weekday as (typeof WEEKDAYS)[number]);
+  const targetDay = WEEKDAYS.indexOf(String(item.weekday || "").toLowerCase() as (typeof WEEKDAYS)[number]);
+  const safeCurrent = currentDay >= 0 ? currentDay : 0;
+  const safeTarget = targetDay >= 0 ? targetDay : safeCurrent;
+  const daysUntil = (safeTarget - safeCurrent + 7) % 7;
+  const localDate = addUtcDays(new Date(Date.UTC(parts.year, parts.month - 1, parts.day)), daysUntil);
+  const [hour, minute] = item.start_time.split(":").map(Number);
+  let start = zonedLocalToUtc(
+    localDate.getUTCFullYear(),
+    localDate.getUTCMonth() + 1,
+    localDate.getUTCDate(),
+    Number.isFinite(hour) ? hour : 0,
+    Number.isFinite(minute) ? minute : 0,
+    timeZone,
+  );
+  const duration = scheduleDuration(item);
+  let end = new Date(start.getTime() + duration * 60_000);
+  const previousStart = new Date(start.getTime() - 7 * 24 * 60 * 60_000);
+  const previousEnd = new Date(previousStart.getTime() + duration * 60_000);
+  if (now >= previousStart && now < previousEnd) {
+    start = previousStart;
+    end = previousEnd;
+  } else if (now >= end) {
+    start = new Date(start.getTime() + 7 * 24 * 60 * 60_000);
+    end = new Date(start.getTime() + duration * 60_000);
+  }
+  return {
+    start,
+    end,
+    isLive: now >= start && now < end,
+    isUpcoming: now < start,
+    secondsUntil: Math.max(0, Math.ceil((start.getTime() - now.getTime()) / 1000)),
+  };
+}
+
+function countdownLabel(seconds: number) {
+  if (seconds <= 1) return "Starting now";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remaining = seconds % 60;
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m ${remaining}s`;
+  return `${minutes}m ${remaining}s`;
+}
+
+function attendanceRate(rows: TuitionTeacherPortalAttendance[]) {
+  const present = rows.filter((item) => item.status === "present").length;
+  const absent = rows.filter((item) => item.status === "absent").length;
+  return present + absent > 0 ? Math.round((present / (present + absent)) * 100) : 0;
+}
+
+export default function TuitionTeacherPortal({
+  departmentId,
+  themeMode,
+  onToggleTheme,
+  onLogout,
+}: Props) {
+  const [data, setData] = useState<TuitionTeacherPortalResponse | null>(null);
+  const [activeTab, setActiveTab] = useState<PortalTab>("overview");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const [now, setNow] = useState(new Date());
+
+  const [classDay, setClassDay] = useState("all");
+  const [classSubject, setClassSubject] = useState("all");
+  const [classSearch, setClassSearch] = useState("");
+  const [classPage, setClassPage] = useState(1);
+
+  const [attendancePeriod, setAttendancePeriod] = useState<AttendancePeriod>("daily");
+  const [attendanceDate, setAttendanceDate] = useState(localDateKey());
+  const [attendanceMonth, setAttendanceMonth] = useState(new Date().getMonth() + 1);
+  const [attendanceYear, setAttendanceYear] = useState(new Date().getFullYear());
+  const [attendanceStatus, setAttendanceStatus] = useState<AttendanceStatus>("all");
+  const [attendanceSubject, setAttendanceSubject] = useState("all");
+  const [attendanceSearch, setAttendanceSearch] = useState("");
+  const [attendancePage, setAttendancePage] = useState(1);
+
+  const loadPortal = async (silent = false) => {
+    try {
+      if (!silent) setRefreshing(true);
+      const response = await getTuitionTeacherPortal(departmentId);
+      setData(response);
+      setError("");
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : "Could not load the Tuition Teacher Portal.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadPortal();
+    const refreshTimer = window.setInterval(() => void loadPortal(true), 30_000);
+    const clockTimer = window.setInterval(() => setNow(new Date()), 1_000);
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.clearInterval(clockTimer);
+    };
+  }, [departmentId]);
+
+  useAcademyWS((event) => {
+    const type = String(event?.type || "");
+    if (
+      type === "connected" ||
+      type === "academy.update" ||
+      type === "academy_update" ||
+      type === "tuition_attendance_updated" ||
+      type === "tuition_schedule_updated" ||
+      type === "tuition_enrollment_updated" ||
+      type === "attendance_marked"
+    ) {
+      void loadPortal(true);
+    }
+  });
+
+  useEffect(() => setClassPage(1), [classDay, classSubject, classSearch]);
+  useEffect(
+    () => setAttendancePage(1),
+    [attendancePeriod, attendanceDate, attendanceMonth, attendanceYear, attendanceStatus, attendanceSubject, attendanceSearch],
+  );
+
+  const classes = data?.classes || [];
+  const attendance = data?.attendance || [];
+  const teacherName = data?.teacher.name || data?.user.full_name || data?.user.username || "Teacher";
+  const subjectNames = useMemo(
+    () => Array.from(new Set(classes.map((item) => item.subject_name).filter(Boolean))).sort(),
+    [classes],
+  );
+
+  const classItems = useMemo(
+    () =>
+      classes
+        .map((item) => ({ item, timing: getScheduleTiming(item, now) }))
+        .sort((a, b) => a.timing.start.getTime() - b.timing.start.getTime()),
+    [classes, now],
+  );
+  const liveClasses = classItems.filter(({ timing }) => timing.isLive);
+  const nextClass = classItems.find(({ timing }) => timing.isUpcoming) || null;
+  const todayKey = localDateKey(now);
+  const todayClasses = classItems.filter(({ timing }) => localDateKey(timing.start) === todayKey);
+
+  const filteredClasses = useMemo(() => {
+    const query = classSearch.trim().toLowerCase();
+    return classItems.filter(({ item }) => {
+      if (classDay !== "all" && item.weekday.toLowerCase() !== classDay) return false;
+      if (classSubject !== "all" && item.subject_name !== classSubject) return false;
+      if (!query) return true;
+      return [item.student_name, item.subject_name, item.class_name, item.weekday]
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    });
+  }, [classItems, classDay, classSubject, classSearch]);
+
+  const filteredAttendance = useMemo(() => {
+    const query = attendanceSearch.trim().toLowerCase();
+    let rows = [...attendance];
+    if (attendancePeriod === "daily") {
+      rows = rows.filter((item) => item.date === attendanceDate);
+    } else if (attendancePeriod === "weekly") {
+      const range = weekRange(attendanceDate);
+      rows = rows.filter((item) => item.date >= range.start && item.date <= range.end);
+    } else {
+      const prefix = `${attendanceYear}-${String(attendanceMonth).padStart(2, "0")}`;
+      rows = rows.filter((item) => item.date.startsWith(prefix));
+    }
+    if (attendanceStatus !== "all") rows = rows.filter((item) => item.status === attendanceStatus);
+    if (attendanceSubject !== "all") rows = rows.filter((item) => item.subject_name === attendanceSubject);
+    if (query) {
+      rows = rows.filter((item) =>
+        [item.student_name, item.subject_name, item.class_name, item.date, item.weekday]
+          .join(" ")
+          .toLowerCase()
+          .includes(query),
+      );
+    }
+    return rows.sort((a, b) => b.date.localeCompare(a.date) || String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+  }, [attendance, attendancePeriod, attendanceDate, attendanceMonth, attendanceYear, attendanceStatus, attendanceSubject, attendanceSearch]);
+
+  const classPagination = paginate(filteredClasses, classPage, CLASS_PAGE_SIZE);
+  const attendancePagination = paginate(filteredAttendance, attendancePage, ATTENDANCE_PAGE_SIZE);
+  const totals = useMemo(() => {
+    const present = filteredAttendance.filter((item) => item.status === "present").length;
+    const absent = filteredAttendance.filter((item) => item.status === "absent").length;
+    const leave = filteredAttendance.filter((item) => item.status === "leave").length;
+    return { present, absent, leave, rate: attendanceRate(filteredAttendance) };
+  }, [filteredAttendance]);
+
+  const navItems: Array<{ tab: PortalTab; label: string; icon: LucideIcon }> = [
+    { tab: "overview", label: "Overview", icon: LayoutDashboard },
+    { tab: "classes", label: "Total Classes", icon: CalendarDays },
+    { tab: "attendance", label: "Attendance", icon: CheckCircle2 },
+  ];
+
+  const handleLogout = () => {
+    logoutFromDjango();
+    onLogout();
+  };
+
+  if (loading) {
+    return (
+      <div className={`${themeMode === "dark" ? "dark" : ""} min-h-screen bg-slate-50 p-4 dark:bg-slate-950 sm:p-6`}>
+        <div className="mx-auto max-w-[1500px]">
+          <PageSkeleton variant="portal" cards={6} label="Loading Tuition Teacher Portal" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{ colorScheme: themeMode }}
+      className={`${themeMode === "dark" ? "dark" : ""} h-screen overflow-hidden bg-[#f4f7fb] font-sans text-slate-900 dark:bg-[#07101f] dark:text-slate-100`}
+    >
+      <div className="pointer-events-none fixed inset-0 overflow-hidden">
+        <div className="absolute -left-28 top-0 h-[420px] w-[420px] rounded-full bg-indigo-300/18 blur-3xl dark:bg-indigo-950/24" />
+        <div className="absolute -right-24 top-1/3 h-[420px] w-[420px] rounded-full bg-cyan-300/16 blur-3xl dark:bg-cyan-950/18" />
+      </div>
+
+      {mobileMenuOpen && (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={() => setMobileMenuOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-sm lg:hidden"
+        />
+      )}
+
+      <div className="relative flex h-full">
+        <aside
+          className={`fixed inset-y-0 left-0 z-50 flex w-[min(86vw,286px)] flex-col border-r border-slate-200 bg-white p-4 shadow-2xl transition-transform duration-300 dark:border-slate-800 dark:bg-[#0b1424] lg:static lg:w-[286px] lg:translate-x-0 ${
+            mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
+        >
+          <div className="flex items-center gap-3 rounded-[24px] border border-slate-200/80 bg-white p-3 shadow-[0_14px_40px_rgba(15,23,42,0.08)] dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] border border-indigo-100 bg-gradient-to-br from-indigo-50 to-cyan-50 dark:border-indigo-900 dark:from-indigo-950 dark:to-cyan-950">
+              <img src="/tuition-logo.png" alt="Tuition Department" className="h-11 w-11 object-contain" />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-black text-slate-950 dark:text-white">Iqra Virtual School</p>
+              <p className="mt-0.5 text-[11px] font-extrabold uppercase tracking-[0.16em] text-indigo-600 dark:text-indigo-300">Tuition Teacher</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(false)}
+              className="ml-auto flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 lg:hidden"
+              aria-label="Close navigation"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <nav className="mt-6 flex-1 space-y-2">
+            {navItems.map(({ tab, label, icon: Icon }) => {
+              const active = activeTab === tab;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => {
+                    setActiveTab(tab);
+                    setMobileMenuOpen(false);
+                  }}
+                  className={`group flex w-full items-center gap-3 rounded-[20px] border px-3 py-3 text-left transition ${
+                    active
+                      ? "border-indigo-200 bg-gradient-to-r from-indigo-50 to-cyan-50 text-indigo-700 shadow-[0_12px_28px_rgba(79,70,229,0.12)] dark:border-indigo-800 dark:from-indigo-950/80 dark:to-cyan-950/60 dark:text-indigo-200"
+                      : "border-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-950 dark:text-slate-400 dark:hover:border-slate-800 dark:hover:bg-slate-900 dark:hover:text-white"
+                  }`}
+                >
+                  <span className={`flex h-11 w-11 items-center justify-center rounded-2xl border ${active ? "border-indigo-200 bg-white text-indigo-600 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-300" : "border-slate-200 bg-white text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400"}`}>
+                    <Icon size={19} />
+                  </span>
+                  <span className="text-sm font-black">{label}</span>
+                  {active && <ChevronRight size={17} className="ml-auto" />}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
+            <div className="flex items-center gap-3 rounded-[20px] border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 to-cyan-500 text-sm font-black text-white shadow-lg shadow-indigo-500/20">
+                {initials(teacherName)}
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-black text-slate-900 dark:text-white">{teacherName}</p>
+                <p className="truncate text-[11px] font-bold text-slate-500 dark:text-slate-400">Teacher account</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="flex w-full items-center justify-center gap-2 rounded-[18px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-black text-rose-700 transition hover:bg-rose-100 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300"
+            >
+              <LogOut size={17} /> Logout
+            </button>
+          </div>
+        </aside>
+
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <header className="z-20 flex min-h-[76px] items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur-xl dark:border-slate-800 dark:bg-[#0b1424]/95 sm:px-6 lg:px-8">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(true)}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 lg:hidden"
+                aria-label="Open navigation"
+              >
+                <Menu size={20} />
+              </button>
+              <div className="min-w-0">
+                <h1 className="truncate text-lg font-black tracking-tight text-slate-950 dark:text-white sm:text-xl">
+                  {activeTab === "overview" && "Teacher Dashboard"}
+                  {activeTab === "classes" && "Total Classes"}
+                  {activeTab === "attendance" && "My Attendance"}
+                </h1>
+                <p className="mt-0.5 hidden truncate text-xs font-bold text-slate-500 dark:text-slate-400 sm:block">{formatPortalDate(now)}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 sm:gap-3">
+              <PortalClock now={now} />
+              <button
+                type="button"
+                onClick={() => void loadPortal()}
+                disabled={refreshing}
+                className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:-translate-y-0.5 hover:text-indigo-600 disabled:opacity-60 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300"
+                aria-label="Refresh portal"
+                title="Refresh portal"
+              >
+                <RefreshCw size={18} className={refreshing ? "animate-spin" : ""} />
+              </button>
+              <button
+                type="button"
+                onClick={onToggleTheme}
+                className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:-translate-y-0.5 hover:text-indigo-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300"
+                aria-label="Toggle theme"
+                title="Toggle theme"
+              >
+                {themeMode === "light" ? <Moon size={18} /> : <Sun size={18} />}
+              </button>
+            </div>
+          </header>
+
+          {error && (
+            <div className="mx-4 mt-4 flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-200 sm:mx-6 lg:mx-8">
+              <AlertCircle size={18} className="shrink-0" />
+              <span className="min-w-0 flex-1">{error}</span>
+              <button type="button" onClick={() => void loadPortal()} className="font-black underline underline-offset-4">Retry</button>
+            </div>
+          )}
+
+          <div className="teacher-portal-scroll flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:pb-8">
+            <div className="mx-auto max-w-[1560px]">
+              {activeTab === "overview" && (
+                <OverviewTab
+                  data={data}
+                  teacherName={teacherName}
+                  classItems={classItems}
+                  liveClasses={liveClasses}
+                  nextClass={nextClass}
+                  todayClasses={todayClasses}
+                  attendance={attendance}
+                  onOpenClasses={() => setActiveTab("classes")}
+                  onOpenAttendance={() => setActiveTab("attendance")}
+                />
+              )}
+
+              {activeTab === "classes" && (
+                <ClassesTab
+                  rows={classPagination.rows}
+                  totalRows={filteredClasses.length}
+                  subjectNames={subjectNames}
+                  day={classDay}
+                  setDay={setClassDay}
+                  subject={classSubject}
+                  setSubject={setClassSubject}
+                  search={classSearch}
+                  setSearch={setClassSearch}
+                  page={classPagination.page}
+                  totalPages={classPagination.totalPages}
+                  setPage={setClassPage}
+                />
+              )}
+
+              {activeTab === "attendance" && (
+                <AttendanceTab
+                  rows={attendancePagination.rows}
+                  totalRows={filteredAttendance.length}
+                  totals={totals}
+                  subjectNames={subjectNames}
+                  period={attendancePeriod}
+                  setPeriod={setAttendancePeriod}
+                  date={attendanceDate}
+                  setDate={setAttendanceDate}
+                  month={attendanceMonth}
+                  setMonth={setAttendanceMonth}
+                  year={attendanceYear}
+                  setYear={setAttendanceYear}
+                  status={attendanceStatus}
+                  setStatus={setAttendanceStatus}
+                  subject={attendanceSubject}
+                  setSubject={setAttendanceSubject}
+                  search={attendanceSearch}
+                  setSearch={setAttendanceSearch}
+                  page={attendancePagination.page}
+                  totalPages={attendancePagination.totalPages}
+                  setPage={setAttendancePage}
+                />
+              )}
+            </div>
+          </div>
+        </main>
+      </div>
+
+      <style>{`
+        .teacher-portal-scroll { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+        .teacher-portal-scroll::-webkit-scrollbar { width: 10px; }
+        .teacher-portal-scroll::-webkit-scrollbar-track { background: transparent; }
+        .teacher-portal-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; border: 3px solid transparent; background-clip: padding-box; }
+        .dark .teacher-portal-scroll { scrollbar-color: #334155 transparent; }
+        .dark .teacher-portal-scroll::-webkit-scrollbar-thumb { background: #334155; border: 3px solid transparent; background-clip: padding-box; }
+      `}</style>
+    </div>
+  );
+}
+
+function PortalClock({ now }: { now: Date }) {
+  const second = now.getSeconds() * 6;
+  const minute = now.getMinutes() * 6 + now.getSeconds() * 0.1;
+  const hour = (now.getHours() % 12) * 30 + now.getMinutes() * 0.5;
+  return (
+    <div className="hidden h-12 items-center gap-3 rounded-[18px] border border-slate-200 bg-white px-3 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:flex">
+      <div className="relative h-9 w-9 rounded-full border-2 border-slate-200 bg-gradient-to-br from-white to-indigo-50 shadow-inner dark:border-slate-700 dark:from-slate-800 dark:to-indigo-950">
+        {[0, 3, 6, 9].map((marker) => (
+          <span
+            key={marker}
+            className="absolute left-1/2 top-1/2 h-1.5 w-1.5 rounded-full bg-slate-400"
+            style={{ transform: `translate(-50%, -50%) rotate(${marker * 30}deg) translateY(-12px)` }}
+          />
+        ))}
+        <span className="absolute left-1/2 top-1/2 h-[10px] w-[2px] origin-bottom rounded-full bg-slate-700 dark:bg-slate-200" style={{ transform: `translate(-50%, -100%) rotate(${hour}deg)` }} />
+        <span className="absolute left-1/2 top-1/2 h-[13px] w-[2px] origin-bottom rounded-full bg-indigo-600" style={{ transform: `translate(-50%, -100%) rotate(${minute}deg)` }} />
+        <span className="absolute left-1/2 top-1/2 h-[14px] w-px origin-bottom rounded-full bg-rose-500" style={{ transform: `translate(-50%, -100%) rotate(${second}deg)` }} />
+        <span className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-indigo-600 ring-2 ring-white dark:ring-slate-900" />
+      </div>
+      <div className="leading-tight">
+        <p className="text-sm font-black text-slate-950 dark:text-white">{formatTime(now)}</p>
+        <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-slate-400">{now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</p>
+      </div>
+    </div>
+  );
+}
+
+function OverviewTab({
+  data,
+  teacherName,
+  classItems,
+  liveClasses,
+  nextClass,
+  todayClasses,
+  attendance,
+  onOpenClasses,
+  onOpenAttendance,
+}: {
+  data: TuitionTeacherPortalResponse | null;
+  teacherName: string;
+  classItems: Array<{ item: TuitionTeacherPortalClass; timing: ScheduleTiming }>;
+  liveClasses: Array<{ item: TuitionTeacherPortalClass; timing: ScheduleTiming }>;
+  nextClass: { item: TuitionTeacherPortalClass; timing: ScheduleTiming } | null;
+  todayClasses: Array<{ item: TuitionTeacherPortalClass; timing: ScheduleTiming }>;
+  attendance: TuitionTeacherPortalAttendance[];
+  onOpenClasses: () => void;
+  onOpenAttendance: () => void;
+}) {
+  const rate = attendanceRate(attendance);
+  const present = attendance.filter((item) => item.status === "present").length;
+  const absent = attendance.filter((item) => item.status === "absent").length;
+  const leave = attendance.filter((item) => item.status === "leave").length;
+
+  return (
+    <div className="space-y-6">
+      <section className="relative overflow-hidden rounded-[32px] border border-indigo-200/80 bg-gradient-to-br from-indigo-600 via-violet-600 to-cyan-500 p-6 text-white shadow-[0_24px_60px_rgba(79,70,229,0.24)] sm:p-8">
+        <div className="absolute -right-16 -top-20 h-64 w-64 rounded-full bg-white/12 blur-2xl" />
+        <div className="absolute -bottom-24 left-1/3 h-64 w-64 rounded-full bg-cyan-200/16 blur-3xl" />
+        <div className="relative grid gap-6 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div className="flex items-center gap-4">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[22px] border border-white/25 bg-white/16 text-xl font-black shadow-lg backdrop-blur-xl sm:h-20 sm:w-20 sm:text-2xl">
+              {initials(teacherName)}
+            </div>
+            <div>
+              <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-indigo-100">Tuition Teacher Portal</p>
+              <h2 className="mt-2 text-2xl font-black tracking-tight sm:text-3xl">Welcome back, {teacherName}</h2>
+              <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-indigo-50/90">
+                Track every class, student, and attendance record from one clean workspace.
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <button type="button" onClick={onOpenClasses} className="rounded-2xl border border-white/25 bg-white/14 px-4 py-3 text-sm font-black backdrop-blur transition hover:bg-white/22">View classes</button>
+            <button type="button" onClick={onOpenAttendance} className="rounded-2xl bg-white px-4 py-3 text-sm font-black text-indigo-700 shadow-lg transition hover:-translate-y-0.5">Attendance</button>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="Total classes" value={classItems.length} detail="Weekly scheduled sessions" icon={CalendarDays} tone="indigo" />
+        <MetricCard label="Active students" value={data?.counts.active_students || 0} detail="Students assigned to you" icon={UsersRound} tone="cyan" />
+        <MetricCard label="Subjects" value={data?.counts.subjects || 0} detail="Subjects currently teaching" icon={BookOpen} tone="violet" />
+        <MetricCard label="Attendance rate" value={`${rate}%`} detail="Present versus absent" icon={CheckCircle2} tone="emerald" />
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <SpotlightCard title="Live Now" row={liveClasses[0] || null} live empty="No class is live right now." />
+        <SpotlightCard title="Up Next" row={nextClass} empty="No upcoming class is scheduled." />
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className={`${CARD} p-5 sm:p-6`}>
+          <SectionHeading icon={CalendarDays} title="Today’s Classes" description="Class times are shown in your device timezone." badge={`${todayClasses.length} today`} />
+          {todayClasses.length ? (
+            <div className="mt-5 grid gap-3">
+              {todayClasses.slice(0, 4).map((row) => <ClassRow key={row.item.id} row={row} compact />)}
+            </div>
+          ) : (
+            <EmptyState icon={CalendarDays} title="No classes today" description="Your next scheduled class will appear here automatically." />
+          )}
+          {classItems.length > 0 && (
+            <button type="button" onClick={onOpenClasses} className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:bg-indigo-700 dark:bg-indigo-600 dark:hover:bg-indigo-500">
+              Open all classes <ArrowRight size={17} />
+            </button>
+          )}
+        </div>
+
+        <div className={`${CARD} p-5 sm:p-6`}>
+          <SectionHeading icon={CheckCircle2} title="Attendance Snapshot" description="Your class-based Tuition attendance." />
+          <div className="mt-5 flex flex-col gap-5 sm:flex-row sm:items-center">
+            <div className="relative mx-auto flex h-36 w-36 shrink-0 items-center justify-center rounded-full bg-[conic-gradient(#10b981_var(--rate),#e2e8f0_0)] p-4 dark:bg-[conic-gradient(#34d399_var(--rate),#1e293b_0)]" style={{ "--rate": `${rate * 3.6}deg` } as React.CSSProperties}>
+              <div className="flex h-full w-full flex-col items-center justify-center rounded-full bg-white dark:bg-slate-900">
+                <span className="text-3xl font-black text-slate-950 dark:text-white">{rate}%</span>
+                <span className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">Attendance</span>
+              </div>
+            </div>
+            <div className="grid flex-1 grid-cols-3 gap-3">
+              <StatusMetric label="Present" value={present} tone="emerald" />
+              <StatusMetric label="Absent" value={absent} tone="rose" />
+              <StatusMetric label="Leave" value={leave} tone="amber" />
+            </div>
+          </div>
+          <button type="button" onClick={onOpenAttendance} className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:bg-indigo-700 dark:bg-indigo-600 dark:hover:bg-indigo-500">
+            Open attendance <ArrowRight size={17} />
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ClassesTab({
+  rows,
+  totalRows,
+  subjectNames,
+  day,
+  setDay,
+  subject,
+  setSubject,
+  search,
+  setSearch,
+  page,
+  totalPages,
+  setPage,
+}: {
+  rows: Array<{ item: TuitionTeacherPortalClass; timing: ScheduleTiming }>;
+  totalRows: number;
+  subjectNames: string[];
+  day: string;
+  setDay: (value: string) => void;
+  subject: string;
+  setSubject: (value: string) => void;
+  search: string;
+  setSearch: (value: string) => void;
+  page: number;
+  totalPages: number;
+  setPage: (value: number) => void;
+}) {
+  return (
+    <div className="space-y-6">
+      <section className={`${CARD} p-5 sm:p-6`}>
+        <SectionHeading icon={CalendarDays} title="Total Classes" description="Every active class assigned to your Tuition teacher account." badge={`${totalRows} classes`} />
+        <div className="mt-5 grid gap-3 md:grid-cols-[1fr_180px_220px]">
+          <label className="relative">
+            <Search size={17} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search student, subject, or class..." className={`${FIELD} w-full pl-10`} />
+          </label>
+          <select value={day} onChange={(event) => setDay(event.target.value)} className={FIELD}>
+            <option value="all">All days</option>
+            {WEEKDAYS.map((item) => <option key={item} value={item}>{titleCase(item)}</option>)}
+          </select>
+          <select value={subject} onChange={(event) => setSubject(event.target.value)} className={FIELD}>
+            <option value="all">All subjects</option>
+            {subjectNames.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
+        </div>
+      </section>
+
+      {rows.length ? (
+        <section className="grid gap-4 lg:grid-cols-2">
+          {rows.map((row) => <ClassRow key={row.item.id} row={row} />)}
+        </section>
+      ) : (
+        <div className={CARD}><EmptyState icon={CalendarDays} title="No classes found" description="Try changing the day, subject, or search filter." /></div>
+      )}
+
+      <Pagination page={page} totalPages={totalPages} onChange={setPage} label={`${totalRows} matching classes`} />
+    </div>
+  );
+}
+
+function AttendanceTab({
+  rows,
+  totalRows,
+  totals,
+  subjectNames,
+  period,
+  setPeriod,
+  date,
+  setDate,
+  month,
+  setMonth,
+  year,
+  setYear,
+  status,
+  setStatus,
+  subject,
+  setSubject,
+  search,
+  setSearch,
+  page,
+  totalPages,
+  setPage,
+}: {
+  rows: TuitionTeacherPortalAttendance[];
+  totalRows: number;
+  totals: { present: number; absent: number; leave: number; rate: number };
+  subjectNames: string[];
+  period: AttendancePeriod;
+  setPeriod: (value: AttendancePeriod) => void;
+  date: string;
+  setDate: (value: string) => void;
+  month: number;
+  setMonth: (value: number) => void;
+  year: number;
+  setYear: (value: number) => void;
+  status: AttendanceStatus;
+  setStatus: (value: AttendanceStatus) => void;
+  subject: string;
+  setSubject: (value: string) => void;
+  search: string;
+  setSearch: (value: string) => void;
+  page: number;
+  totalPages: number;
+  setPage: (value: number) => void;
+}) {
+  const years = Array.from({ length: 5 }, (_, index) => new Date().getFullYear() - index);
+  return (
+    <div className="space-y-6">
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="Attendance rate" value={`${totals.rate}%`} detail="Present versus absent" icon={CheckCircle2} tone="indigo" />
+        <MetricCard label="Present" value={totals.present} detail="Classes attended" icon={CheckCircle2} tone="emerald" />
+        <MetricCard label="Absent" value={totals.absent} detail="Missed classes" icon={XCircle} tone="rose" />
+        <MetricCard label="Leave" value={totals.leave} detail="Approved leave" icon={TimerReset} tone="amber" />
+      </section>
+
+      <section className={`${CARD} p-5 sm:p-6`}>
+        <SectionHeading icon={CheckCircle2} title="Attendance Records" description="Your attendance is tracked separately for every scheduled class." badge={`${totalRows} records`} />
+        <div className="mt-5 grid gap-3 xl:grid-cols-[auto_1fr_180px_220px]">
+          <div className="flex rounded-2xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-950">
+            {(["daily", "weekly", "monthly"] as AttendancePeriod[]).map((item) => (
+              <button key={item} type="button" onClick={() => setPeriod(item)} className={`rounded-xl px-3 py-2 text-xs font-black transition ${period === item ? "bg-white text-indigo-700 shadow-sm dark:bg-slate-800 dark:text-indigo-300" : "text-slate-500"}`}>{titleCase(item)}</button>
+            ))}
+          </div>
+          {period === "monthly" ? (
+            <div className="grid grid-cols-2 gap-3">
+              <select value={month} onChange={(event) => setMonth(Number(event.target.value))} className={FIELD}>
+                {Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={index + 1}>{new Date(2026, index, 1).toLocaleDateString("en-US", { month: "long" })}</option>)}
+              </select>
+              <select value={year} onChange={(event) => setYear(Number(event.target.value))} className={FIELD}>
+                {years.map((item) => <option key={item} value={item}>{item}</option>)}
+              </select>
+            </div>
+          ) : (
+            <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className={FIELD} />
+          )}
+          <select value={status} onChange={(event) => setStatus(event.target.value as AttendanceStatus)} className={FIELD}>
+            <option value="all">All statuses</option>
+            <option value="present">Present</option>
+            <option value="absent">Absent</option>
+            <option value="leave">Leave</option>
+          </select>
+          <select value={subject} onChange={(event) => setSubject(event.target.value)} className={FIELD}>
+            <option value="all">All subjects</option>
+            {subjectNames.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
+        </div>
+        <label className="relative mt-3 block">
+          <Search size={17} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search student, subject, class, or date..." className={`${FIELD} w-full pl-10`} />
+        </label>
+      </section>
+
+      <section className={`${CARD} overflow-hidden`}>
+        {rows.length ? (
+          <>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="min-w-full text-left">
+                <thead className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-black uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-950/70">
+                  <tr><th className="px-5 py-4">Date</th><th className="px-5 py-4">Class</th><th className="px-5 py-4">Student</th><th className="px-5 py-4">Time</th><th className="px-5 py-4">Status</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {rows.map((item) => (
+                    <tr key={item.id} className="transition hover:bg-slate-50/80 dark:hover:bg-slate-950/50">
+                      <td className="px-5 py-4 text-sm font-black text-slate-800 dark:text-slate-100">{formatDate(item.date)}</td>
+                      <td className="px-5 py-4"><p className="text-sm font-black text-slate-900 dark:text-white">{item.subject_name || "Tuition class"}</p><p className="mt-1 text-xs font-bold text-slate-500">{item.class_name || "Class not specified"}</p></td>
+                      <td className="px-5 py-4 text-sm font-bold text-slate-700 dark:text-slate-300">{item.student_name || "Assigned student"}</td>
+                      <td className="px-5 py-4 text-sm font-bold text-slate-600 dark:text-slate-400">{item.start_time && item.end_time ? `${item.start_time}–${item.end_time}` : "Not available"}</td>
+                      <td className="px-5 py-4"><AttendanceBadge status={item.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="grid gap-3 p-4 md:hidden">
+              {rows.map((item) => (
+                <article key={item.id} className="rounded-[22px] border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                  <div className="flex items-start justify-between gap-3"><div><p className="text-sm font-black text-slate-900 dark:text-white">{item.subject_name || "Tuition class"}</p><p className="mt-1 text-xs font-bold text-slate-500">{item.student_name || "Assigned student"} · {item.class_name || "Class"}</p></div><AttendanceBadge status={item.status} /></div>
+                  <div className="mt-4 flex items-center justify-between text-xs font-bold text-slate-500"><span>{formatDate(item.date)}</span><span>{item.start_time && item.end_time ? `${item.start_time}–${item.end_time}` : "Time unavailable"}</span></div>
+                </article>
+              ))}
+            </div>
+          </>
+        ) : (
+          <EmptyState icon={CheckCircle2} title="No attendance records found" description="Try changing the period, subject, status, or search filters." />
+        )}
+      </section>
+
+      <Pagination page={page} totalPages={totalPages} onChange={setPage} label={`${totalRows} matching records`} />
+    </div>
+  );
+}
+
+function MetricCard({ label, value, detail, icon: Icon, tone }: { label: string; value: string | number; detail: string; icon: LucideIcon; tone: "indigo" | "cyan" | "violet" | "emerald" | "rose" | "amber" }) {
+  const tones = {
+    indigo: "from-indigo-600 to-violet-500 shadow-indigo-500/20",
+    cyan: "from-cyan-500 to-sky-600 shadow-cyan-500/20",
+    violet: "from-violet-600 to-fuchsia-500 shadow-violet-500/20",
+    emerald: "from-emerald-500 to-teal-600 shadow-emerald-500/20",
+    rose: "from-rose-500 to-pink-600 shadow-rose-500/20",
+    amber: "from-amber-400 to-orange-500 shadow-amber-500/20",
+  };
+  return (
+    <article className={`${CARD} flex min-h-[112px] items-center gap-4 p-4 sm:p-5`}>
+      <div className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-gradient-to-br text-white shadow-lg ${tones[tone]}`}><Icon size={23} /></div>
+      <div className="min-w-0"><p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">{label}</p><p className="mt-1 text-2xl font-black text-slate-950 dark:text-white">{value}</p><p className="mt-1 truncate text-xs font-bold text-slate-500 dark:text-slate-400">{detail}</p></div>
+    </article>
+  );
+}
+
+function SpotlightCard({ title, row, live = false, empty }: { title: string; row: { item: TuitionTeacherPortalClass; timing: ScheduleTiming } | null; live?: boolean; empty: string }) {
+  return (
+    <article className={`${CARD} p-5 sm:p-6`}>
+      <div className="flex items-center gap-2"><span className={`h-2.5 w-2.5 rounded-full ${live ? "bg-emerald-500" : "bg-indigo-500"}`} /><h3 className="text-base font-black text-slate-950 dark:text-white">{title}</h3></div>
+      {row ? <div className="mt-4"><ClassRow row={row} compact spotlight /></div> : <div className="mt-4 rounded-[22px] border border-dashed border-slate-200 bg-slate-50/70 px-4 py-6 text-sm font-bold text-slate-500 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-400">{empty}</div>}
+    </article>
+  );
+}
+
+function ClassRow({ row, compact = false, spotlight = false }: { row: { item: TuitionTeacherPortalClass; timing: ScheduleTiming }; compact?: boolean; spotlight?: boolean }) {
+  const { item, timing } = row;
+  return (
+    <article className={`rounded-[24px] border p-4 transition hover:-translate-y-0.5 hover:shadow-lg ${timing.isLive ? "border-emerald-300 bg-emerald-50/80 dark:border-emerald-800 dark:bg-emerald-950/30" : "border-slate-200 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-950/60"}`}>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-4">
+          <div className="min-w-[84px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-center dark:border-slate-700 dark:bg-slate-900"><p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">{titleCase(item.weekday)}</p><p className="mt-1 text-base font-black text-slate-950 dark:text-white">{formatTime(timing.start)}</p><p className="mt-1 text-[11px] font-bold text-slate-500">to {formatTime(timing.end)}</p></div>
+          <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h4 className="truncate text-base font-black text-slate-950 dark:text-white">{item.subject_name || "Tuition class"}</h4>{timing.isLive && <span className="rounded-full bg-emerald-500 px-2.5 py-1 text-[10px] font-black text-white">LIVE</span>}</div><p className="mt-1 truncate text-sm font-bold text-slate-600 dark:text-slate-300">{item.student_name} · {item.class_name}</p><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-slate-500"><span className="flex items-center gap-1.5"><UserRound size={14} /> {item.student_name}</span><span className="flex items-center gap-1.5"><GraduationCap size={14} /> {item.class_name}</span></div></div>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">{timing.isUpcoming && <span className="flex items-center gap-1.5 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300"><Clock3 size={14} /> Starts in {countdownLabel(timing.secondsUntil)}</span>}{item.meeting_link && <a href={item.meeting_link} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 rounded-full bg-slate-950 px-3 py-2 text-xs font-black text-white transition hover:bg-indigo-700 dark:bg-indigo-600"><Video size={14} /> Join class</a>}</div>
+      </div>
+      {!compact && !spotlight && <div className="mt-4 grid gap-2 rounded-2xl border border-slate-200/80 bg-white/80 p-3 text-xs font-bold text-slate-500 dark:border-slate-800 dark:bg-slate-900/80 sm:grid-cols-3"><span>Student: <strong className="text-slate-800 dark:text-slate-200">{item.student_name}</strong></span><span>Program: <strong className="text-slate-800 dark:text-slate-200">{titleCase(item.program_type)}</strong></span><span>Timezone: <strong className="text-slate-800 dark:text-slate-200">{item.timezone_name || "Asia/Karachi"}</strong></span></div>}
+    </article>
+  );
+}
+
+function SectionHeading({ icon: Icon, title, description, badge }: { icon: LucideIcon; title: string; description: string; badge?: string }) {
+  return <div className="flex items-start gap-3"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 dark:bg-indigo-950/70 dark:text-indigo-300"><Icon size={19} /></div><div className="min-w-0"><h3 className="text-lg font-black text-slate-950 dark:text-white">{title}</h3><p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">{description}</p></div>{badge && <span className="ml-auto rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-black text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">{badge}</span>}</div>;
+}
+
+function StatusMetric({ label, value, tone }: { label: string; value: number; tone: "emerald" | "rose" | "amber" }) {
+  const tones = { emerald: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300", rose: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300", amber: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300" };
+  return <div className={`rounded-2xl border p-3 text-center ${tones[tone]}`}><p className="text-xl font-black">{value}</p><p className="mt-1 text-[10px] font-black uppercase tracking-[0.12em]">{label}</p></div>;
+}
+
+function AttendanceBadge({ status }: { status: string }) {
+  const styles = status === "present" ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300" : status === "absent" ? "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-300" : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-300";
+  return <span className={`inline-flex rounded-full border px-3 py-1.5 text-[11px] font-black uppercase tracking-[0.1em] ${styles}`}>{titleCase(status)}</span>;
+}
+
+function EmptyState({ icon: Icon, title, description }: { icon: LucideIcon; title: string; description: string }) {
+  return <div className="flex min-h-[210px] flex-col items-center justify-center px-6 py-10 text-center"><div className="flex h-16 w-16 items-center justify-center rounded-[22px] bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500"><Icon size={27} /></div><h4 className="mt-4 text-base font-black text-slate-900 dark:text-white">{title}</h4><p className="mt-2 max-w-md text-sm font-semibold leading-6 text-slate-500 dark:text-slate-400">{description}</p></div>;
+}
+
+function Pagination({ page, totalPages, onChange, label }: { page: number; totalPages: number; onChange: (value: number) => void; label: string }) {
+  return <div className="flex flex-col items-center justify-between gap-3 rounded-[22px] border border-slate-200 bg-white px-4 py-3 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:flex-row"><p className="text-xs font-bold text-slate-500">{label}</p><div className="flex items-center gap-2"><button type="button" onClick={() => onChange(page - 1)} disabled={page <= 1} className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300"><ChevronLeft size={16} /></button><span className="min-w-[90px] text-center text-xs font-black text-slate-700 dark:text-slate-200">Page {page} of {totalPages}</span><button type="button" onClick={() => onChange(page + 1)} disabled={page >= totalPages} className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-600 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300"><ChevronRight size={16} /></button></div></div>;
+}

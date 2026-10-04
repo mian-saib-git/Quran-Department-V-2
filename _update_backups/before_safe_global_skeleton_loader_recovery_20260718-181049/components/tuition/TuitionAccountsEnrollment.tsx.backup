@@ -1,0 +1,1276 @@
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  AlertCircle,
+  BookOpen,
+  CalendarClock,
+  Check,
+  CheckCircle2,
+  Edit3,
+  GraduationCap,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Search,
+  Settings,
+  ShieldCheck,
+  Trash2,
+  UserRound,
+  Users,
+  X,
+} from "lucide-react";
+import {
+  createTuitionAccount,
+  createTuitionStudentBundle,
+  getTuitionAccounts,
+  getTuitionEnrollments,
+  getTuitionOptions,
+  removeTuitionAccount,
+  updateTuitionAccount,
+  updateTuitionStudentBundle,
+  type TuitionAccount,
+  type TuitionEnrollment,
+  type TuitionOptions,
+  type TuitionStudentBundleInput,
+} from "../../services/tuitionApiService";
+import { useAcademyWS } from "../../hooks/useAcademyWS";
+import { showFeatureLocked } from "../../services/featureAccess";
+import TuitionManagersPanel from "./TuitionManagersPanel";
+import { AccountsSkeleton, CardGridSkeleton } from "../SkeletonLoader";
+import {
+  TUITION_COUNTRY_SCHEDULES,
+  TUITION_COUNTRIES,
+  allTuitionScheduleSlotCodes,
+  getDefaultTuitionSlot,
+  getTuitionEnrollmentScheduleLabel,
+  getTuitionScheduleSlot,
+  getTuitionScheduleSlots,
+  getBrowserTuitionCountryCode,
+} from "./tuitionSchedule";
+
+const TUITION_FLAG_IMAGES: Record<string, string> = {
+  PK: "/tuition-flags/pk.png",
+  KSA: "/tuition-flags/ksa.png",
+  UAE: "/tuition-flags/uae.png",
+};
+
+const TuitionCountryFlag = ({ code, className = "" }: { code?: string | null; className?: string }) => (
+  <img
+    src={TUITION_FLAG_IMAGES[code || "PK"] || TUITION_FLAG_IMAGES.PK}
+    alt={`${code || "PK"} flag`}
+    className={`tuition-country-photo ${className}`}
+  />
+);
+
+type Props = {
+  departmentId: number;
+  features: Record<string, boolean>;
+  currentUserId?: number;
+  currentUserRole?: string;
+};
+
+type View = "managers" | "teachers" | "students";
+
+type TeacherForm = {
+  userId?: number;
+  username: string;
+  password: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  father_name: string;
+  phone: string;
+  address: string;
+  joining_date: string;
+  notes: string;
+  zoom_link: string;
+  available_schedule_slots: string[];
+  tuition_access_active: boolean;
+};
+
+type SubjectRow = {
+  localId: string;
+  id?: number;
+  subject_id: string;
+  custom_subject_name: string;
+  teacher_id: string;
+  schedule_country: string;
+  schedule_slot: string;
+};
+
+type StudentForm = {
+  userId?: number;
+  username: string;
+  password: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  phone: string;
+  notes: string;
+  tuition_access_active: boolean;
+  program_type: "regular" | "crash";
+  class_level_id: string;
+  custom_class_name: string;
+  start_date: string;
+  end_date: string;
+  enrollment_notes: string;
+  subjects: SubjectRow[];
+};
+
+const today = () => new Date().toISOString().slice(0, 10);
+const uid = () => `row_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+const inputClass =
+  "w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-bold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400";
+
+const emptyTeacher = (): TeacherForm => ({
+  username: "",
+  password: "",
+  email: "",
+  first_name: "",
+  last_name: "",
+  father_name: "",
+  phone: "",
+  address: "",
+  joining_date: today(),
+  notes: "",
+  zoom_link: "",
+  available_schedule_slots: allTuitionScheduleSlotCodes(),
+  tuition_access_active: true,
+});
+
+const emptyStudent = (): StudentForm => ({
+  username: "",
+  password: "",
+  email: "",
+  first_name: "",
+  last_name: "",
+  phone: "",
+  notes: "",
+  tuition_access_active: true,
+  program_type: "regular",
+  class_level_id: "",
+  custom_class_name: "",
+  start_date: today(),
+  end_date: "",
+  enrollment_notes: "",
+  subjects: [
+    {
+      localId: uid(),
+      subject_id: "",
+      custom_subject_name: "",
+      teacher_id: "",
+      schedule_country: getBrowserTuitionCountryCode(),
+      schedule_slot: getDefaultTuitionSlot(getBrowserTuitionCountryCode()).code,
+    },
+  ],
+});
+
+function initials(name: string) {
+  return (
+    String(name || "U")
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join("") || "U"
+  );
+}
+
+function Field({
+  label,
+  children,
+  hint,
+}: {
+  label: string;
+  children: React.ReactNode;
+  hint?: string;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-[11px] font-black uppercase tracking-[0.12em] text-slate-500">
+        {label}
+      </span>
+      {children}
+      {hint && (
+        <span className="mt-1.5 block text-[11px] font-semibold leading-5 text-slate-400">
+          {hint}
+        </span>
+      )}
+    </label>
+  );
+}
+
+function Notice({ message }: { message: string }) {
+  if (!message) return null;
+
+  const success = /success|saved|removed|updated|created/i.test(message);
+
+  return (
+    <div
+      className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm font-bold ${
+        success
+          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+          : "border-amber-200 bg-amber-50 text-amber-900"
+      }`}
+    >
+      {success ? (
+        <CheckCircle2 className="mt-0.5 shrink-0" size={18} />
+      ) : (
+        <AlertCircle className="mt-0.5 shrink-0" size={18} />
+      )}
+      <span>{message}</span>
+    </div>
+  );
+}
+
+export default function TuitionAccountsEnrollment({
+  departmentId,
+  features,
+  currentUserId,
+  currentUserRole,
+}: Props) {
+  const canManageCoordinators = [
+    "platform_admin",
+    "institution_admin",
+    "department_admin",
+  ].includes(String(currentUserRole || "").toLowerCase());
+
+  const [view, setView] = useState<View>(() =>
+    canManageCoordinators ? "managers" : "teachers"
+  );
+  const [managerCount, setManagerCount] = useState(0);
+  const [teachers, setTeachers] = useState<TuitionAccount[]>([]);
+  const [students, setStudents] = useState<TuitionAccount[]>([]);
+  const [enrollments, setEnrollments] = useState<TuitionEnrollment[]>([]);
+  const [options, setOptions] = useState<TuitionOptions>({
+    teachers: [],
+    students: [],
+    classes: [],
+    subjects: [],
+  });
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [teacherForm, setTeacherForm] = useState<TeacherForm | null>(null);
+  const [studentForm, setStudentForm] = useState<StudentForm | null>(null);
+
+  const canManage = features.tuition_manage_enrollments === true;
+  const canManageCrash = features.tuition_manage_crash_programs === true;
+
+  useEffect(() => {
+    if (!canManageCoordinators && view === "managers") {
+      setView("teachers");
+    }
+  }, [canManageCoordinators, view]);
+
+  const loadAll = useCallback(async () => {
+    try {
+      setLoading(true);
+      setMessage("");
+
+      const [teacherResponse, studentResponse, enrollmentResponse, optionResponse] =
+        await Promise.all([
+          getTuitionAccounts({
+            department_id: departmentId,
+            role: "teacher",
+            page_size: 100,
+          }),
+          getTuitionAccounts({
+            department_id: departmentId,
+            role: "student",
+            page_size: 100,
+          }),
+          getTuitionEnrollments({
+            department_id: departmentId,
+            page_size: 500,
+          }),
+          getTuitionOptions(departmentId),
+        ]);
+
+      setTeachers(teacherResponse.results || []);
+      setStudents(studentResponse.results || []);
+      setEnrollments(enrollmentResponse.results || []);
+      setOptions(optionResponse);
+    } catch (error: any) {
+      setMessage(
+        error?.message || "Could not load Tuition accounts and enrollments."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [departmentId]);
+
+  useEffect(() => {
+    void loadAll();
+  }, [loadAll]);
+
+  useAcademyWS(
+    useCallback(
+      (data: Record<string, unknown>) => {
+        const event = String((data as any).event || "");
+
+        if (
+          event.startsWith("tuition_account_") ||
+          event.startsWith("tuition_enrollment_") ||
+          event === "tuition_student_workspace_updated"
+        ) {
+          window.setTimeout(() => void loadAll(), 300);
+        }
+      },
+      [loadAll]
+    )
+  );
+
+  const filteredTeachers = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return teachers;
+
+    return teachers.filter((item) =>
+      `${item.full_name} ${item.username} ${item.email}`
+        .toLowerCase()
+        .includes(term)
+    );
+  }, [teachers, search]);
+
+  const filteredStudents = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return students;
+
+    return students.filter((item) => {
+      const studentEnrollments = enrollments.filter(
+        (enrollment) =>
+          enrollment.student_id === item.student_profile?.id &&
+          enrollment.is_active
+      );
+
+      return `${item.full_name} ${item.username} ${item.email} ${studentEnrollments
+        .map(
+          (enrollment) =>
+            `${enrollment.class_name} ${enrollment.subject_name} ${enrollment.teacher_name}`
+        )
+        .join(" ")}`
+        .toLowerCase()
+        .includes(term);
+    });
+  }, [students, enrollments, search]);
+
+  const studentEnrollments = useCallback(
+    (student: TuitionAccount) =>
+      enrollments.filter(
+        (item) =>
+          item.student_id === student.student_profile?.id && item.is_active
+      ),
+    [enrollments]
+  );
+
+  const openCreateTeacher = () => {
+    if (!canManage) {
+      showFeatureLocked(
+        "Tuition Accounts & Enrollment",
+        "Account management is disabled for this department."
+      );
+      return;
+    }
+
+    setTeacherForm(emptyTeacher());
+    setMessage("");
+  };
+
+  const openEditTeacher = (item: TuitionAccount) => {
+    const form = emptyTeacher();
+    form.userId = item.id;
+    form.username = item.username;
+    form.email = item.email || "";
+    form.first_name = item.first_name || "";
+    form.last_name = item.last_name || "";
+    form.father_name = item.teacher_profile?.father_name || "";
+    form.phone = item.teacher_profile?.phone || "";
+    form.address = item.teacher_profile?.address || "";
+    form.joining_date = item.teacher_profile?.joining_date || "";
+    form.notes = item.teacher_profile?.notes || "";
+    form.zoom_link = item.teacher_profile?.zoom_link || "";
+    form.available_schedule_slots = item.teacher_profile?.available_schedule_slots?.length ? item.teacher_profile.available_schedule_slots : allTuitionScheduleSlotCodes();
+    form.tuition_access_active = item.tuition_access_active;
+    setTeacherForm(form);
+    setMessage("");
+  };
+
+  const openCreateStudent = () => {
+    if (!canManage) {
+      showFeatureLocked(
+        "Tuition Accounts & Enrollment",
+        "Account management is disabled for this department."
+      );
+      return;
+    }
+
+    setStudentForm(emptyStudent());
+    setMessage("");
+  };
+
+  const openEditStudent = (item: TuitionAccount) => {
+    const activeEnrollments = studentEnrollments(item);
+    const first = activeEnrollments[0];
+    const form = emptyStudent();
+
+    form.userId = item.id;
+    form.username = item.username;
+    form.email = item.email || "";
+    form.first_name = item.first_name || "";
+    form.last_name = item.last_name || "";
+    form.phone = item.student_profile?.phone || "";
+    form.notes = item.student_profile?.notes || "";
+    form.tuition_access_active = item.tuition_access_active;
+
+    if (first) {
+      form.program_type = first.program_type;
+      form.class_level_id = first.class_level_id
+        ? String(first.class_level_id)
+        : "";
+      form.custom_class_name = first.custom_class_name || "";
+      form.start_date = first.start_date || today();
+      form.end_date = first.end_date || "";
+      form.enrollment_notes = first.notes || "";
+      form.subjects = activeEnrollments.map((enrollment) => ({
+        localId: uid(),
+        id: enrollment.id,
+        subject_id: enrollment.subject_id
+          ? String(enrollment.subject_id)
+          : "",
+        custom_subject_name: enrollment.custom_subject_name || "",
+        teacher_id: String(enrollment.teacher_id),
+        schedule_country: (enrollment as any).schedule_country || getBrowserTuitionCountryCode(),
+        schedule_slot: (enrollment as any).schedule_slot || getDefaultTuitionSlot((enrollment as any).schedule_country || getBrowserTuitionCountryCode()).code,
+      }));
+    }
+
+    setStudentForm(form);
+    setMessage("");
+  };
+
+  const saveTeacher = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!teacherForm) return;
+
+    try {
+      setSaving(true);
+      setMessage("");
+
+      const payload: Record<string, unknown> = {
+        department_id: departmentId,
+        username: teacherForm.username.trim(),
+        email: teacherForm.email.trim(),
+        first_name: teacherForm.first_name.trim(),
+        last_name: teacherForm.last_name.trim(),
+        father_name: teacherForm.father_name.trim(),
+        phone: teacherForm.phone.trim(),
+        joining_date: teacherForm.joining_date || null,
+        available_schedule_slots: teacherForm.available_schedule_slots,
+        tuition_access_active: teacherForm.tuition_access_active,
+      };
+
+      if (teacherForm.password.trim()) {
+        payload.password = teacherForm.password;
+      }
+
+      if (teacherForm.userId) {
+        await updateTuitionAccount(teacherForm.userId, payload);
+      } else {
+        await createTuitionAccount({
+          ...payload,
+          mode: "create",
+          role: "teacher",
+        } as any);
+      }
+
+      setTeacherForm(null);
+      setMessage(
+        teacherForm.userId
+          ? "Teacher account updated successfully."
+          : "Teacher account created successfully."
+      );
+      await loadAll();
+    } catch (error: any) {
+      setMessage(error?.message || "Could not save the teacher account.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const teacherAvailableSlots = useCallback(
+    (teacherId: string | number) => {
+      const teacherIdText = String(teacherId || "");
+      const account = teachers.find((item) => {
+        const profileId = item.teacher_profile?.id ? String(item.teacher_profile.id) : "";
+        const userId = String(item.id);
+        return profileId === teacherIdText || userId === teacherIdText;
+      });
+
+      const fromProfile = account?.teacher_profile?.available_schedule_slots;
+      if (Array.isArray(fromProfile) && fromProfile.length) return fromProfile;
+
+      const option = options.teachers.find((item: any) => String(item.id) === teacherIdText || String(item.user_id) === teacherIdText);
+      const fromOption = (option as any)?.available_schedule_slots;
+      if (Array.isArray(fromOption) && fromOption.length) return fromOption;
+
+      return allTuitionScheduleSlotCodes();
+    },
+    [teachers, options.teachers]
+  );
+
+  const isTeacherAvailableForSlot = useCallback(
+    (teacherId: string | number, slotCode: string) => teacherAvailableSlots(teacherId).includes(slotCode),
+    [teacherAvailableSlots]
+  );
+
+  const getEligibleTeachersForRow = useCallback(
+    (row: SubjectRow) => {
+      let list = options.teachers;
+
+      if (studentForm?.program_type === "regular" && row.subject_id) {
+        const subjectId = Number(row.subject_id);
+        list = list.filter((teacher) =>
+          teacher.subject_capabilities.some((capability) => capability.subject_id === subjectId)
+        );
+      }
+
+      if (row.schedule_slot) {
+        list = list.filter((teacher) => isTeacherAvailableForSlot(teacher.id, row.schedule_slot));
+      }
+
+      return list;
+    },
+    [options.teachers, studentForm?.program_type, isTeacherAvailableForSlot]
+  );
+
+  const validateStudentForm = (form: StudentForm) => {
+    if (!form.username.trim()) return "Username is required.";
+    if (!form.userId && form.password.trim().length < 6) {
+      return "Password must be at least 6 characters.";
+    }
+    if (form.program_type === "regular" && !form.class_level_id) {
+      return "Select the student's class.";
+    }
+    if (form.program_type === "crash" && !form.custom_class_name.trim()) {
+      return "Enter the Crash Program or class name.";
+    }
+    if (!form.subjects.length) return "Add at least one subject.";
+
+    const keys = new Set<string>();
+
+    for (const row of form.subjects) {
+      if (!row.schedule_slot) return "Select a fixed time slot for every subject.";
+      if (!row.teacher_id) return "Select a teacher for every subject.";
+      if (!isTeacherAvailableForSlot(row.teacher_id, row.schedule_slot)) return "The selected teacher is not available for one of the selected time slots.";
+
+      const key =
+        form.program_type === "regular"
+          ? row.subject_id
+          : row.custom_subject_name.trim().toLowerCase();
+
+      if (!key) return "Complete every subject row.";
+      if (keys.has(key)) return "The same subject cannot be added twice.";
+      keys.add(key);
+    }
+
+    return "";
+  };
+
+  const saveStudent = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!studentForm) return;
+
+    const validationMessage = validateStudentForm(studentForm);
+    if (validationMessage) {
+      setMessage(validationMessage);
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setMessage("");
+
+      const bundle: TuitionStudentBundleInput = {
+        department_id: departmentId,
+        account: {
+          username: studentForm.username.trim(),
+          email: studentForm.email.trim(),
+          first_name: studentForm.first_name.trim(),
+          last_name: studentForm.last_name.trim(),
+          phone: studentForm.phone.trim(),
+          notes: studentForm.notes.trim(),
+          tuition_access_active: studentForm.tuition_access_active,
+          ...(studentForm.password.trim()
+            ? { password: studentForm.password }
+            : {}),
+        },
+        enrollments: studentForm.subjects.map((row) => ({
+          id: row.id,
+          program_type: studentForm.program_type,
+          teacher_id: Number(row.teacher_id),
+          class_level_id:
+            studentForm.program_type === "regular"
+              ? Number(studentForm.class_level_id)
+              : null,
+          subject_id:
+            studentForm.program_type === "regular"
+              ? Number(row.subject_id)
+              : null,
+          custom_class_name:
+            studentForm.program_type === "crash"
+              ? studentForm.custom_class_name.trim()
+              : "",
+          custom_subject_name:
+            studentForm.program_type === "crash"
+              ? row.custom_subject_name.trim()
+              : "",
+          start_date: studentForm.start_date,
+          end_date: studentForm.end_date || null,
+          notes: studentForm.enrollment_notes.trim(),
+          schedule_country: row.schedule_country,
+          schedule_slot: row.schedule_slot,
+          schedule_label: getTuitionScheduleSlot(row.schedule_country, row.schedule_slot).label,
+          schedule_start_time: getTuitionScheduleSlot(row.schedule_country, row.schedule_slot).start,
+          schedule_end_time: getTuitionScheduleSlot(row.schedule_country, row.schedule_slot).end,
+          duration_minutes: 40,
+          is_active: true,
+        })),
+      };
+
+      if (studentForm.userId) {
+        await updateTuitionStudentBundle(studentForm.userId, bundle);
+      } else {
+        await createTuitionStudentBundle(bundle);
+      }
+
+      setStudentForm(null);
+      setMessage(
+        studentForm.userId
+          ? "Student account and enrollment updated successfully."
+          : "Student account and enrollment created successfully."
+      );
+      await loadAll();
+    } catch (error: any) {
+      setMessage(error?.message || "Could not save the student account.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteAccount = async (item: TuitionAccount) => {
+    if (
+      !confirm(
+        `Permanently delete ${item.full_name}'s Tuition account? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setMessage("");
+      await removeTuitionAccount(item.id, departmentId, true);
+      setMessage("Tuition account deleted permanently.");
+      await loadAll();
+    } catch (error: any) {
+      setMessage(error?.message || "Could not delete the Tuition account.");
+    }
+  };
+
+  const updateSubjectRow = (
+    localId: string,
+    patch: Partial<SubjectRow>
+  ) => {
+    if (!studentForm) return;
+
+    setStudentForm({
+      ...studentForm,
+      subjects: studentForm.subjects.map((row) =>
+        row.localId === localId ? { ...row, ...patch } : row
+      ),
+    });
+  };
+
+  const addSubjectRow = () => {
+    if (!studentForm) return;
+
+    setStudentForm({
+      ...studentForm,
+      subjects: [
+        ...studentForm.subjects,
+        {
+          localId: uid(),
+          subject_id: "",
+          custom_subject_name: "",
+          teacher_id: "",
+          schedule_country: getBrowserTuitionCountryCode(),
+          schedule_slot: getDefaultTuitionSlot(getBrowserTuitionCountryCode()).code,
+        },
+      ],
+    });
+  };
+
+  const removeSubjectRow = (localId: string) => {
+    if (!studentForm || studentForm.subjects.length <= 1) return;
+
+    setStudentForm({
+      ...studentForm,
+      subjects: studentForm.subjects.filter((row) => row.localId !== localId),
+    });
+  };
+
+  return (
+    <div className="space-y-5">
+      <section className="relative overflow-hidden rounded-[32px] border border-slate-200/80 bg-white/90 p-5 shadow-[0_20px_55px_rgba(15,23,42,0.08)] md:p-7">
+        <div className="pointer-events-none absolute -right-16 -top-20 h-64 w-64 rounded-full bg-indigo-200/30 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-24 left-20 h-56 w-56 rounded-full bg-sky-200/20 blur-3xl" />
+
+        <div className="relative flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex items-center gap-4">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-gradient-to-br from-indigo-600 to-blue-600 text-white shadow-[0_18px_36px_rgba(79,70,229,0.28)]">
+              <ShieldCheck size={24} />
+            </div>
+            <div>
+              <div className="text-[11px] font-black uppercase tracking-[0.18em] text-indigo-500">
+                Tuition Department
+              </div>
+              <h2 className="mt-1 text-2xl font-black tracking-tight text-slate-950">
+                Accounts & Enrollment
+              </h2>
+              <p className="mt-1 text-sm font-semibold text-slate-500">
+                Tuition coordinators, teachers and students. Department-admin credentials stay private in Settings; class, subjects and assigned teachers remain inside each student card.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            {view !== "managers" && (
+              <button
+                type="button"
+                onClick={view === "teachers" ? openCreateTeacher : openCreateStudent}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-xs font-black text-white shadow-[0_10px_24px_rgba(15,23,42,0.18)] transition hover:-translate-y-0.5 hover:bg-slate-800"
+              >
+                <Plus size={16} />
+                {view === "teachers" ? "Add Teacher" : "Add Student"}
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => void loadAll()}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50"
+            >
+              <RefreshCw size={16} /> Refresh
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <Notice message={message} />
+
+      <section className="rounded-[28px] border border-slate-200/80 bg-white/90 p-3 shadow-[0_16px_45px_rgba(15,23,42,0.06)]">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="inline-flex flex-wrap rounded-2xl bg-slate-100 p-1.5">
+            {canManageCoordinators && (
+              <button
+                type="button"
+                onClick={() => {
+                  setView("managers");
+                  setSearch("");
+                }}
+                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-black transition ${
+                  view === "managers"
+                    ? "bg-white text-violet-700 shadow-sm"
+                    : "text-slate-500"
+                }`}
+              >
+                <ShieldCheck size={16} /> Coordinators
+                <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] text-violet-700">
+                  {managerCount}
+                </span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setView("teachers");
+                setSearch("");
+              }}
+              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-black transition ${
+                view === "teachers"
+                  ? "bg-white text-indigo-700 shadow-sm"
+                  : "text-slate-500"
+              }`}
+            >
+              <Users size={16} /> Teachers
+              <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] text-indigo-700">
+                {teachers.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setView("students");
+                setSearch("");
+              }}
+              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-black transition ${
+                view === "students"
+                  ? "bg-white text-emerald-700 shadow-sm"
+                  : "text-slate-500"
+              }`}
+            >
+              <GraduationCap size={16} /> Students
+              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
+                {students.length}
+              </span>
+            </button>
+          </div>
+
+          <div className="relative w-full lg:w-[340px]">
+            <Search
+              className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
+              size={17}
+            />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder={
+                view === "managers"
+                  ? "Coordinator search is available below..."
+                  : view === "teachers"
+                  ? "Search teachers..."
+                  : "Search students, class or subject..."
+              }
+              disabled={view === "managers"}
+              className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-11 pr-4 text-sm font-bold text-slate-900 outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+            />
+          </div>
+        </div>
+      </section>
+
+      {loading ? (
+        view === "managers" && canManageCoordinators ? (
+          <CardGridSkeleton cards={6} label="Loading Tuition coordinators" />
+        ) : (
+          <AccountsSkeleton rows={7} label="Loading Tuition accounts" />
+        )
+      ) : view === "managers" && canManageCoordinators ? (
+        <TuitionManagersPanel
+          departmentId={departmentId}
+          currentUserId={currentUserId}
+          currentUserRole={currentUserRole}
+          onCountChange={setManagerCount}
+        />
+      ) : view === "teachers" ? (
+        <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]">
+          <div className="overflow-x-auto">
+            <table className="min-w-full border-collapse text-left">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-black uppercase tracking-[0.08em] text-slate-500">
+                  <th className="px-5 py-4">Teacher</th>
+                  <th className="px-5 py-4">Username</th>
+                  <th className="px-5 py-4">Email</th>
+                  <th className="px-5 py-4">Phone</th>
+                  <th className="px-5 py-4">Status</th>
+                  <th className="px-5 py-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredTeachers.map((item) => (
+                  <tr key={item.id} className="transition hover:bg-slate-50/70">
+                    <td className="px-5 py-4">
+                      <div className="flex min-w-[240px] items-center gap-3">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-700">
+                          <BookOpen size={18} />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-black text-slate-950">{item.full_name}</div>
+                          <div className="mt-0.5 truncate text-xs font-semibold text-slate-400">Teacher Profile #{item.teacher_profile?.id || item.id}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <span className="inline-flex max-w-[220px] items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-black text-slate-700">
+                        <span className="truncate">{item.username}</span>
+                      </span>
+                    </td>
+                    <td className="px-5 py-4 text-sm font-semibold text-slate-600">{item.email || <span className="italic text-slate-400">No email</span>}</td>
+                    <td className="px-5 py-4 text-sm font-semibold text-slate-600">{item.teacher_profile?.phone || <span className="italic text-slate-400">No phone</span>}</td>
+                    <td className="px-5 py-4">
+                      <span className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-black text-emerald-700">
+                        Active
+                      </span>
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openEditTeacher(item)}
+                          className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50"
+                          title="Edit teacher"
+                        >
+                          <Edit3 size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void deleteAccount(item)}
+                          className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 text-rose-500 transition hover:bg-rose-100"
+                          title="Delete account"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+
+                {!filteredTeachers.length && (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-12 text-center">
+                      <Users className="mx-auto text-slate-300" size={38} />
+                      <div className="mt-3 text-base font-black text-slate-800">No Tuition teachers found</div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : (
+        <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_12px_32px_rgba(15,23,42,0.05)]">
+          <div className="overflow-x-auto">
+            <table className="min-w-full border-collapse text-left">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-black uppercase tracking-[0.08em] text-slate-500">
+                  <th className="px-5 py-4">Student</th>
+                  <th className="px-5 py-4">Login ID</th>
+                  <th className="px-5 py-4">Class</th>
+                  <th className="px-5 py-4">Subject / Teacher</th>
+                  <th className="px-5 py-4">Time</th>
+                  <th className="px-5 py-4">Status</th>
+                  <th className="px-5 py-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredStudents.map((item) => {
+                  const row = item as any;
+                  const enrollments = (row.enrollments || row.active_enrollments || row.student_profile?.enrollments || []) as any[];
+                  const enrollment = enrollments[0] || row.enrollment || row.latest_enrollment || null;
+                  const className = enrollment?.class_name || row.class_name || row.student_profile?.class_name || row.student_profile?.grade || row.grade || "—";
+                  const subjectName = enrollment?.subject_name || row.subject_name || row.student_profile?.subject_name || "—";
+                  const teacherName = enrollment?.teacher_name || row.teacher_name || row.student_profile?.teacher_name || "—";
+                  const timeLabel = enrollment ? getTuitionEnrollmentScheduleLabel(enrollment) : (row.schedule_label || row.time_slot || row.schedule_time || "—");
+                  return (
+                    <tr key={item.id} className="transition hover:bg-slate-50/70">
+                      <td className="px-5 py-4">
+                        <div className="flex min-w-[240px] items-center gap-3">
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-sm font-black text-emerald-700">
+                            {initials(item.full_name)}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-black text-slate-950">{item.full_name}</div>
+                            <div className="mt-0.5 truncate text-xs font-semibold text-slate-400">@{item.username}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className="inline-flex rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-black text-slate-700">
+                          {item.username}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4 text-sm font-black text-slate-700">{className}</td>
+                      <td className="px-5 py-4">
+                        <div className="min-w-[280px] rounded-2xl bg-slate-50 px-3 py-2">
+                          <div className="flex items-center gap-2 text-sm font-black text-slate-800">
+                            <BookOpen size={15} className="text-indigo-600" /> {subjectName}
+                          </div>
+                          <div className="mt-1 text-xs font-semibold text-slate-500">{teacherName}</div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className="inline-flex rounded-full bg-indigo-50 px-3 py-1 text-xs font-black text-indigo-700">
+                          {timeLabel}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-black text-emerald-700">
+                          Active
+                        </span>
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => openEditStudent(item)}
+                            className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50"
+                            title="Edit student"
+                          >
+                            <Edit3 size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void deleteAccount(item)}
+                            className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 text-rose-500 transition hover:bg-rose-100"
+                            title="Delete account"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {!filteredStudents.length && (
+                  <tr>
+                    <td colSpan={7} className="px-5 py-12 text-center">
+                      <Users className="mx-auto text-slate-300" size={38} />
+                      <div className="mt-3 text-base font-black text-slate-800">No Tuition students found</div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {teacherForm && (
+        <div className="fixed inset-0 z-[90] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-5">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-[24px] bg-white shadow-2xl sm:rounded-[24px]">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5 md:px-6">
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-indigo-500">Tuition Teacher</div>
+                <h3 className="mt-1 text-xl font-black text-slate-950">
+                  {teacherForm.userId ? "Edit Teacher" : "Add Teacher"}
+                </h3>
+              </div>
+              <button type="button" onClick={() => setTeacherForm(null)} className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-500"><X size={18} /></button>
+            </div>
+
+            <form onSubmit={saveTeacher} className="flex-1 space-y-4 overflow-y-auto p-4 md:p-5">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <Field label="Username"><input required value={teacherForm.username} onChange={(event) => setTeacherForm({ ...teacherForm, username: event.target.value })} className={inputClass} /></Field>
+                <Field label={teacherForm.userId ? "New password" : "Password"} hint={teacherForm.userId ? "Leave blank to keep the current password." : "Minimum 6 characters."}><input required={!teacherForm.userId} type="password" value={teacherForm.password} onChange={(event) => setTeacherForm({ ...teacherForm, password: event.target.value })} className={inputClass} /></Field>
+                <Field label="First name"><input value={teacherForm.first_name} onChange={(event) => setTeacherForm({ ...teacherForm, first_name: event.target.value })} className={inputClass} /></Field>
+                <Field label="Last name"><input value={teacherForm.last_name} onChange={(event) => setTeacherForm({ ...teacherForm, last_name: event.target.value })} className={inputClass} /></Field>
+                <Field label="Email"><input type="email" value={teacherForm.email} onChange={(event) => setTeacherForm({ ...teacherForm, email: event.target.value })} className={inputClass} /></Field>
+                <Field label="Phone"><input value={teacherForm.phone} onChange={(event) => setTeacherForm({ ...teacherForm, phone: event.target.value })} className={inputClass} /></Field>
+                <Field label="Father name"><input value={teacherForm.father_name} onChange={(event) => setTeacherForm({ ...teacherForm, father_name: event.target.value })} className={inputClass} /></Field>
+                <Field label="Joining date"><input type="date" value={teacherForm.joining_date} onChange={(event) => setTeacherForm({ ...teacherForm, joining_date: event.target.value })} className={inputClass} /></Field>
+              </div>
+
+
+              
+              <div className="tuition-timeslot-panel rounded-[24px] border border-slate-200 bg-white p-4 md:p-5 shadow-[0_8px_22px_rgba(15,23,42,0.035)]">
+                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] border border-slate-200 bg-slate-50 text-indigo-600">
+                      <CalendarClock className="h-6 w-6" />
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-black uppercase tracking-[0.16em] text-indigo-600">Teacher availability</div>
+                      <div className="mt-1 text-2xl font-black text-slate-950">Fixed Tuition time slots</div>
+                      <div className="mt-1 max-w-2xl text-sm font-semibold leading-6 text-slate-500">
+                        Select the permanent periods this teacher can teach. Student teacher lists will use this availability.
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 md:flex-col lg:flex-row">
+                    <button type="button" onClick={() => setTeacherForm({ ...teacherForm, available_schedule_slots: allTuitionScheduleSlotCodes() })} className="h-11 rounded-2xl border border-indigo-200 bg-white px-5 text-sm font-black text-indigo-700 shadow-sm transition hover:bg-indigo-50">Select all</button>
+                    <button type="button" onClick={() => setTeacherForm({ ...teacherForm, available_schedule_slots: [] })} className="h-11 rounded-2xl border border-slate-200 bg-white px-5 text-sm font-black text-slate-600 shadow-sm transition hover:bg-slate-50">Clear</button>
+                  </div>
+                </div>
+
+                <div className="mt-5">
+                  {TUITION_COUNTRY_SCHEDULES.map((country) => (
+                    <div key={country.code} className="rounded-[24px] border border-slate-200 bg-slate-50/60 p-4">
+                      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex items-center gap-4">
+                          <TuitionCountryFlag code={country.code} className="h-14 w-20 rounded-2xl shadow-sm" />
+                          <div>
+                            <div className="text-xl font-black text-slate-950">{country.name}</div>
+                            <div className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">{country.shortName} timing · 40-minute classes</div>
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-indigo-100 bg-white px-4 py-2 text-xs font-black text-indigo-700">
+                          {teacherForm.available_schedule_slots.length}/{country.slots.length} selected
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        {country.slots.map((slot) => {
+                          const checked = teacherForm.available_schedule_slots.includes(slot.code);
+                          return (
+                            <label key={slot.code} className={`flex min-h-[78px] cursor-pointer items-start gap-3 rounded-[18px] border bg-white p-3 text-sm transition ${checked ? "border-indigo-200 bg-indigo-50/55 ring-1 ring-indigo-100" : "border-slate-200 hover:border-indigo-200"}`}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) => {
+                                  const next = event.target.checked
+                                    ? [...teacherForm.available_schedule_slots, slot.code]
+                                    : teacherForm.available_schedule_slots.filter((item) => item !== slot.code);
+                                  setTeacherForm({ ...teacherForm, available_schedule_slots: Array.from(new Set(next)) });
+                                }}
+                                className="mt-1 h-4 w-4 accent-indigo-600"
+                              />
+                              <span className="min-w-0">
+                                <span className={`block font-black ${checked ? "text-indigo-800" : "text-slate-800"}`}>{slot.label}</span>
+                                <span className="mt-0.5 block text-xs font-extrabold text-slate-400">{slot.display}</span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+
+              <div className="flex flex-col gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+                <button type="button" onClick={() => setTeacherForm(null)} className="h-11 rounded-2xl border border-slate-200 bg-white px-5 text-sm font-black text-slate-600">Cancel</button>
+                <button disabled={saving} type="submit" className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-slate-950 px-6 text-sm font-black text-white disabled:opacity-60">
+                  {saving && <Loader2 className="animate-spin" size={17} />}
+                  Save Teacher
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {studentForm && (
+        <div className="fixed inset-0 z-[90] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-5">
+          <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-t-[24px] bg-white shadow-2xl sm:rounded-[24px]">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5 md:px-6">
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-600">Tuition Student</div>
+                <h3 className="mt-1 text-xl font-black text-slate-950">
+                  {studentForm.userId ? "Edit Student & Enrollment" : "Add Student & Enrollment"}
+                </h3>
+              </div>
+              <button type="button" onClick={() => setStudentForm(null)} className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-500"><X size={18} /></button>
+            </div>
+
+            <form onSubmit={saveStudent} className="flex-1 space-y-4 overflow-y-auto p-4 md:p-5">
+              <section className="rounded-[22px] border border-slate-200 bg-slate-50/70 p-4">
+                <div className="mb-4 flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-emerald-600 shadow-sm"><UserRound size={19} /></div>
+                  <div><h4 className="font-black text-slate-950">Account details</h4><p className="text-xs font-semibold text-slate-500">Login and contact information for this Tuition student.</p></div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                  <Field label="Username"><input required value={studentForm.username} onChange={(event) => setStudentForm({ ...studentForm, username: event.target.value })} className={inputClass} /></Field>
+                  <Field label={studentForm.userId ? "New password" : "Password"} hint={studentForm.userId ? "Leave blank to keep the current password." : "Minimum 6 characters."}><input required={!studentForm.userId} type="password" value={studentForm.password} onChange={(event) => setStudentForm({ ...studentForm, password: event.target.value })} className={inputClass} /></Field>
+                  <Field label="Email"><input type="email" value={studentForm.email} onChange={(event) => setStudentForm({ ...studentForm, email: event.target.value })} className={inputClass} /></Field>
+                  <Field label="First name"><input value={studentForm.first_name} onChange={(event) => setStudentForm({ ...studentForm, first_name: event.target.value })} className={inputClass} /></Field>
+                  <Field label="Last name"><input value={studentForm.last_name} onChange={(event) => setStudentForm({ ...studentForm, last_name: event.target.value })} className={inputClass} /></Field>
+                  <Field label="Phone"><input value={studentForm.phone} onChange={(event) => setStudentForm({ ...studentForm, phone: event.target.value })} className={inputClass} /></Field>
+                  <div className="md:col-span-2 lg:col-span-3"><Field label="Student notes"><textarea value={studentForm.notes} onChange={(event) => setStudentForm({ ...studentForm, notes: event.target.value })} className={`${inputClass} min-h-[64px]`} /></Field></div>
+                </div>
+              </section>
+
+              
+              <section className="rounded-[24px] border border-indigo-100 bg-gradient-to-br from-indigo-50/55 via-white to-white p-4 md:p-5">
+                <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-indigo-600 shadow-sm"><GraduationCap size={21} /></div>
+                    <div>
+                      <h4 className="text-lg font-black text-slate-950">Class & subject enrollment</h4>
+                      <p className="text-sm font-semibold text-slate-500">One subject can have only one assigned teacher for this student.</p>
+                    </div>
+                  </div>
+
+                  <div className="inline-flex rounded-2xl bg-slate-100 p-1.5">
+                    <button type="button" onClick={() => setStudentForm({ ...studentForm, program_type: "regular", custom_class_name: "", subjects: studentForm.subjects.map((row) => ({ ...row, custom_subject_name: "" })) })} className={`rounded-xl px-5 py-2.5 text-sm font-black ${studentForm.program_type === "regular" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"}`}>Regular Class</button>
+                    <button type="button" onClick={() => { if (!canManageCrash) { showFeatureLocked("Crash Programs", "Crash Program management is disabled for this department."); return; } setStudentForm({ ...studentForm, program_type: "crash", class_level_id: "", subjects: studentForm.subjects.map((row) => ({ ...row, subject_id: "" })) }); }} className={`rounded-xl px-5 py-2.5 text-sm font-black ${studentForm.program_type === "crash" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"}`}>Crash Program</button>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  {studentForm.program_type === "regular" ? (
+                    <Field label="Class / Grade"><select required value={studentForm.class_level_id} onChange={(event) => setStudentForm({ ...studentForm, class_level_id: event.target.value })} className={inputClass}><option value="">Select class</option>{options.classes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
+                  ) : (
+                    <Field label="Crash Program / Class"><input required value={studentForm.custom_class_name} onChange={(event) => setStudentForm({ ...studentForm, custom_class_name: event.target.value })} className={inputClass} placeholder="e.g. Grade 9 Maths Crash Program" /></Field>
+                  )}
+                  <Field label="Start date"><input type="date" required value={studentForm.start_date} onChange={(event) => setStudentForm({ ...studentForm, start_date: event.target.value })} className={inputClass} /></Field>
+                  <Field label="End date"><input type="date" value={studentForm.end_date} onChange={(event) => setStudentForm({ ...studentForm, end_date: event.target.value })} className={inputClass} /></Field>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-[0_6px_18px_rgba(15,23,42,0.035)]">
+                    <div className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Country timing</div>
+                    {TUITION_COUNTRIES.slice(0, 1).map((country) => (
+                      <div key={country.code} className="flex items-center gap-3">
+                        <TuitionCountryFlag code={country.code} className="h-11 w-16 rounded-xl shadow-sm" />
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-black text-slate-950">{country.name}</div>
+                          <div className="text-[11px] font-extrabold text-slate-400">{country.shortName} · auto-detected</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="md:col-span-2 xl:col-span-4">
+                    <Field label="Enrollment notes"><input value={studentForm.enrollment_notes} onChange={(event) => setStudentForm({ ...studentForm, enrollment_notes: event.target.value })} className={inputClass} placeholder="Optional" /></Field>
+                  </div>
+                </div>
+
+                <div className="mt-5 space-y-4">
+                  {studentForm.subjects.map((row, index) => (
+                    <div key={row.localId} className="overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.04)]">
+                      <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/70 px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-600 text-sm font-black text-white">{index + 1}</div>
+                          <div className="text-sm font-black text-slate-900">Subject enrollment</div>
+                        </div>
+                        <button type="button" disabled={studentForm.subjects.length <= 1} onClick={() => removeSubjectRow(row.localId)} className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 text-rose-500 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 size={15} /></button>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-3">
+                        {studentForm.program_type === "regular" ? (
+                          <Field label="Subject"><select required value={row.subject_id} onChange={(event) => updateSubjectRow(row.localId, { subject_id: event.target.value })} className={inputClass}><option value="">Select subject</option>{options.subjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select></Field>
+                        ) : (
+                          <Field label="Custom subject"><input required value={row.custom_subject_name} onChange={(event) => updateSubjectRow(row.localId, { custom_subject_name: event.target.value })} className={inputClass} placeholder="Enter subject" /></Field>
+                        )}
+
+                        <Field label="Subject timing">
+                          <select
+                            required
+                            value={row.schedule_slot}
+                            onChange={(event) => updateSubjectRow(row.localId, { schedule_slot: event.target.value, teacher_id: "" })}
+                            className={`${inputClass} font-black`}
+                          >
+                            {getTuitionScheduleSlots(row.schedule_country).map((slot) => (
+                              <option key={slot.code} value={slot.code}>
+                                {slot.label} · {slot.display}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+
+                        <Field label="Assigned teacher"><select required value={row.teacher_id} onChange={(event) => updateSubjectRow(row.localId, { teacher_id: event.target.value })} className={inputClass}><option value="">Select teacher</option>{getEligibleTeachersForRow(row).map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}</select>{getEligibleTeachersForRow(row).length === 0 && <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-800">No teacher is available for this subject and time slot.</div>}</Field>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <button type="button" onClick={addSubjectRow} className="mt-5 inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-indigo-200 bg-white px-5 text-sm font-black text-indigo-700 transition hover:bg-indigo-50"><Plus size={16} /> Add another subject</button>
+              </section>
+
+
+              <div className="flex flex-col gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
+                <button type="button" onClick={() => setStudentForm(null)} className="h-11 rounded-2xl border border-slate-200 bg-white px-5 text-sm font-black text-slate-600">Cancel</button>
+                <button disabled={saving} type="submit" className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-600 to-blue-600 px-6 text-sm font-black text-white shadow-[0_14px_30px_rgba(37,99,235,0.24)] disabled:opacity-60">
+                  {saving && <Loader2 className="animate-spin" size={17} />}
+                  Save Student & Enrollment
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

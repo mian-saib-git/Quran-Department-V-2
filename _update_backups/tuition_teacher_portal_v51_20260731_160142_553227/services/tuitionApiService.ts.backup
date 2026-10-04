@@ -1,0 +1,752 @@
+import { authenticatedRequest } from "./authenticatedRequest";
+
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  return authenticatedRequest<T>(path, options);
+}
+
+function query(params?: Record<string, unknown>) {
+  const search = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    search.set(key, String(value));
+  });
+
+  const text = search.toString();
+  return text ? `?${text}` : "";
+}
+
+export type TuitionClassLevel = {
+  id: number;
+  code: string;
+  name: string;
+  board: string;
+  sort_order: number;
+  is_active: boolean;
+};
+
+export type TuitionSubject = {
+  id: number;
+  code: string;
+  name: string;
+  is_standard: boolean;
+  sort_order: number;
+  is_active: boolean;
+};
+
+export type TuitionAccount = {
+  id: number;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  role: "teacher" | "student";
+  global_is_active: boolean;
+  tuition_access_active: boolean;
+  institution_id: number;
+  department_id: number;
+  active_enrollment_count: number;
+  teacher_profile: null | {
+    id: number;
+    father_name: string;
+    phone: string;
+    address: string;
+    joining_date: string | null;
+    notes: string;
+    zoom_link: string;
+    available_schedule_slots?: string[];
+    capabilities: Array<{
+      id: number;
+      subject_id: number;
+      subject_code: string;
+      subject_name: string;
+      is_active: boolean;
+      notes: string;
+    }>;
+  };
+  student_profile: null | {
+    id: number;
+    phone: string;
+    notes: string;
+    legacy_primary_teacher_id: number;
+    legacy_primary_teacher_name: string;
+  };
+};
+
+export type TuitionEnrollment = {
+  id: number;
+  student_id: number;
+  student_user_id: number;
+  student_name: string;
+  teacher_id: number;
+  teacher_user_id: number;
+  teacher_name: string;
+  program_type: "regular" | "crash";
+  class_level_id: number | null;
+  class_name: string;
+  subject_id: number | null;
+  subject_name: string;
+  custom_class_name: string;
+  custom_subject_name: string;
+  start_date: string;
+  end_date: string | null;
+  notes: string;
+  is_active: boolean;
+  schedule_country?: string;
+  schedule_slot?: string;
+  schedule_label?: string;
+  schedule_start_time?: string | null;
+  schedule_end_time?: string | null;
+  duration_minutes?: number;
+  schedule_days?: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type TuitionOptions = {
+  teachers: Array<{
+    id: number;
+    user_id: number;
+    name: string;
+    username: string;
+    subject_capabilities: Array<{
+      subject_id: number;
+      subject__name: string;
+      subject__code: string;
+    }>;
+  }>;
+  students: Array<{
+    id: number;
+    user_id: number;
+    name: string;
+    username: string;
+  }>;
+  classes: TuitionClassLevel[];
+  subjects: TuitionSubject[];
+};
+
+export type TuitionFoundation = {
+  department: {
+    id: number;
+    name: string;
+    code: string;
+    department_type: string;
+  };
+  classes: TuitionClassLevel[];
+  subjects: TuitionSubject[];
+  features: Record<string, boolean>;
+};
+
+export type TuitionAccountInput = {
+  department_id?: number;
+  bulk_import?: boolean;
+  mode?: "create" | "link_existing";
+  existing_user_id?: number;
+  role: "teacher" | "student";
+  username?: string;
+  password?: string;
+  email?: string;
+  first_name?: string;
+  last_name?: string;
+  father_name?: string;
+  phone?: string;
+  address?: string;
+  joining_date?: string | null;
+  notes?: string;
+  zoom_link?: string;
+  available_schedule_slots?: string[];
+  primary_teacher_id?: number | null;
+  subject_ids?: number[];
+};
+
+export type TuitionEnrollmentInput = {
+  id?: number;
+  department_id?: number;
+  program_type: "regular" | "crash";
+  student_id?: number;
+  teacher_id: number;
+  class_level_id?: number | null;
+  subject_id?: number | null;
+  custom_class_name?: string;
+  custom_subject_name?: string;
+  start_date: string;
+  end_date?: string | null;
+  notes?: string;
+  is_active?: boolean;
+  schedule_country?: string;
+  schedule_slot?: string;
+  schedule_label?: string;
+  schedule_start_time?: string | null;
+  schedule_end_time?: string | null;
+  duration_minutes?: number;
+  schedule_days?: string[];
+};
+
+export type TuitionStudentBundleInput = {
+  department_id?: number;
+  bulk_import?: boolean;
+  account: {
+    username: string;
+    password?: string;
+    email?: string;
+    first_name?: string;
+    last_name?: string;
+    phone?: string;
+    notes?: string;
+    tuition_access_active?: boolean;
+  };
+  enrollments: TuitionEnrollmentInput[];
+};
+
+export type TuitionStudentBundleResponse = {
+  account: TuitionAccount;
+  enrollments: TuitionEnrollment[];
+};
+
+export async function getTuitionFoundation(departmentId?: number) {
+  return request<TuitionFoundation>(
+    `/api/tuition/foundation/${query({ department_id: departmentId })}`
+  );
+}
+
+export async function getTuitionAccounts(params: {
+  department_id?: number;
+  role: "teacher" | "student";
+  search?: string;
+  page?: number;
+  page_size?: number;
+}) {
+  return request<{
+    results: TuitionAccount[];
+    counts: Record<string, number>;
+    pagination: Record<string, number>;
+  }>(`/api/tuition/accounts/${query(params)}`);
+}
+
+export async function createTuitionAccount(input: TuitionAccountInput) {
+  return request<TuitionAccount>("/api/tuition/accounts/", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateTuitionAccount(
+  userId: number,
+  input: Record<string, unknown>
+) {
+  return request<TuitionAccount>(`/api/tuition/accounts/${userId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function removeTuitionAccount(
+  userId: number,
+  departmentId?: number,
+  permanent = false
+) {
+  return request<{ detail: string }>(
+    `/api/tuition/accounts/${userId}/${query({
+      department_id: departmentId,
+      permanent,
+    })}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function getTuitionOptions(departmentId?: number) {
+  return request<TuitionOptions>(
+    `/api/tuition/options/${query({ department_id: departmentId })}`
+  );
+}
+
+export async function getTuitionEnrollments(
+  params?: Record<string, unknown>
+) {
+  return request<{
+    results: TuitionEnrollment[];
+    pagination: Record<string, number>;
+  }>(`/api/tuition/enrollments/${query(params)}`);
+}
+
+export async function createTuitionStudentBundle(
+  input: TuitionStudentBundleInput
+) {
+  return request<TuitionStudentBundleResponse>(
+    "/api/tuition/students/bundle/",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+export async function updateTuitionStudentBundle(
+  userId: number,
+  input: TuitionStudentBundleInput
+) {
+  return request<TuitionStudentBundleResponse>(
+    `/api/tuition/students/${userId}/bundle/`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+// ============================================================
+// Tuition Managers and Dashboard
+// ============================================================
+
+export type TuitionManager = {
+  id: number;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  role: "department_admin" | "coordinator";
+  is_active: boolean;
+  global_is_active: boolean;
+  department_id: number;
+  institution_id: number;
+};
+
+export type TuitionManagerInput = {
+  department_id?: number;
+  role: "department_admin" | "coordinator";
+  username: string;
+  password?: string;
+  email?: string;
+  first_name?: string;
+  last_name?: string;
+  is_active?: boolean;
+  schedule_country?: string;
+  schedule_slot?: string;
+  schedule_label?: string;
+  schedule_start_time?: string;
+  schedule_end_time?: string;
+  duration_minutes?: number;
+  schedule_days?: string[];
+};
+
+export type TuitionDashboardClass = {
+  id: number;
+  enrollment_id: number;
+  student_id: number;
+  student_name: string;
+  teacher_id: number;
+  teacher_name: string;
+  class_name: string;
+  subject_name: string;
+  weekday: string;
+  start_time: string;
+  end_time: string;
+  timezone_name: string;
+  meeting_link: string;
+  minutes_until?: number;
+};
+
+export type TuitionDashboardResponse = {
+  counts: {
+    students: number;
+    teachers: number;
+    managers: number;
+    active_subjects: number;
+    active_schedules: number;
+  };
+  live_classes: TuitionDashboardClass[];
+  up_next_classes: TuitionDashboardClass[];
+};
+
+export async function getTuitionManagers(params?: {
+  department_id?: number;
+  role?: "department_admin" | "coordinator";
+  search?: string;
+}) {
+  return request<{ results: TuitionManager[]; count: number }>(
+    `/api/tuition/managers/${query(params)}`
+  );
+}
+
+export async function createTuitionManager(input: TuitionManagerInput) {
+  return request<TuitionManager>("/api/tuition/managers/", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateTuitionManager(
+  userId: number,
+  input: Partial<TuitionManagerInput>
+) {
+  return request<TuitionManager>(`/api/tuition/managers/${userId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function removeTuitionManager(
+  userId: number,
+  departmentId?: number
+) {
+  return request<{ detail: string }>(
+    `/api/tuition/managers/${userId}/${query({ department_id: departmentId })}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function getTuitionDashboard(departmentId?: number) {
+  return request<TuitionDashboardResponse>(
+    `/api/tuition/dashboard/${query({ department_id: departmentId })}`
+  );
+}
+
+// ============================================================
+// Tuition Scheduling + Teacher Availability
+// ============================================================
+
+export type TuitionSchedulingTeacher = {
+  id: number;
+  user_id: number;
+  name: string;
+  username: string;
+  zoom_link?: string;
+};
+
+export type TuitionSchedulingEnrollment = {
+  id: number;
+  student_id: number;
+  student_user_id: number;
+  student_name: string;
+  teacher_id: number;
+  teacher_user_id: number;
+  teacher_name: string;
+  program_type: "regular" | "crash";
+  class_name: string;
+  subject_id: number | null;
+  subject_name: string;
+  meeting_link?: string;
+  is_active: boolean;
+};
+
+export type TuitionAvailabilityPeriod = {
+  id: number;
+  teacher_id: number;
+  teacher_user_id: number;
+  teacher_name: string;
+  weekday: string;
+  start_time: string;
+  end_time: string;
+  timezone_name: string;
+  notes: string;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type TuitionStandardSlotOption = {
+  id: number;
+  region: string;
+  timezone_name: string;
+  label: string;
+  start_time: string;
+  end_time: string;
+  sort_order: number;
+  is_active: boolean;
+};
+
+export type TuitionScheduleRecord = {
+  id: number;
+  enrollment_id: number;
+  student_id: number;
+  student_user_id: number;
+  student_name: string;
+  teacher_id: number;
+  teacher_user_id: number;
+  teacher_name: string;
+  program_type: "regular" | "crash";
+  class_name: string;
+  subject_id: number | null;
+  subject_name: string;
+  weekday: string;
+  start_time: string;
+  end_time: string;
+  timezone_name: string;
+  standard_slot_id: number | null;
+  meeting_link: string;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type TuitionSchedulingMatrix = {
+  weekdays: Array<{ code: string; label: string }>;
+  countries: Array<{ code: string; name: string; timezone_name: string }>;
+  duration_minutes: number;
+  teachers: TuitionSchedulingTeacher[];
+  enrollments: TuitionSchedulingEnrollment[];
+  standard_slots: TuitionStandardSlotOption[];
+  availability: TuitionAvailabilityPeriod[];
+  schedules: TuitionScheduleRecord[];
+};
+
+export type TuitionScheduleInput = {
+  department_id?: number;
+  enrollment_id: number;
+  weekday: string;
+  start_time: string;
+  timezone_name?: string;
+  standard_slot_id?: number | null;
+  meeting_link?: string;
+  is_active?: boolean;
+};
+
+export type TuitionAvailabilityInput = {
+  department_id?: number;
+  teacher_id: number;
+  weekday: string;
+  start_time: string;
+  end_time: string;
+  timezone_name?: string;
+  notes?: string;
+  is_active?: boolean;
+};
+
+export async function getTuitionSchedulingMatrix(params?: {
+  department_id?: number;
+  student_id?: number | string;
+  teacher_id?: number | string;
+}) {
+  return request<TuitionSchedulingMatrix>(
+    `/api/tuition/scheduling/${query(params)}`
+  );
+}
+
+export async function createTuitionSchedule(input: TuitionScheduleInput) {
+  return request<TuitionScheduleRecord>("/api/tuition/schedules/", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateTuitionSchedule(
+  scheduleId: number,
+  input: Partial<TuitionScheduleInput>
+) {
+  return request<TuitionScheduleRecord>(`/api/tuition/schedules/${scheduleId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function removeTuitionSchedule(
+  scheduleId: number,
+  departmentId?: number,
+  permanent = false
+) {
+  return request<{ detail: string }>(
+    `/api/tuition/schedules/${scheduleId}/${query({ department_id: departmentId, permanent })}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function getTuitionAvailability(params?: {
+  department_id?: number;
+  teacher_id?: number | string;
+  weekday?: string;
+  active?: boolean;
+}) {
+  return request<{ results: TuitionAvailabilityPeriod[] }>(
+    `/api/tuition/availability/${query(params)}`
+  );
+}
+
+export async function createTuitionAvailability(input: TuitionAvailabilityInput) {
+  return request<TuitionAvailabilityPeriod>("/api/tuition/availability/", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateTuitionAvailability(
+  availabilityId: number,
+  input: Partial<TuitionAvailabilityInput>
+) {
+  return request<TuitionAvailabilityPeriod>(`/api/tuition/availability/${availabilityId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function removeTuitionAvailability(
+  availabilityId: number,
+  departmentId?: number,
+  permanent = false
+) {
+  return request<{ detail: string }>(
+    `/api/tuition/availability/${availabilityId}/${query({ department_id: departmentId, permanent })}`,
+    { method: "DELETE" }
+  );
+}
+// ============================================================
+// Tuition Attendance
+// ============================================================
+
+export type TuitionAttendanceRecord = {
+  id: number;
+  entity_type: "teacher" | "student";
+  schedule_id?: number | null;
+  enrollment_id?: number | null;
+  teacher_id?: number | null;
+  teacher_name?: string;
+  student_id?: number | null;
+  student_name?: string;
+  class_name?: string;
+  subject_name?: string;
+  date: string;
+  status: "present" | "absent" | "leave";
+  class_key?: string;
+  classKey?: string;
+  marked_by?: string;
+  marked_by_id?: number | null;
+  marked_by_username?: string;
+  marked_by_name?: string;
+  marked_by_role?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type TuitionAttendanceInput = {
+  department_id?: number;
+  entity_type: "teacher" | "student";
+  schedule_id?: number;
+  enrollment_id?: number;
+  teacher_id?: number;
+  student_id?: number;
+  date: string;
+  status: "present" | "absent" | "leave";
+  class_key?: string;
+  classKey?: string;
+};
+
+export async function getTuitionAttendance(params?: {
+  department_id?: number;
+  date?: string;
+  student_id?: number | string;
+  teacher_id?: number | string;
+  schedule_id?: number | string;
+}) {
+  return request<{ count: number; results: TuitionAttendanceRecord[] }>(
+    `/api/tuition/attendance/${query(params)}`
+  );
+}
+
+export async function markTuitionAttendance(input: TuitionAttendanceInput) {
+  return request<TuitionAttendanceRecord>("/api/tuition/attendance/", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteTuitionAttendance(attendanceId: number, departmentId?: number) {
+  return request<{ detail: string }>(
+    `/api/tuition/attendance/${attendanceId}/${query({ department_id: departmentId })}`,
+    { method: "DELETE" }
+  );
+}
+
+// ============================================================
+// Tuition Student Portal v32
+// ============================================================
+export type TuitionStudentPortalSubject = {
+  enrollment_id: number;
+  program_type: "regular" | "crash";
+  class_name: string;
+  subject_name: string;
+  teacher_id: number;
+  teacher_name: string;
+  start_date: string;
+  end_date: string | null;
+  notes: string;
+  schedule_count: number;
+};
+
+export type TuitionStudentPortalSchedule = {
+  id: number;
+  enrollment_id: number;
+  student_id: number;
+  student_name: string;
+  teacher_id: number;
+  teacher_name: string;
+  class_name: string;
+  subject_name: string;
+  program_type: "regular" | "crash";
+  weekday: string;
+  start_time: string;
+  end_time: string;
+  timezone_name: string;
+  meeting_link: string;
+};
+
+export type TuitionStudentPortalAttendance = {
+  id: number;
+  schedule_id: number | null;
+  enrollment_id: number | null;
+  date: string;
+  status: "present" | "absent" | "leave";
+  class_key: string;
+  class_name: string;
+  subject_name: string;
+  teacher_id: number | null;
+  teacher_name: string;
+  weekday: string;
+  start_time: string;
+  end_time: string;
+  timezone_name: string;
+  marked_by: string;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type TuitionStudentPortalResponse = {
+  department: {
+    id: number;
+    name: string;
+    code: string;
+  };
+  user: {
+    id: number;
+    username: string;
+    email: string;
+    full_name: string;
+  };
+  student: {
+    id: number;
+    name: string;
+    phone: string;
+    teacher_names: string[];
+  };
+  counts: {
+    subjects: number;
+    active_enrollments: number;
+    scheduled_classes: number;
+    attendance_records: number;
+    present: number;
+    absent: number;
+    leave: number;
+    assignments: number;
+  };
+  subjects: TuitionStudentPortalSubject[];
+  schedules: TuitionStudentPortalSchedule[];
+  attendance: TuitionStudentPortalAttendance[];
+  assignments: unknown[];
+};
+
+export async function getTuitionStudentPortal(departmentId?: number) {
+  return request<TuitionStudentPortalResponse>(
+    `/api/tuition/student-portal/${query({ department_id: departmentId })}`
+  );
+}

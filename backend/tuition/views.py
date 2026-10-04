@@ -1,0 +1,4523 @@
+import json
+from datetime import datetime, time, timedelta
+
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.serializers.json import DjangoJSONEncoder
+from django.db import transaction
+from django.db.models import Q
+from django.core.paginator import Paginator
+
+from rest_framework import serializers, status
+from rest_framework.permissions import (
+    IsAuthenticated,
+)
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from accounts.models import (
+    DepartmentFeature,
+    User,
+    UserDepartmentRole,
+)
+from academy.models import (
+    StudentProfile,
+    TeacherProfile,
+)
+
+from .models import (
+    TuitionAuditLog,
+    TuitionClassLevel,
+    TuitionEnrollment,
+    TuitionSchedule,
+    TuitionStandardSlot,
+    TuitionSubject,
+    TuitionTeacherAvailability,
+    TuitionTeacherCapability,
+)
+from .constants import (
+    CLASS_DURATION_MINUTES,
+    OPERATING_WEEKDAYS,
+    TUITION_TIMEZONES,
+)
+from .permissions import (
+    TuitionDepartmentAccessPermission,
+    TuitionFeaturePermission,
+    TuitionManagerPermission,
+    MANAGER_ROLES,
+    tuition_feature_enabled,
+    tuition_role_for_user,
+)
+from .serializers import (
+    TuitionAccountCreateSerializer,
+    TuitionAccountUpdateSerializer,
+    TuitionCapabilityBulkSerializer,
+    TuitionClassLevelSerializer,
+    TuitionStandardSlotSerializer,
+    TuitionSubjectSerializer,
+    TuitionTeacherCapabilitySerializer,
+    TuitionEnrollmentWriteSerializer,
+    enrollment_payload,
+    profile_user_queryset,
+    tuition_account_payload,
+    tuition_student_queryset,
+    tuition_teacher_queryset,
+)
+from .ws_notify import notify_tuition_update
+
+
+def safe_int(value, default):
+    try:
+        number = int(value)
+        return number if number > 0 else default
+    except Exception:
+        return default
+
+
+def parse_bool(value, default=None):
+    if value is None:
+        return default
+
+    normalized = str(value).strip().lower()
+
+    if normalized in {
+        "true",
+        "1",
+        "yes",
+        "on",
+    }:
+        return True
+
+    if normalized in {
+        "false",
+        "0",
+        "no",
+        "off",
+    }:
+        return False
+
+    return default
+
+
+def json_safe(value):
+    return json.loads(
+        json.dumps(
+            value,
+            cls=DjangoJSONEncoder,
+        )
+    )
+
+
+def audit(
+    department,
+    actor,
+    action,
+    target_model,
+    target_id,
+    before_data=None,
+    after_data=None,
+):
+    TuitionAuditLog.objects.create(
+        institution=department.institution,
+        department=department,
+        actor=actor,
+        action=action,
+        target_model=target_model,
+        target_id=str(target_id or ""),
+        before_data=json_safe(before_data or {}),
+        after_data=json_safe(after_data or {}),
+    )
+
+
+def tuition_user_queryset(
+    department,
+    role,
+):
+    return (
+        User.objects
+        .filter(
+            role=role,
+            institution_id=(
+                department.institution_id
+            ),
+        )
+        .filter(
+            Q(department=department)
+            | Q(
+                department_roles__department=(
+                    department
+                ),
+                department_roles__is_active=True,
+            )
+        )
+        .distinct()
+        .order_by(
+            "first_name",
+            "username",
+            "id",
+        )
+    )
+
+
+def tuition_user_for_department(
+    department,
+    user_id,
+):
+    return (
+        User.objects
+        .filter(
+            id=user_id,
+            role__in=[
+                User.Role.TEACHER,
+                User.Role.STUDENT,
+            ],
+            institution_id=(
+                department.institution_id
+            ),
+        )
+        .filter(
+            Q(department=department)
+            | Q(
+                department_roles__department=(
+                    department
+                ),
+            )
+        )
+        .distinct()
+        .first()
+    )
+
+
+class TuitionFoundationView(APIView):
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+    ]
+
+    def get(self, request):
+        department = request.tuition_department
+
+        config = getattr(
+            department,
+            "tuition_config",
+            None,
+        )
+
+        classes = (
+            TuitionClassLevel.objects
+            .filter(
+                department=department,
+                is_active=True,
+            )
+            .order_by(
+                "sort_order",
+                "name",
+                "id",
+            )
+        )
+
+        subjects = (
+            TuitionSubject.objects
+            .filter(
+                department=department,
+                is_active=True,
+            )
+            .order_by(
+                "sort_order",
+                "name",
+                "id",
+            )
+        )
+
+        slots = (
+            TuitionStandardSlot.objects
+            .filter(
+                department=department,
+                is_active=True,
+            )
+            .order_by(
+                "region",
+                "sort_order",
+                "start_time",
+            )
+        )
+
+        features = {
+            item.feature.key: item.is_enabled
+            for item in (
+                DepartmentFeature.objects
+                .filter(
+                    department=department,
+                    feature__is_active=True,
+                )
+                .select_related("feature")
+            )
+        }
+
+        return Response({
+            "department": {
+                "id": department.id,
+                "name": department.name,
+                "code": department.code,
+                "department_type":
+                    department.department_type,
+                "institution": {
+                    "id":
+                        department.institution_id,
+                    "name":
+                        department.institution.name,
+                    "slug":
+                        department.institution.slug,
+                },
+            },
+            "configuration": (
+                {
+                    "default_timezone":
+                        config.default_timezone,
+                    "operating_start":
+                        config.operating_start,
+                    "operating_end":
+                        config.operating_end,
+                    "class_duration_minutes":
+                        config.class_duration_minutes,
+                    "operating_weekdays":
+                        config.operating_weekdays,
+                    "allow_custom_start_times":
+                        config.allow_custom_start_times,
+                }
+                if config
+                else None
+            ),
+            "classes":
+                TuitionClassLevelSerializer(
+                    classes,
+                    many=True,
+                ).data,
+            "subjects":
+                TuitionSubjectSerializer(
+                    subjects,
+                    many=True,
+                ).data,
+            "standard_slots":
+                TuitionStandardSlotSerializer(
+                    slots,
+                    many=True,
+                ).data,
+            "features": features,
+        })
+
+
+class TuitionAccountListCreateView(
+    APIView
+):
+    feature_key = "tab_tuition_accounts"
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionManagerPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def get(self, request):
+        department = request.tuition_department
+
+        role = str(
+            request.query_params.get(
+                "role",
+                User.Role.TEACHER,
+            )
+        ).strip().lower()
+
+        if role not in {
+            User.Role.TEACHER,
+            User.Role.STUDENT,
+        }:
+            return Response(
+                {
+                    "detail":
+                    "role must be teacher or student."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        search = str(
+            request.query_params.get(
+                "search",
+                "",
+            )
+        ).strip()
+
+        page = safe_int(
+            request.query_params.get(
+                "page",
+                1,
+            ),
+            1,
+        )
+
+        page_size = min(
+            safe_int(
+                request.query_params.get(
+                    "page_size",
+                    25,
+                ),
+                25,
+            ),
+            100,
+        )
+
+        queryset = tuition_user_queryset(
+            department,
+            role,
+        )
+
+        if search:
+            queryset = queryset.filter(
+                Q(username__icontains=search)
+                | Q(email__icontains=search)
+                | Q(first_name__icontains=search)
+                | Q(last_name__icontains=search)
+            )
+
+        paginator = Paginator(
+            queryset,
+            page_size,
+        )
+
+        safe_page = min(
+            max(page, 1),
+            paginator.num_pages or 1,
+        )
+
+        page_object = paginator.get_page(
+            safe_page
+        )
+
+        results = [
+            tuition_account_payload(
+                user,
+                department,
+            )
+            for user in page_object.object_list
+        ]
+
+        counts = {
+            "teachers":
+                tuition_user_queryset(
+                    department,
+                    User.Role.TEACHER,
+                ).count(),
+            "students":
+                tuition_user_queryset(
+                    department,
+                    User.Role.STUDENT,
+                ).count(),
+            "active_enrollments":
+                TuitionEnrollment.objects
+                .filter(
+                    department=department,
+                    is_active=True,
+                )
+                .count(),
+        }
+
+        return Response({
+            "results": results,
+            "counts": counts,
+            "pagination": {
+                "page": safe_page,
+                "page_size": page_size,
+                "total_items": paginator.count,
+                "total_pages":
+                    paginator.num_pages or 1,
+            },
+        })
+
+    def post(self, request):
+        department = request.tuition_department
+        is_bulk_import = parse_bool(
+            request.data.get("bulk_import"),
+            False,
+        )
+        required_feature = (
+            "tuition_bulk_import"
+            if is_bulk_import
+            else "tuition_manage_enrollments"
+        )
+
+        blocked = require_feature_response(
+            request,
+            department,
+            required_feature,
+        )
+        if blocked:
+            return blocked
+
+        serializer = (
+            TuitionAccountCreateSerializer(
+                data=request.data,
+                context={
+                    "department": department,
+                    "actor": request.user,
+                },
+            )
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        user = serializer.save()
+
+        payload = tuition_account_payload(
+            user,
+            department,
+        )
+
+        audit(
+            department,
+            request.user,
+            "tuition_account_created_or_linked",
+            "accounts.User",
+            user.id,
+            after_data=payload,
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_account_updated",
+            {
+                "user_id": user.id,
+                "role": user.role,
+            },
+            user_ids=[user.id],
+        )
+
+        return Response(
+            payload,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class TuitionLinkableAccountListView(
+    APIView
+):
+    feature_key = "tab_tuition_accounts"
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionManagerPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def get(self, request):
+        department = request.tuition_department
+
+        role = str(
+            request.query_params.get(
+                "role",
+                "",
+            )
+        ).strip().lower()
+
+        if role not in {
+            User.Role.TEACHER,
+            User.Role.STUDENT,
+        }:
+            return Response(
+                {
+                    "detail":
+                    "role must be teacher or student."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        search = str(
+            request.query_params.get(
+                "search",
+                "",
+            )
+        ).strip()
+
+        already_linked_ids = (
+            profile_user_queryset(
+                department,
+                role,
+            )
+            .values_list("id", flat=True)
+        )
+
+        queryset = (
+            User.objects
+            .filter(
+                institution_id=(
+                    department.institution_id
+                ),
+                role=role,
+                is_active=True,
+            )
+            .exclude(id__in=already_linked_ids)
+            .order_by(
+                "first_name",
+                "username",
+                "id",
+            )
+        )
+
+        if search:
+            queryset = queryset.filter(
+                Q(username__icontains=search)
+                | Q(email__icontains=search)
+                | Q(first_name__icontains=search)
+                | Q(last_name__icontains=search)
+            )
+
+        results = []
+
+        for user in queryset[:100]:
+            profile_id = None
+
+            if role == User.Role.TEACHER:
+                profile_id = getattr(
+                    getattr(
+                        user,
+                        "teacher_profile",
+                        None,
+                    ),
+                    "id",
+                    None,
+                )
+
+            if role == User.Role.STUDENT:
+                profile_id = getattr(
+                    getattr(
+                        user,
+                        "student_profile",
+                        None,
+                    ),
+                    "id",
+                    None,
+                )
+
+            if profile_id:
+                results.append({
+                    "id": user.id,
+                    "username": user.username,
+                    "email": user.email,
+                    "full_name": (
+                        f"{user.first_name} "
+                        f"{user.last_name}"
+                    ).strip()
+                    or user.username,
+                    "role": user.role,
+                    "profile_id": profile_id,
+                    "current_department_id":
+                        user.department_id,
+                })
+
+        return Response({
+            "results": results,
+        })
+
+
+class TuitionAccountDetailView(APIView):
+    feature_key = "tab_tuition_accounts"
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionManagerPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def get_object(
+        self,
+        department,
+        user_id,
+    ):
+        return tuition_user_for_department(
+            department,
+            user_id,
+        )
+
+    def get(self, request, user_id):
+        department = request.tuition_department
+        user = self.get_object(
+            department,
+            user_id,
+        )
+
+        if not user:
+            return Response(
+                {"detail": "Account not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(
+            tuition_account_payload(
+                user,
+                department,
+            )
+        )
+
+    def patch(self, request, user_id):
+        department = request.tuition_department
+
+        blocked = require_feature_response(
+            request,
+            department,
+            "tuition_manage_enrollments",
+        )
+        if blocked:
+            return blocked
+
+        user = self.get_object(
+            department,
+            user_id,
+        )
+
+        if not user:
+            return Response(
+                {"detail": "Account not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        before = tuition_account_payload(
+            user,
+            department,
+        )
+
+        serializer = (
+            TuitionAccountUpdateSerializer(
+                user,
+                data=request.data,
+                partial=True,
+                context={
+                    "user": user,
+                    "department": department,
+                },
+            )
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        updated_user = serializer.save()
+
+        after = tuition_account_payload(
+            updated_user,
+            department,
+        )
+
+        audit(
+            department,
+            request.user,
+            "tuition_account_updated",
+            "accounts.User",
+            updated_user.id,
+            before_data=before,
+            after_data=after,
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_account_updated",
+            {
+                "user_id": updated_user.id,
+                "role": updated_user.role,
+            },
+            user_ids=[updated_user.id],
+        )
+
+        return Response(after)
+
+    @transaction.atomic
+    def delete(self, request, user_id):
+        department = request.tuition_department
+
+        blocked = require_feature_response(
+            request,
+            department,
+            "tuition_delete_accounts",
+        )
+        if blocked:
+            return blocked
+
+        user = self.get_object(
+            department,
+            user_id,
+        )
+
+        if not user:
+            return Response(
+                {"detail": "Account not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        permanent = parse_bool(
+            request.query_params.get(
+                "permanent"
+            ),
+            False,
+        )
+
+        before = tuition_account_payload(
+            user,
+            department,
+        )
+
+        teacher = getattr(
+            user,
+            "teacher_profile",
+            None,
+        )
+
+        student = getattr(
+            user,
+            "student_profile",
+            None,
+        )
+
+        if teacher:
+            active_enrollments = (
+                TuitionEnrollment.objects
+                .filter(
+                    department=department,
+                    teacher=teacher,
+                    is_active=True,
+                )
+            )
+
+            if active_enrollments.exists():
+                return Response(
+                    {
+                        "detail":
+                        "Reassign or disable this "
+                        "teacher's active Tuition "
+                        "enrollments first."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        if permanent:
+            has_other_department_roles = (
+                UserDepartmentRole.objects
+                .filter(
+                    user=user,
+                    is_active=True,
+                )
+                .exclude(department=department)
+                .exists()
+            )
+
+            has_other_direct_department = (
+                user.department_id
+                not in {
+                    None,
+                    department.id,
+                }
+            )
+
+            if (
+                has_other_department_roles
+                or has_other_direct_department
+            ):
+                return Response(
+                    {
+                        "detail":
+                        "This account belongs to "
+                        "another department. Remove "
+                        "only its Tuition access "
+                        "instead of deleting it."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if teacher:
+                if StudentProfile.objects.filter(
+                    teacher=teacher
+                ).exists():
+                    return Response(
+                        {
+                            "detail":
+                            "This teacher is still "
+                            "the primary teacher of "
+                            "one or more student "
+                            "profiles."
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                TuitionSchedule.objects.filter(
+                    department=department,
+                    teacher=teacher,
+                ).delete()
+
+                TuitionEnrollment.objects.filter(
+                    department=department,
+                    teacher=teacher,
+                ).delete()
+
+                TuitionTeacherAvailability.objects.filter(
+                    department=department,
+                    teacher=teacher,
+                ).delete()
+
+                TuitionTeacherCapability.objects.filter(
+                    department=department,
+                    teacher=teacher,
+                ).delete()
+
+            if student:
+                TuitionSchedule.objects.filter(
+                    department=department,
+                    student=student,
+                ).delete()
+
+                TuitionEnrollment.objects.filter(
+                    department=department,
+                    student=student,
+                ).delete()
+
+            deleted_user_id = user.id
+            deleted_role = user.role
+
+            audit(
+                department,
+                request.user,
+                "tuition_account_deleted_permanently",
+                "accounts.User",
+                user.id,
+                before_data=before,
+            )
+
+            user.delete()
+
+            notify_tuition_update(
+                department,
+                "tuition_account_deleted",
+                {
+                    "user_id": deleted_user_id,
+                    "role": deleted_role,
+                    "permanent": True,
+                },
+            )
+
+            return Response({
+                "detail":
+                    "Tuition-only account deleted "
+                    "permanently."
+            })
+
+        role_link = (
+            UserDepartmentRole.objects
+            .filter(
+                user=user,
+                department=department,
+                role=user.role,
+            )
+            .first()
+        )
+
+        if role_link:
+            role_link.is_active = False
+            role_link.save(
+                update_fields=["is_active"]
+            )
+
+        if user.department_id == department.id:
+            user.department = None
+            user.save(
+                update_fields=["department"]
+            )
+
+        if teacher:
+            TuitionTeacherCapability.objects.filter(
+                department=department,
+                teacher=teacher,
+            ).update(is_active=False)
+
+        if student:
+            TuitionEnrollment.objects.filter(
+                department=department,
+                student=student,
+            ).update(is_active=False)
+
+            TuitionSchedule.objects.filter(
+                department=department,
+                student=student,
+            ).update(is_active=False)
+
+        audit(
+            department,
+            request.user,
+            "tuition_access_removed",
+            "accounts.User",
+            user.id,
+            before_data=before,
+            after_data={
+                "tuition_access_active": False,
+            },
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_account_updated",
+            {
+                "user_id": user.id,
+                "role": user.role,
+                "tuition_access_active": False,
+            },
+            user_ids=[user.id],
+        )
+
+        return Response({
+            "detail":
+                "Tuition Department access removed."
+        })
+
+
+class TuitionOptionsView(APIView):
+    feature_key = "tab_tuition_accounts"
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionManagerPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def get(self, request):
+        department = request.tuition_department
+
+        teachers = []
+
+        for teacher in tuition_teacher_queryset(
+            department
+        ):
+            capabilities = list(
+                TuitionTeacherCapability.objects
+                .filter(
+                    department=department,
+                    teacher=teacher,
+                    is_active=True,
+                )
+                .select_related("subject")
+                .order_by(
+                    "subject__sort_order",
+                    "subject__name",
+                )
+                .values(
+                    "subject_id",
+                    "subject__name",
+                    "subject__code",
+                )
+            )
+
+            teachers.append({
+                "id": teacher.id,
+                "user_id": teacher.user_id,
+                "name": (
+                    f"{teacher.user.first_name} "
+                    f"{teacher.user.last_name}"
+                ).strip()
+                or teacher.user.username,
+                "username":
+                    teacher.user.username,
+                "subject_capabilities":
+                    capabilities,
+            })
+
+        students = [
+            {
+                "id": student.id,
+                "user_id": student.user_id,
+                "name": (
+                    f"{student.user.first_name} "
+                    f"{student.user.last_name}"
+                ).strip()
+                or student.user.username,
+                "username":
+                    student.user.username,
+            }
+            for student in tuition_student_queryset(
+                department
+            )
+        ]
+
+        return Response({
+            "teachers": teachers,
+            "students": students,
+            "classes":
+                TuitionClassLevelSerializer(
+                    TuitionClassLevel.objects
+                    .filter(
+                        department=department,
+                        is_active=True,
+                    ),
+                    many=True,
+                ).data,
+            "subjects":
+                TuitionSubjectSerializer(
+                    TuitionSubject.objects
+                    .filter(
+                        department=department,
+                        is_active=True,
+                    ),
+                    many=True,
+                ).data,
+        })
+
+
+class TuitionTeacherCapabilityListView(
+    APIView
+):
+    feature_key = (
+        "tuition_manage_enrollments"
+    )
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionManagerPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def get(self, request):
+        department = request.tuition_department
+
+        queryset = (
+            TuitionTeacherCapability.objects
+            .filter(department=department)
+            .select_related(
+                "teacher__user",
+                "subject",
+            )
+            .order_by(
+                "teacher__user__first_name",
+                "teacher__user__username",
+                "subject__sort_order",
+            )
+        )
+
+        teacher_id = request.query_params.get(
+            "teacher_id"
+        )
+
+        subject_id = request.query_params.get(
+            "subject_id"
+        )
+
+        active = parse_bool(
+            request.query_params.get(
+                "is_active"
+            ),
+            None,
+        )
+
+        if teacher_id:
+            queryset = queryset.filter(
+                teacher_id=teacher_id
+            )
+
+        if subject_id:
+            queryset = queryset.filter(
+                subject_id=subject_id
+            )
+
+        if active is not None:
+            queryset = queryset.filter(
+                is_active=active
+            )
+
+        return Response({
+            "results":
+                TuitionTeacherCapabilitySerializer(
+                    queryset,
+                    many=True,
+                ).data
+        })
+
+    @transaction.atomic
+    def post(self, request):
+        department = request.tuition_department
+
+        serializer = (
+            TuitionCapabilityBulkSerializer(
+                data=request.data,
+                context={
+                    "department": department,
+                },
+            )
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        teacher = serializer.validated_data[
+            "teacher"
+        ]
+
+        before = (
+            TuitionTeacherCapabilitySerializer(
+                TuitionTeacherCapability.objects
+                .filter(
+                    department=department,
+                    teacher=teacher,
+                )
+                .select_related(
+                    "teacher__user",
+                    "subject",
+                ),
+                many=True,
+            ).data
+        )
+
+        subject_ids = serializer.validated_data[
+            "subject_ids"
+        ]
+
+        active_ids = []
+
+        for subject in TuitionSubject.objects.filter(
+            department=department,
+            id__in=subject_ids,
+            is_active=True,
+        ):
+            capability, _created = (
+                TuitionTeacherCapability.objects
+                .update_or_create(
+                    department=department,
+                    teacher=teacher,
+                    subject=subject,
+                    defaults={
+                        "institution":
+                            department.institution,
+                        "is_active": True,
+                        "notes":
+                            serializer.validated_data[
+                                "notes"
+                            ],
+                    },
+                )
+            )
+
+            active_ids.append(capability.id)
+
+        if serializer.validated_data[
+            "replace"
+        ]:
+            (
+                TuitionTeacherCapability.objects
+                .filter(
+                    department=department,
+                    teacher=teacher,
+                )
+                .exclude(id__in=active_ids)
+                .update(is_active=False)
+            )
+
+        results = (
+            TuitionTeacherCapability.objects
+            .filter(
+                department=department,
+                teacher=teacher,
+            )
+            .select_related(
+                "teacher__user",
+                "subject",
+            )
+            .order_by(
+                "subject__sort_order",
+                "subject__name",
+            )
+        )
+
+        after = (
+            TuitionTeacherCapabilitySerializer(
+                results,
+                many=True,
+            ).data
+        )
+
+        audit(
+            department,
+            request.user,
+            "tuition_teacher_capabilities_updated",
+            "academy.TeacherProfile",
+            teacher.id,
+            before_data={"capabilities": before},
+            after_data={"capabilities": after},
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_teacher_capabilities_updated",
+            {
+                "teacher_id": teacher.id,
+            },
+            user_ids=[teacher.user_id],
+        )
+
+        return Response({
+            "results": after,
+        })
+
+
+class TuitionEnrollmentListCreateView(
+    APIView
+):
+    feature_key = "tab_tuition_accounts"
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionManagerPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def get(self, request):
+        department = request.tuition_department
+
+        queryset = (
+            TuitionEnrollment.objects
+            .filter(department=department)
+            .select_related(
+                "student__user",
+                "teacher__user",
+                "class_level",
+                "subject",
+            )
+            .order_by(
+                "student__user__first_name",
+                "student__user__username",
+                "subject__sort_order",
+                "custom_subject_name",
+                "id",
+            )
+        )
+
+        student_id = request.query_params.get(
+            "student_id"
+        )
+
+        teacher_id = request.query_params.get(
+            "teacher_id"
+        )
+
+        program_type = request.query_params.get(
+            "program_type"
+        )
+
+        active = parse_bool(
+            request.query_params.get(
+                "is_active"
+            ),
+            None,
+        )
+
+        search = str(
+            request.query_params.get(
+                "search",
+                "",
+            )
+        ).strip()
+
+        if student_id:
+            queryset = queryset.filter(
+                student_id=student_id
+            )
+
+        if teacher_id:
+            queryset = queryset.filter(
+                teacher_id=teacher_id
+            )
+
+        if program_type:
+            queryset = queryset.filter(
+                program_type=program_type
+            )
+
+        if active is not None:
+            queryset = queryset.filter(
+                is_active=active
+            )
+
+        if search:
+            queryset = queryset.filter(
+                Q(
+                    student__user__username__icontains=(
+                        search
+                    )
+                )
+                | Q(
+                    student__user__first_name__icontains=(
+                        search
+                    )
+                )
+                | Q(
+                    student__user__last_name__icontains=(
+                        search
+                    )
+                )
+                | Q(
+                    teacher__user__username__icontains=(
+                        search
+                    )
+                )
+                | Q(
+                    teacher__user__first_name__icontains=(
+                        search
+                    )
+                )
+                | Q(
+                    subject__name__icontains=search
+                )
+                | Q(
+                    class_level__name__icontains=(
+                        search
+                    )
+                )
+                | Q(
+                    custom_subject_name__icontains=(
+                        search
+                    )
+                )
+                | Q(
+                    custom_class_name__icontains=(
+                        search
+                    )
+                )
+            )
+
+        page = safe_int(
+            request.query_params.get(
+                "page",
+                1,
+            ),
+            1,
+        )
+
+        page_size = min(
+            safe_int(
+                request.query_params.get(
+                    "page_size",
+                    25,
+                ),
+                25,
+            ),
+            100,
+        )
+
+        paginator = Paginator(
+            queryset,
+            page_size,
+        )
+
+        safe_page = min(
+            max(page, 1),
+            paginator.num_pages or 1,
+        )
+
+        page_object = paginator.get_page(
+            safe_page
+        )
+
+        return Response({
+            "results": [
+                enrollment_payload(item)
+                for item
+                in page_object.object_list
+            ],
+            "pagination": {
+                "page": safe_page,
+                "page_size": page_size,
+                "total_items": paginator.count,
+                "total_pages":
+                    paginator.num_pages or 1,
+            },
+        })
+
+    @transaction.atomic
+    def post(self, request):
+        department = request.tuition_department
+
+        blocked = require_feature_response(
+            request,
+            department,
+            "tuition_manage_enrollments",
+        )
+        if blocked:
+            return blocked
+
+        if (
+            str(request.data.get("program_type") or "").strip().lower() == "crash"
+            and not tuition_feature_enabled(
+                request.user,
+                "tuition_manage_crash_programs",
+                department=department,
+            )
+        ):
+            return Response(
+                {"detail": "Crash Program management is disabled from SaaS settings."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = (
+            TuitionEnrollmentWriteSerializer(
+                data=request.data,
+                context={
+                    "department": department,
+                    "actor": request.user,
+                },
+            )
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        enrollment = serializer.save()
+        payload = enrollment_payload(
+            enrollment
+        )
+
+        audit(
+            department,
+            request.user,
+            "tuition_enrollment_created",
+            "tuition.TuitionEnrollment",
+            enrollment.id,
+            after_data=payload,
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_enrollment_updated",
+            {
+                "enrollment_id": enrollment.id,
+                "student_id":
+                    enrollment.student_id,
+                "teacher_id":
+                    enrollment.teacher_id,
+                "subject":
+                    enrollment.display_subject,
+            },
+            user_ids=[
+                enrollment.student.user_id,
+                enrollment.teacher.user_id,
+            ],
+        )
+
+        return Response(
+            payload,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class TuitionEnrollmentDetailView(
+    APIView
+):
+    feature_key = "tab_tuition_accounts"
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionManagerPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def get_object(
+        self,
+        department,
+        enrollment_id,
+    ):
+        return (
+            TuitionEnrollment.objects
+            .filter(
+                department=department,
+                id=enrollment_id,
+            )
+            .select_related(
+                "student__user",
+                "teacher__user",
+                "class_level",
+                "subject",
+            )
+            .first()
+        )
+
+    def get(self, request, enrollment_id):
+        enrollment = self.get_object(
+            request.tuition_department,
+            enrollment_id,
+        )
+
+        if not enrollment:
+            return Response(
+                {
+                    "detail":
+                    "Enrollment not found."
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(
+            enrollment_payload(enrollment)
+        )
+
+    @transaction.atomic
+    def patch(
+        self,
+        request,
+        enrollment_id,
+    ):
+        department = request.tuition_department
+
+        blocked = require_feature_response(
+            request,
+            department,
+            "tuition_manage_enrollments",
+        )
+        if blocked:
+            return blocked
+
+        requested_program_type = str(
+            request.data.get("program_type") or ""
+        ).strip().lower()
+        if (
+            requested_program_type == "crash"
+            and not tuition_feature_enabled(
+                request.user,
+                "tuition_manage_crash_programs",
+                department=department,
+            )
+        ):
+            return Response(
+                {"detail": "Crash Program management is disabled from SaaS settings."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        enrollment = self.get_object(
+            department,
+            enrollment_id,
+        )
+
+        if not enrollment:
+            return Response(
+                {
+                    "detail":
+                    "Enrollment not found."
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        before = enrollment_payload(
+            enrollment
+        )
+
+        serializer = (
+            TuitionEnrollmentWriteSerializer(
+                enrollment,
+                data=request.data,
+                partial=True,
+                context={
+                    "department": department,
+                    "actor": request.user,
+                },
+            )
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        updated = serializer.save()
+        after = enrollment_payload(updated)
+
+        if not updated.is_active:
+            TuitionSchedule.objects.filter(
+                enrollment=updated
+            ).update(is_active=False)
+
+        audit(
+            department,
+            request.user,
+            "tuition_enrollment_updated",
+            "tuition.TuitionEnrollment",
+            updated.id,
+            before_data=before,
+            after_data=after,
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_enrollment_updated",
+            {
+                "enrollment_id": updated.id,
+                "student_id":
+                    updated.student_id,
+                "teacher_id":
+                    updated.teacher_id,
+                "subject":
+                    updated.display_subject,
+            },
+            user_ids=[
+                updated.student.user_id,
+                updated.teacher.user_id,
+            ],
+        )
+
+        return Response(after)
+
+    @transaction.atomic
+    def delete(
+        self,
+        request,
+        enrollment_id,
+    ):
+        department = request.tuition_department
+
+        blocked = require_feature_response(
+            request,
+            department,
+            "tuition_manage_enrollments",
+        )
+        if blocked:
+            return blocked
+
+        enrollment = self.get_object(
+            department,
+            enrollment_id,
+        )
+
+        if not enrollment:
+            return Response(
+                {
+                    "detail":
+                    "Enrollment not found."
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        permanent = parse_bool(
+            request.query_params.get(
+                "permanent"
+            ),
+            False,
+        )
+
+        before = enrollment_payload(
+            enrollment
+        )
+
+        student_user_id = (
+            enrollment.student.user_id
+        )
+
+        teacher_user_id = (
+            enrollment.teacher.user_id
+        )
+
+        if permanent:
+            TuitionSchedule.objects.filter(
+                enrollment=enrollment
+            ).delete()
+
+            target_id = enrollment.id
+            enrollment.delete()
+
+            action = (
+                "tuition_enrollment_deleted"
+            )
+
+        else:
+            enrollment.is_active = False
+            enrollment.updated_by = request.user
+            enrollment.save(
+                update_fields=[
+                    "is_active",
+                    "updated_by",
+                    "updated_at",
+                ]
+            )
+
+            TuitionSchedule.objects.filter(
+                enrollment=enrollment
+            ).update(is_active=False)
+
+            target_id = enrollment.id
+            action = (
+                "tuition_enrollment_disabled"
+            )
+
+        audit(
+            department,
+            request.user,
+            action,
+            "tuition.TuitionEnrollment",
+            target_id,
+            before_data=before,
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_enrollment_updated",
+            {
+                "enrollment_id": target_id,
+                "deleted": permanent,
+                "is_active": False,
+            },
+            user_ids=[
+                student_user_id,
+                teacher_user_id,
+            ],
+        )
+
+        return Response({
+            "detail": (
+                "Enrollment deleted permanently."
+                if permanent
+                else "Enrollment disabled."
+            )
+        })
+
+class TuitionStudentBundleView(APIView):
+    feature_key = "tab_tuition_accounts"
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionManagerPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def _rows(self, data):
+        rows = data.get("enrollments")
+
+        if not isinstance(rows, list) or not rows:
+            raise serializers.ValidationError({
+                "enrollments":
+                "Add at least one subject and teacher."
+            })
+
+        seen = set()
+        program_types = set()
+
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise serializers.ValidationError({
+                    "enrollments":
+                    f"Enrollment row {index + 1} is invalid."
+                })
+
+            program_type = str(
+                row.get("program_type") or ""
+            ).strip().lower()
+
+            if program_type not in {"regular", "crash"}:
+                raise serializers.ValidationError({
+                    "enrollments":
+                    f"Enrollment row {index + 1} has an invalid program type."
+                })
+
+            program_types.add(program_type)
+
+            if not row.get("teacher_id"):
+                raise serializers.ValidationError({
+                    "enrollments":
+                    f"Select a teacher for enrollment row {index + 1}."
+                })
+
+            if program_type == "regular":
+                if not row.get("class_level_id"):
+                    raise serializers.ValidationError({
+                        "enrollments":
+                        "Select the student's class."
+                    })
+
+                if not row.get("subject_id"):
+                    raise serializers.ValidationError({
+                        "enrollments":
+                        f"Select a subject for row {index + 1}."
+                    })
+
+                duplicate_key = (
+                    "regular",
+                    int(row["subject_id"]),
+                )
+
+            else:
+                class_name = str(
+                    row.get("custom_class_name") or ""
+                ).strip()
+                subject_name = str(
+                    row.get("custom_subject_name") or ""
+                ).strip()
+
+                if not class_name:
+                    raise serializers.ValidationError({
+                        "enrollments":
+                        "Enter the Crash Program or class name."
+                    })
+
+                if not subject_name:
+                    raise serializers.ValidationError({
+                        "enrollments":
+                        f"Enter the custom subject for row {index + 1}."
+                    })
+
+                duplicate_key = (
+                    "crash",
+                    subject_name.casefold(),
+                )
+
+            if duplicate_key in seen:
+                raise serializers.ValidationError({
+                    "enrollments":
+                    "The same subject cannot be assigned twice."
+                })
+
+            seen.add(duplicate_key)
+
+        if len(program_types) != 1:
+            raise serializers.ValidationError({
+                "enrollments":
+                "A student cannot mix Regular Class and Crash Program rows in one enrollment card."
+            })
+
+        return rows
+
+    def _operating_days(self):
+        return ["sunday", "monday", "tuesday", "wednesday", "thursday"]
+
+    def _schedule_time(self, row, enrollment):
+        value = row.get("schedule_start_time") or getattr(enrollment, "schedule_start_time", None)
+
+        if isinstance(value, time):
+            return value
+
+        text_value = str(value or "").strip()
+        if not text_value:
+            raise serializers.ValidationError({
+                "enrollments": "Select a fixed timing for every subject."
+            })
+
+        try:
+            return time.fromisoformat(text_value[:5])
+        except Exception:
+            try:
+                return datetime.strptime(text_value, "%H:%M:%S").time()
+            except Exception:
+                raise serializers.ValidationError({
+                    "enrollments": "One selected timing is invalid."
+                })
+
+    def _schedule_timezone(self, row):
+        country = str(row.get("schedule_country") or "PK").upper()
+        return {
+            "PK": "Asia/Karachi",
+            "KSA": "Asia/Riyadh",
+            "UAE": "Asia/Dubai",
+        }.get(country, "Asia/Karachi")
+
+    def _sync_enrollment_schedules(self, department, enrollment, row, actor):
+        """Sync Accounts & Enrollment assignment into Scheduling without replacing Not Available cells.
+
+        Rules:
+        - Student can be assigned from Accounts & Enrollment.
+        - Schedule rows are created for Sunday through Thursday.
+        - If a teacher/time is marked Not Available in Scheduling, that cell is skipped.
+        - To place a class in that cell later, remove the Not Available block first.
+        """
+        if not enrollment or not getattr(enrollment, "teacher_id", None) or not getattr(enrollment, "student_id", None):
+            return
+
+        try:
+            start_time = self._schedule_time(row, enrollment)
+        except Exception:
+            start_time = getattr(enrollment, "schedule_start_time", None)
+
+        if not start_time:
+            return
+
+        end_time = getattr(enrollment, "schedule_end_time", None)
+        if not end_time:
+            end_time = (
+                datetime.combine(datetime.today(), start_time)
+                + timedelta(minutes=40)
+            ).time()
+
+        try:
+            timezone_name = self._schedule_timezone(row)
+        except Exception:
+            country = str(getattr(enrollment, "schedule_country", "PK") or "PK").upper()
+            timezone_name = "Asia/Karachi"
+            if country == "KSA":
+                timezone_name = "Asia/Riyadh"
+            elif country == "UAE":
+                timezone_name = "Asia/Dubai"
+
+        days = ["sunday", "monday", "tuesday", "wednesday", "thursday"]
+
+        standard_slot_id = row.get("standard_slot_id") or None
+        if not standard_slot_id:
+            try:
+                from tuition.models import TuitionStandardSlot
+                country = str(
+                    row.get("schedule_country")
+                    or getattr(enrollment, "schedule_country", "PK")
+                    or "PK"
+                ).upper()
+                slot = (
+                    TuitionStandardSlot.objects
+                    .filter(
+                        department=department,
+                        region=country,
+                        start_time=start_time,
+                        is_active=True,
+                    )
+                    .first()
+                )
+                standard_slot_id = slot.id if slot else None
+            except Exception:
+                standard_slot_id = None
+
+        TuitionSchedule.objects.filter(
+            department=department,
+            enrollment=enrollment,
+            is_active=True,
+        ).update(is_active=False, updated_by=actor)
+
+        rows = []
+        for weekday in days:
+            blocked = (
+                TuitionTeacherAvailability.objects
+                .filter(
+                    department=department,
+                    teacher=enrollment.teacher,
+                    weekday=weekday,
+                    is_active=True,
+                    start_time__lt=end_time,
+                    end_time__gt=start_time,
+                )
+                .exists()
+            )
+            if blocked:
+                continue
+
+            teacher_busy = (
+                TuitionSchedule.objects
+                .filter(
+                    department=department,
+                    teacher=enrollment.teacher,
+                    weekday=weekday,
+                    is_active=True,
+                    start_time__lt=end_time,
+                    end_time__gt=start_time,
+                )
+                .exists()
+            )
+            if teacher_busy:
+                continue
+
+            student_busy = (
+                TuitionSchedule.objects
+                .filter(
+                    department=department,
+                    student=enrollment.student,
+                    weekday=weekday,
+                    is_active=True,
+                    start_time__lt=end_time,
+                    end_time__gt=start_time,
+                )
+                .exists()
+            )
+            if student_busy:
+                continue
+
+            rows.append(TuitionSchedule(
+                institution=department.institution,
+                department=department,
+                enrollment=enrollment,
+                teacher=enrollment.teacher,
+                student=enrollment.student,
+                weekday=weekday,
+                start_time=start_time,
+                end_time=end_time,
+                timezone_name=timezone_name,
+                standard_slot_id=standard_slot_id,
+                meeting_link="",
+                is_active=True,
+                created_by=actor,
+                updated_by=actor,
+            ))
+
+        if rows:
+            TuitionSchedule.objects.bulk_create(rows, ignore_conflicts=True)
+
+    def _activate_capability(
+        self,
+        department,
+        row,
+    ):
+        if row.get("program_type") != "regular":
+            return
+
+        teacher = (
+            tuition_teacher_queryset(department)
+            .filter(id=row.get("teacher_id"))
+            .first()
+        )
+
+        subject = (
+            TuitionSubject.objects
+            .filter(
+                department=department,
+                id=row.get("subject_id"),
+                is_active=True,
+            )
+            .first()
+        )
+
+        if not teacher or not subject:
+            return
+
+        TuitionTeacherCapability.objects.update_or_create(
+            department=department,
+            teacher=teacher,
+            subject=subject,
+            defaults={
+                "institution": department.institution,
+                "is_active": True,
+                "notes": (
+                    "Automatically enabled from the "
+                    "student enrollment card."
+                ),
+            },
+        )
+
+
+    def _schedule_days(self, row):
+        raw_days = row.get("schedule_days") or row.get("days") or []
+
+        if isinstance(raw_days, str):
+            raw_days = [part.strip() for part in raw_days.split(",") if part.strip()]
+
+        valid_days = ["sunday", "monday", "tuesday", "wednesday", "thursday"]
+        days = []
+
+        for item in raw_days:
+            value = str(item or "").strip().lower()
+            if value in valid_days and value not in days:
+                days.append(value)
+
+        return days
+
+
+
+
+
+
+
+
+
+
+
+
+    def _available_weekdays_for_enrollment_time(self, department, enrollment, start_time):
+        valid_days = ["sunday", "monday", "tuesday", "wednesday", "thursday"]
+        end_time = TuitionSchedule(
+            enrollment=enrollment,
+            weekday="sunday",
+            start_time=start_time,
+        )
+        # Let the model calculate the real fixed 40-minute end time without saving.
+        end_time.end_time = start_time
+        try:
+            from datetime import datetime as _datetime, timedelta as _timedelta
+            dt = _datetime.combine(_datetime.today(), start_time) + _timedelta(minutes=40)
+            calculated_end = dt.time()
+        except Exception:
+            calculated_end = start_time
+
+        rows = (
+            TuitionTeacherAvailability.objects
+            .filter(
+                department=department,
+                teacher=enrollment.teacher,
+                weekday__in=valid_days,
+                is_active=True,
+                start_time__lte=start_time,
+                end_time__gte=calculated_end,
+            )
+            .values_list("weekday", flat=True)
+            .distinct()
+        )
+
+        return [day for day in valid_days if day in set(rows)]
+
+
+
+    def _payload(self, user, department):
+        student = user.student_profile
+
+        enrollment_rows = (
+            TuitionEnrollment.objects
+            .filter(
+                department=department,
+                student=student,
+            )
+            .select_related(
+                "student__user",
+                "teacher__user",
+                "class_level",
+                "subject",
+            )
+            .order_by(
+                "is_active",
+                "subject__sort_order",
+                "custom_subject_name",
+                "id",
+            )
+        )
+
+        return {
+            "account": tuition_account_payload(
+                user,
+                department,
+            ),
+            "enrollments": [
+                enrollment_payload(item)
+                for item in enrollment_rows
+            ],
+        }
+
+    def _get_user(
+        self,
+        department,
+        user_id,
+    ):
+        user = tuition_user_for_department(
+            department,
+            user_id,
+        )
+
+        if not user or user.role != User.Role.STUDENT:
+            return None
+
+        return user
+
+    @transaction.atomic
+    def post(self, request):
+        department = request.tuition_department
+        is_bulk_import = parse_bool(
+            request.data.get("bulk_import"),
+            False,
+        )
+        required_feature = (
+            "tuition_bulk_import"
+            if is_bulk_import
+            else "tuition_manage_enrollments"
+        )
+
+        blocked = require_feature_response(
+            request,
+            department,
+            required_feature,
+        )
+        if blocked:
+            return blocked
+        rows = self._rows(request.data)
+
+        if (
+            any(str(row.get("program_type") or "").lower() == "crash" for row in rows)
+            and not tuition_feature_enabled(
+                request.user,
+                "tuition_manage_crash_programs",
+                department=department,
+            )
+        ):
+            return Response(
+                {"detail": "Crash Program management is disabled from SaaS settings."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        account_data = dict(
+            request.data.get("account") or {}
+        )
+
+        account_data.update({
+            "department_id": department.id,
+            "mode": "create",
+            "role": User.Role.STUDENT,
+            "primary_teacher_id": int(
+                rows[0]["teacher_id"]
+            ),
+        })
+
+        account_serializer = (
+            TuitionAccountCreateSerializer(
+                data=account_data,
+                context={
+                    "department": department,
+                    "actor": request.user,
+                },
+            )
+        )
+
+        account_serializer.is_valid(
+            raise_exception=True
+        )
+
+        user = account_serializer.save()
+        student = user.student_profile
+
+        for row in rows:
+            row_data = dict(row)
+            row_data.pop("id", None)
+            row_data["student_id"] = student.id
+            row_data["department_id"] = department.id
+
+            self._activate_capability(
+                department,
+                row_data,
+            )
+
+            enrollment_serializer = (
+                TuitionEnrollmentWriteSerializer(
+                    data=row_data,
+                    context={
+                        "department": department,
+                        "actor": request.user,
+                    },
+                )
+            )
+
+            enrollment_serializer.is_valid(
+                raise_exception=True
+            )
+            saved_enrollment = enrollment_serializer.save()
+            self._sync_enrollment_schedules(
+                department,
+                saved_enrollment,
+                row_data,
+                request.user,
+            )
+
+        payload = self._payload(
+            user,
+            department,
+        )
+
+        audit(
+            department,
+            request.user,
+            "tuition_student_workspace_created",
+            "accounts.User",
+            user.id,
+            after_data=payload,
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_student_workspace_updated",
+            {
+                "user_id": user.id,
+                "student_id": student.id,
+            },
+            user_ids=[user.id],
+        )
+
+        return Response(
+            payload,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def get(self, request, user_id):
+        department = request.tuition_department
+        user = self._get_user(
+            department,
+            user_id,
+        )
+
+        if not user:
+            return Response(
+                {"detail": "Student account not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(
+            self._payload(user, department)
+        )
+
+    @transaction.atomic
+    def patch(self, request, user_id):
+        department = request.tuition_department
+
+        blocked = require_feature_response(
+            request,
+            department,
+            "tuition_manage_enrollments",
+        )
+        if blocked:
+            return blocked
+        user = self._get_user(
+            department,
+            user_id,
+        )
+
+        if not user:
+            return Response(
+                {"detail": "Student account not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        rows = self._rows(request.data)
+
+        if (
+            any(str(row.get("program_type") or "").lower() == "crash" for row in rows)
+            and not tuition_feature_enabled(
+                request.user,
+                "tuition_manage_crash_programs",
+                department=department,
+            )
+        ):
+            return Response(
+                {"detail": "Crash Program management is disabled from SaaS settings."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        before = self._payload(
+            user,
+            department,
+        )
+
+        account_data = dict(
+            request.data.get("account") or {}
+        )
+
+        account_serializer = (
+            TuitionAccountUpdateSerializer(
+                user,
+                data=account_data,
+                partial=True,
+                context={
+                    "user": user,
+                    "department": department,
+                },
+            )
+        )
+
+        account_serializer.is_valid(
+            raise_exception=True
+        )
+        account_serializer.save()
+
+        student = user.student_profile
+        existing = {
+            item.id: item
+            for item in (
+                TuitionEnrollment.objects
+                .filter(
+                    department=department,
+                    student=student,
+                )
+            )
+        }
+
+        kept_ids = []
+
+        for row in rows:
+            row_data = dict(row)
+            enrollment_id = row_data.pop(
+                "id",
+                None,
+            )
+            row_data["student_id"] = student.id
+            row_data["department_id"] = department.id
+
+            self._activate_capability(
+                department,
+                row_data,
+            )
+
+            instance = None
+
+            if enrollment_id is not None:
+                try:
+                    enrollment_id = int(
+                        enrollment_id
+                    )
+                except Exception:
+                    raise serializers.ValidationError({
+                        "enrollments":
+                        "An enrollment row has an invalid ID."
+                    })
+
+                instance = existing.get(
+                    enrollment_id
+                )
+
+                if not instance:
+                    raise serializers.ValidationError({
+                        "enrollments":
+                        "An enrollment row does not belong to this student."
+                    })
+
+            enrollment_serializer = (
+                TuitionEnrollmentWriteSerializer(
+                    instance,
+                    data=row_data,
+                    partial=bool(instance),
+                    context={
+                        "department": department,
+                        "actor": request.user,
+                    },
+                )
+            )
+
+            enrollment_serializer.is_valid(
+                raise_exception=True
+            )
+
+            saved = enrollment_serializer.save()
+            self._sync_enrollment_schedules(
+                department,
+                saved,
+                row_data,
+                request.user,
+            )
+            kept_ids.append(saved.id)
+
+        omitted = (
+            TuitionEnrollment.objects
+            .filter(
+                department=department,
+                student=student,
+                is_active=True,
+            )
+            .exclude(id__in=kept_ids)
+        )
+
+        omitted_ids = list(
+            omitted.values_list("id", flat=True)
+        )
+
+        if omitted_ids:
+            TuitionSchedule.objects.filter(
+                enrollment_id__in=omitted_ids
+            ).update(is_active=False)
+
+            omitted.update(
+                is_active=False,
+                updated_by=request.user,
+            )
+
+        primary_enrollment = (
+            TuitionEnrollment.objects
+            .filter(
+                department=department,
+                student=student,
+                is_active=True,
+            )
+            .select_related("teacher")
+            .order_by("id")
+            .first()
+        )
+
+        if primary_enrollment:
+            student.teacher = (
+                primary_enrollment.teacher
+            )
+            student.save(
+                update_fields=["teacher"]
+            )
+
+        payload = self._payload(
+            user,
+            department,
+        )
+
+        audit(
+            department,
+            request.user,
+            "tuition_student_workspace_updated",
+            "accounts.User",
+            user.id,
+            before_data=before,
+            after_data=payload,
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_student_workspace_updated",
+            {
+                "user_id": user.id,
+                "student_id": student.id,
+            },
+            user_ids=[user.id],
+        )
+
+        return Response(payload)
+
+
+
+# ============================================================
+# Tuition Scheduling + Teacher Availability API
+# ============================================================
+
+
+def parse_clock(value, field_name="time"):
+    if value is None or value == "":
+        raise serializers.ValidationError({
+            field_name: "This time field is required."
+        })
+
+    if hasattr(value, "hour") and hasattr(value, "minute"):
+        return value
+
+    try:
+        return datetime.strptime(
+            str(value).strip(),
+            "%H:%M",
+        ).time()
+    except ValueError:
+        raise serializers.ValidationError({
+            field_name: "Use HH:MM 24-hour format, for example 17:00."
+        })
+
+
+def clock_text(value):
+    return value.strftime("%H:%M") if value else ""
+
+
+def add_40_minutes_text(start_time):
+    combined = datetime.combine(
+        datetime.today().date(),
+        start_time,
+    ) + timedelta(minutes=CLASS_DURATION_MINUTES)
+    return combined.time().strftime("%H:%M")
+
+
+def is_tuition_manager_user(user, department):
+    if not user or not department:
+        return False
+
+    if user.is_superuser:
+        return True
+
+    role = tuition_role_for_user(user, department)
+    global_role = str(getattr(user, "role", "") or "").lower()
+
+    return bool(
+        role in MANAGER_ROLES
+        or global_role in {
+            "platform_admin",
+            "institution_admin",
+        }
+    )
+
+
+def request_tuition_role(request, department):
+    if request.user.is_superuser:
+        return "platform_admin"
+
+    role = tuition_role_for_user(
+        request.user,
+        department,
+    )
+
+    return role or str(
+        getattr(request.user, "role", "") or ""
+    ).lower()
+
+
+def require_feature_response(request, department, feature_key):
+    if tuition_feature_enabled(
+        request.user,
+        feature_key,
+        department=department,
+    ):
+        return None
+
+    return Response(
+        {
+            "detail": (
+                "This Tuition feature is disabled "
+                "from the SaaS feature settings."
+            )
+        },
+        status=status.HTTP_403_FORBIDDEN,
+    )
+
+
+def get_teacher_profile_for_user(user):
+    return getattr(user, "teacher_profile", None)
+
+
+def availability_payload(period):
+    return {
+        "id": period.id,
+        "teacher_id": period.teacher_id,
+        "teacher_user_id": period.teacher.user_id,
+        "teacher_name": display_teacher_name(period.teacher),
+        "weekday": period.weekday,
+        "start_time": clock_text(period.start_time),
+        "end_time": clock_text(period.end_time),
+        "timezone_name": period.timezone_name,
+        "notes": period.notes,
+        "is_active": period.is_active,
+        "created_at": period.created_at,
+        "updated_at": period.updated_at,
+    }
+
+
+def display_teacher_name(teacher):
+    return (
+        f"{teacher.user.first_name} {teacher.user.last_name}"
+    ).strip() or teacher.user.username
+
+
+def display_student_name(student):
+    return (
+        f"{student.user.first_name} {student.user.last_name}"
+    ).strip() or student.user.username
+
+
+def schedule_detail_payload(schedule):
+    enrollment = schedule.enrollment
+
+    return {
+        "id": schedule.id,
+        "enrollment_id": schedule.enrollment_id,
+        "enrollment_start_date": schedule.enrollment.start_date,
+        "enrollment_end_date": schedule.enrollment.end_date,
+        "enrollment_created_at": schedule.enrollment.created_at,
+        "student_id": schedule.student_id,
+        "student_user_id": schedule.student.user_id,
+        "student_name": display_student_name(schedule.student),
+        "teacher_id": schedule.teacher_id,
+        "teacher_user_id": schedule.teacher.user_id,
+        "teacher_name": display_teacher_name(schedule.teacher),
+        "program_type": enrollment.program_type,
+        "class_name": enrollment.display_class,
+        "subject_id": enrollment.subject_id,
+        "subject_name": enrollment.display_subject,
+        "weekday": schedule.weekday,
+        "start_time": clock_text(schedule.start_time),
+        "end_time": clock_text(schedule.end_time),
+        "timezone_name": schedule.timezone_name,
+        "standard_slot_id": schedule.standard_slot_id,
+        "meeting_link": schedule.meeting_link,
+        "is_active": schedule.is_active,
+        "created_at": schedule.created_at,
+        "updated_at": schedule.updated_at,
+    }
+
+
+def teacher_option_payload(teacher):
+    return {
+        "id": teacher.id,
+        "user_id": teacher.user_id,
+        "name": display_teacher_name(teacher),
+        "username": teacher.user.username,
+        "zoom_link": teacher.zoom_link,
+    }
+
+
+def enrollment_schedule_option_payload(enrollment):
+    return {
+        "id": enrollment.id,
+        "student_id": enrollment.student_id,
+        "student_user_id": enrollment.student.user_id,
+        "student_name": display_student_name(enrollment.student),
+        "teacher_id": enrollment.teacher_id,
+        "teacher_user_id": enrollment.teacher.user_id,
+        "teacher_name": display_teacher_name(enrollment.teacher),
+        "program_type": enrollment.program_type,
+        "class_name": enrollment.display_class,
+        "subject_id": enrollment.subject_id,
+        "subject_name": enrollment.display_subject,
+        "meeting_link": enrollment.teacher.zoom_link,
+        "is_active": enrollment.is_active,
+    }
+
+
+def standard_slot_payload(slot):
+    return {
+        "id": slot.id,
+        "region": slot.region,
+        "timezone_name": slot.timezone_name,
+        "label": slot.label,
+        "start_time": clock_text(slot.start_time),
+        "end_time": clock_text(slot.end_time),
+        "sort_order": slot.sort_order,
+        "is_active": slot.is_active,
+    }
+
+
+TUITION_OPERATING_DAYS = tuple(OPERATING_WEEKDAYS)
+
+
+def tuition_validation_response(exc):
+    payload = (
+        exc.message_dict
+        if hasattr(exc, "message_dict")
+        else {"detail": exc.messages}
+    )
+    return Response(
+        payload,
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+def tuition_schedule_group(schedule):
+    return (
+        TuitionSchedule.objects
+        .filter(
+            department=schedule.department,
+            enrollment=schedule.enrollment,
+            start_time=schedule.start_time,
+            is_active=True,
+        )
+        .select_related(
+            "enrollment__class_level",
+            "enrollment__subject",
+            "teacher__user",
+            "student__user",
+            "standard_slot",
+        )
+    )
+
+
+def tuition_availability_group(period):
+    return (
+        TuitionTeacherAvailability.objects
+        .filter(
+            department=period.department,
+            teacher=period.teacher,
+            start_time=period.start_time,
+            end_time=period.end_time,
+            is_active=True,
+        )
+        .select_related("teacher__user")
+    )
+
+
+def save_schedule_for_operating_days(
+    *,
+    department,
+    enrollment,
+    start_time,
+    timezone_name,
+    standard_slot,
+    meeting_link,
+    actor,
+    reusable_rows=None,
+):
+    reusable_rows = reusable_rows or {}
+    saved = []
+
+    for weekday in TUITION_OPERATING_DAYS:
+        schedule = reusable_rows.get(weekday)
+
+        if schedule is None:
+            schedule = (
+                TuitionSchedule.objects
+                .filter(
+                    department=department,
+                    enrollment=enrollment,
+                    weekday=weekday,
+                    start_time=start_time,
+                )
+                .order_by("-is_active", "id")
+                .first()
+            )
+
+        if schedule is None:
+            schedule = TuitionSchedule(
+                enrollment=enrollment,
+                weekday=weekday,
+                start_time=start_time,
+                created_by=actor,
+            )
+
+        schedule.enrollment = enrollment
+        schedule.weekday = weekday
+        schedule.start_time = start_time
+        schedule.timezone_name = timezone_name
+        schedule.standard_slot = standard_slot
+        schedule.meeting_link = meeting_link
+        schedule.is_active = True
+        schedule.updated_by = actor
+
+        if not schedule.created_by_id:
+            schedule.created_by = actor
+
+        schedule.save()
+        saved.append(schedule)
+
+    return saved
+
+
+def save_availability_for_operating_days(
+    *,
+    department,
+    teacher,
+    start_time,
+    end_time,
+    timezone_name,
+    notes,
+    actor,
+    reusable_rows=None,
+):
+    reusable_rows = reusable_rows or {}
+    saved = []
+
+    for weekday in TUITION_OPERATING_DAYS:
+        period = reusable_rows.get(weekday)
+
+        if period is None:
+            period = (
+                TuitionTeacherAvailability.objects
+                .filter(
+                    department=department,
+                    teacher=teacher,
+                    weekday=weekday,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+                .order_by("-is_active", "id")
+                .first()
+            )
+
+        if period is None:
+            period = TuitionTeacherAvailability(
+                institution=department.institution,
+                department=department,
+                teacher=teacher,
+                weekday=weekday,
+                start_time=start_time,
+                end_time=end_time,
+                created_by=actor,
+            )
+
+        period.institution = department.institution
+        period.department = department
+        period.teacher = teacher
+        period.weekday = weekday
+        period.start_time = start_time
+        period.end_time = end_time
+        period.timezone_name = timezone_name
+        period.notes = notes
+        period.is_active = True
+        period.updated_by = actor
+
+        if not period.created_by_id:
+            period.created_by = actor
+
+        period.save()
+        saved.append(period)
+
+    return saved
+
+
+class TuitionSchedulingMatrixView(APIView):
+    feature_keys = (
+        "tab_tuition_accounts",
+        "tab_tuition_scheduling",
+        "tab_tuition_reports",
+    )
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionManagerPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def get(self, request):
+        department = request.tuition_department
+        teacher_id = request.query_params.get("teacher_id")
+        student_id = request.query_params.get("student_id")
+
+        schedules = (
+            TuitionSchedule.objects
+            .filter(
+                department=department,
+                is_active=True,
+                enrollment__is_active=True,
+                weekday__in=TUITION_OPERATING_DAYS,
+            )
+            .select_related(
+                "enrollment__class_level",
+                "enrollment__subject",
+                "teacher__user",
+                "student__user",
+                "standard_slot",
+            )
+            .order_by(
+                "teacher__user__first_name",
+                "teacher__user__username",
+                "start_time",
+                "weekday",
+                "id",
+            )
+        )
+
+        availability = (
+            TuitionTeacherAvailability.objects
+            .filter(
+                department=department,
+                is_active=True,
+                weekday__in=TUITION_OPERATING_DAYS,
+            )
+            .select_related("teacher__user")
+            .order_by(
+                "teacher__user__first_name",
+                "teacher__user__username",
+                "start_time",
+                "weekday",
+                "id",
+            )
+        )
+
+        enrollments = (
+            TuitionEnrollment.objects
+            .filter(
+                department=department,
+                is_active=True,
+            )
+            .select_related(
+                "class_level",
+                "subject",
+                "student__user",
+                "teacher__user",
+            )
+            .order_by(
+                "student__user__first_name",
+                "student__user__username",
+                "subject__sort_order",
+                "custom_subject_name",
+            )
+        )
+
+        teachers = tuition_teacher_queryset(department)
+
+        if str(student_id or "").isdigit():
+            selected_student_id = int(student_id)
+            schedules = schedules.filter(
+                student_id=selected_student_id
+            )
+
+            relevant_teacher_ids = list(
+                enrollments
+                .filter(student_id=selected_student_id)
+                .values_list("teacher_id", flat=True)
+                .distinct()
+            )
+
+            teachers = teachers.filter(
+                id__in=relevant_teacher_ids
+            )
+            availability = availability.filter(
+                teacher_id__in=relevant_teacher_ids
+            )
+
+        if str(teacher_id or "").isdigit():
+            selected_teacher_id = int(teacher_id)
+            schedules = schedules.filter(
+                teacher_id=selected_teacher_id
+            )
+            availability = availability.filter(
+                teacher_id=selected_teacher_id
+            )
+            teachers = teachers.filter(
+                id=selected_teacher_id
+            )
+
+        standard_slots = (
+            TuitionStandardSlot.objects
+            .filter(
+                department=department,
+                is_active=True,
+            )
+            .order_by(
+                "region",
+                "sort_order",
+                "start_time",
+            )
+        )
+
+        return Response({
+            "weekdays": [
+                {"code": code, "label": code.title()}
+                for code in TUITION_OPERATING_DAYS
+            ],
+            "countries": [
+                {
+                    "code": code,
+                    "name": data["name"],
+                    "timezone_name": data["timezone"],
+                }
+                for code, data in TUITION_TIMEZONES.items()
+            ],
+            "duration_minutes": CLASS_DURATION_MINUTES,
+            "teachers": [
+                teacher_option_payload(teacher)
+                for teacher in teachers
+            ],
+            "enrollments": [
+                enrollment_schedule_option_payload(enrollment)
+                for enrollment in enrollments
+            ],
+            "standard_slots": [
+                standard_slot_payload(slot)
+                for slot in standard_slots
+            ],
+            "availability": [
+                availability_payload(period)
+                for period in availability
+            ],
+            "schedules": [
+                schedule_detail_payload(schedule)
+                for schedule in schedules
+            ],
+        })
+
+
+class TuitionScheduleListCreateView(APIView):
+    feature_key = "tab_tuition_scheduling"
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionManagerPermission,
+        TuitionFeaturePermission,
+    ]
+
+    @transaction.atomic
+    def post(self, request):
+        department = request.tuition_department
+
+        blocked = require_feature_response(
+            request,
+            department,
+            "tuition_create_schedule",
+        )
+        if blocked:
+            return blocked
+
+        enrollment = (
+            TuitionEnrollment.objects
+            .filter(
+                department=department,
+                is_active=True,
+                id=request.data.get("enrollment_id"),
+            )
+            .select_related(
+                "teacher__user",
+                "student__user",
+                "class_level",
+                "subject",
+            )
+            .first()
+        )
+
+        if not enrollment:
+            return Response(
+                {"detail": "Select a valid active Tuition enrollment."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        standard_slot = None
+        standard_slot_id = request.data.get("standard_slot_id")
+
+        if standard_slot_id:
+            standard_slot = (
+                TuitionStandardSlot.objects
+                .filter(
+                    department=department,
+                    id=standard_slot_id,
+                    is_active=True,
+                )
+                .first()
+            )
+
+            if not standard_slot:
+                return Response(
+                    {"detail": "Selected standard slot is invalid."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        try:
+            start_time = (
+                standard_slot.start_time
+                if standard_slot
+                and not request.data.get("start_time")
+                else parse_clock(
+                    request.data.get("start_time"),
+                    "start_time",
+                )
+            )
+
+            timezone_name = (
+                request.data.get("timezone_name")
+                or (
+                    standard_slot.timezone_name
+                    if standard_slot
+                    else "Asia/Karachi"
+                )
+            )
+            meeting_link = (
+                request.data.get("meeting_link") or ""
+            )
+
+            reusable_rows = {}
+            for item in (
+                TuitionSchedule.objects
+                .filter(
+                    department=department,
+                    enrollment=enrollment,
+                    start_time=start_time,
+                    weekday__in=TUITION_OPERATING_DAYS,
+                )
+                .order_by("weekday", "-is_active", "id")
+            ):
+                reusable_rows.setdefault(item.weekday, item)
+
+            schedules = save_schedule_for_operating_days(
+                department=department,
+                enrollment=enrollment,
+                start_time=start_time,
+                timezone_name=timezone_name,
+                standard_slot=standard_slot,
+                meeting_link=meeting_link,
+                actor=request.user,
+                reusable_rows=reusable_rows,
+            )
+        except serializers.ValidationError:
+            raise
+        except DjangoValidationError as exc:
+            return tuition_validation_response(exc)
+
+        representative = schedules[0]
+        payload = schedule_detail_payload(representative)
+        payload["applies_to_weekdays"] = list(
+            TUITION_OPERATING_DAYS
+        )
+
+        audit(
+            department,
+            request.user,
+            "tuition_schedule_created_all_days",
+            "tuition.TuitionSchedule",
+            representative.id,
+            after_data={
+                "schedules": [
+                    schedule_detail_payload(item)
+                    for item in schedules
+                ]
+            },
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_schedule_updated",
+            {
+                "schedule_id": representative.id,
+                "enrollment_id": representative.enrollment_id,
+                "teacher_id": representative.teacher_id,
+                "student_id": representative.student_id,
+                "weekdays": list(TUITION_OPERATING_DAYS),
+            },
+            user_ids=[
+                representative.teacher.user_id,
+                representative.student.user_id,
+            ],
+        )
+
+        return Response(
+            payload,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class TuitionScheduleDetailView(APIView):
+    feature_key = "tab_tuition_scheduling"
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionManagerPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def get_object(self, department, schedule_id):
+        return (
+            TuitionSchedule.objects
+            .filter(
+                department=department,
+                id=schedule_id,
+            )
+            .select_related(
+                "enrollment__class_level",
+                "enrollment__subject",
+                "teacher__user",
+                "student__user",
+                "standard_slot",
+            )
+            .first()
+        )
+
+    @transaction.atomic
+    def patch(self, request, schedule_id):
+        department = request.tuition_department
+
+        blocked = require_feature_response(
+            request,
+            department,
+            "tuition_edit_schedule",
+        )
+        if blocked:
+            return blocked
+
+        anchor = self.get_object(department, schedule_id)
+        if not anchor:
+            return Response(
+                {"detail": "Schedule not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        old_group = list(tuition_schedule_group(anchor))
+        before = {
+            "schedules": [
+                schedule_detail_payload(item)
+                for item in old_group
+            ]
+        }
+
+        enrollment = anchor.enrollment
+        enrollment_id = request.data.get("enrollment_id")
+
+        if enrollment_id:
+            enrollment = (
+                TuitionEnrollment.objects
+                .filter(
+                    department=department,
+                    is_active=True,
+                    id=enrollment_id,
+                )
+                .select_related(
+                    "teacher__user",
+                    "student__user",
+                    "class_level",
+                    "subject",
+                )
+                .first()
+            )
+
+            if not enrollment:
+                return Response(
+                    {"detail": "Selected enrollment is invalid."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        standard_slot = anchor.standard_slot
+        if "standard_slot_id" in request.data:
+            standard_slot_id = request.data.get(
+                "standard_slot_id"
+            )
+            standard_slot = (
+                TuitionStandardSlot.objects
+                .filter(
+                    department=department,
+                    id=standard_slot_id,
+                    is_active=True,
+                )
+                .first()
+                if standard_slot_id
+                else None
+            )
+
+            if standard_slot_id and not standard_slot:
+                return Response(
+                    {"detail": "Selected standard slot is invalid."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        try:
+            start_time = anchor.start_time
+            if "start_time" in request.data:
+                start_time = parse_clock(
+                    request.data.get("start_time"),
+                    "start_time",
+                )
+            elif standard_slot and request.data.get(
+                "standard_slot_id"
+            ):
+                start_time = standard_slot.start_time
+
+            timezone_name = (
+                request.data.get("timezone_name")
+                if "timezone_name" in request.data
+                else anchor.timezone_name
+            ) or "Asia/Karachi"
+
+            meeting_link = (
+                request.data.get("meeting_link")
+                if "meeting_link" in request.data
+                else anchor.meeting_link
+            ) or ""
+
+            old_ids = [item.id for item in old_group]
+            TuitionSchedule.objects.filter(
+                id__in=old_ids
+            ).update(
+                is_active=False,
+                updated_by=request.user,
+            )
+
+            reusable_rows = {
+                item.weekday: item
+                for item in old_group
+                if item.weekday in TUITION_OPERATING_DAYS
+            }
+
+            schedules = save_schedule_for_operating_days(
+                department=department,
+                enrollment=enrollment,
+                start_time=start_time,
+                timezone_name=timezone_name,
+                standard_slot=standard_slot,
+                meeting_link=meeting_link,
+                actor=request.user,
+                reusable_rows=reusable_rows,
+            )
+        except serializers.ValidationError:
+            raise
+        except DjangoValidationError as exc:
+            return tuition_validation_response(exc)
+
+        representative = schedules[0]
+        after = {
+            "schedules": [
+                schedule_detail_payload(item)
+                for item in schedules
+            ]
+        }
+
+        audit(
+            department,
+            request.user,
+            "tuition_schedule_updated_all_days",
+            "tuition.TuitionSchedule",
+            representative.id,
+            before_data=before,
+            after_data=after,
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_schedule_updated",
+            {
+                "schedule_id": representative.id,
+                "enrollment_id": representative.enrollment_id,
+                "teacher_id": representative.teacher_id,
+                "student_id": representative.student_id,
+                "weekdays": list(TUITION_OPERATING_DAYS),
+            },
+            user_ids=[
+                representative.teacher.user_id,
+                representative.student.user_id,
+            ],
+        )
+
+        payload = schedule_detail_payload(representative)
+        payload["applies_to_weekdays"] = list(
+            TUITION_OPERATING_DAYS
+        )
+        return Response(payload)
+
+    @transaction.atomic
+    def delete(self, request, schedule_id):
+        department = request.tuition_department
+
+        blocked = require_feature_response(
+            request,
+            department,
+            "tuition_delete_schedule",
+        )
+        if blocked:
+            return blocked
+
+        anchor = self.get_object(department, schedule_id)
+        if not anchor:
+            return Response(
+                {"detail": "Schedule not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        group = list(tuition_schedule_group(anchor))
+        before = {
+            "schedules": [
+                schedule_detail_payload(item)
+                for item in group
+            ]
+        }
+        group_ids = [item.id for item in group]
+        permanent = parse_bool(
+            request.query_params.get("permanent"),
+            False,
+        )
+
+        if permanent:
+            TuitionSchedule.objects.filter(
+                id__in=group_ids
+            ).delete()
+            action = "tuition_schedule_deleted_all_days"
+        else:
+            TuitionSchedule.objects.filter(
+                id__in=group_ids
+            ).update(
+                is_active=False,
+                updated_by=request.user,
+            )
+            action = "tuition_schedule_disabled_all_days"
+
+        audit(
+            department,
+            request.user,
+            action,
+            "tuition.TuitionSchedule",
+            anchor.id,
+            before_data=before,
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_schedule_updated",
+            {
+                "schedule_id": anchor.id,
+                "schedule_ids": group_ids,
+                "deleted": permanent,
+                "is_active": False,
+                "weekdays": list(TUITION_OPERATING_DAYS),
+            },
+        )
+
+        return Response({
+            "detail": "Schedule removed for Sunday through Thursday."
+        })
+
+
+class TuitionAvailabilityListCreateView(APIView):
+    feature_key = "tuition_manage_availability"
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def get_queryset(self, request, department):
+        queryset = (
+            TuitionTeacherAvailability.objects
+            .filter(department=department)
+            .select_related("teacher__user")
+            .order_by(
+                "teacher__user__first_name",
+                "weekday",
+                "start_time",
+            )
+        )
+
+        teacher_id = request.query_params.get("teacher_id")
+        weekday = str(
+            request.query_params.get("weekday") or ""
+        ).strip().lower()
+        active = parse_bool(
+            request.query_params.get("active"),
+            True,
+        )
+
+        role = request_tuition_role(request, department)
+        own_teacher = get_teacher_profile_for_user(request.user)
+
+        if role == "teacher" and own_teacher:
+            queryset = queryset.filter(teacher=own_teacher)
+        elif str(teacher_id or "").isdigit():
+            queryset = queryset.filter(
+                teacher_id=int(teacher_id)
+            )
+
+        if weekday:
+            queryset = queryset.filter(weekday=weekday)
+
+        if active is not None:
+            queryset = queryset.filter(is_active=active)
+
+        return queryset
+
+    def get(self, request):
+        department = request.tuition_department
+        queryset = self.get_queryset(request, department)
+        return Response({
+            "results": [
+                availability_payload(period)
+                for period in queryset
+            ]
+        })
+
+    @transaction.atomic
+    def post(self, request):
+        department = request.tuition_department
+        role = request_tuition_role(request, department)
+        own_teacher = get_teacher_profile_for_user(request.user)
+        teacher_id = request.data.get("teacher_id")
+
+        if role == "teacher":
+            if not own_teacher:
+                return Response(
+                    {"detail": "Teacher profile not found."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            teacher = own_teacher
+        elif is_tuition_manager_user(request.user, department):
+            teacher = (
+                tuition_teacher_queryset(department)
+                .filter(id=teacher_id)
+                .first()
+            )
+        else:
+            return Response(
+                {"detail": "You cannot manage Tuition availability."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not teacher:
+            return Response(
+                {"detail": "Select a valid Tuition teacher."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            start_time = parse_clock(
+                request.data.get("start_time"),
+                "start_time",
+            )
+            end_time = parse_clock(
+                request.data.get("end_time"),
+                "end_time",
+            )
+            timezone_name = (
+                request.data.get("timezone_name")
+                or "Asia/Karachi"
+            )
+            notes = request.data.get("notes") or "Not available"
+
+            periods = save_availability_for_operating_days(
+                department=department,
+                teacher=teacher,
+                start_time=start_time,
+                end_time=end_time,
+                timezone_name=timezone_name,
+                notes=notes,
+                actor=request.user,
+            )
+        except serializers.ValidationError:
+            raise
+        except DjangoValidationError as exc:
+            return tuition_validation_response(exc)
+
+        representative = periods[0]
+        payload = availability_payload(representative)
+        payload["applies_to_weekdays"] = list(
+            TUITION_OPERATING_DAYS
+        )
+
+        audit(
+            department,
+            request.user,
+            "tuition_availability_created_all_days",
+            "tuition.TuitionTeacherAvailability",
+            representative.id,
+            after_data={
+                "availability": [
+                    availability_payload(item)
+                    for item in periods
+                ]
+            },
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_availability_updated",
+            {
+                "availability_id": representative.id,
+                "teacher_id": representative.teacher_id,
+                "weekdays": list(TUITION_OPERATING_DAYS),
+            },
+            user_ids=[representative.teacher.user_id],
+        )
+
+        return Response(
+            payload,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class TuitionAvailabilityDetailView(APIView):
+    feature_key = "tuition_manage_availability"
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def get_object(self, department, availability_id):
+        return (
+            TuitionTeacherAvailability.objects
+            .filter(
+                department=department,
+                id=availability_id,
+            )
+            .select_related("teacher__user")
+            .first()
+        )
+
+    def can_edit(self, request, department, period):
+        if is_tuition_manager_user(request.user, department):
+            return True
+
+        role = request_tuition_role(request, department)
+        own_teacher = get_teacher_profile_for_user(request.user)
+
+        return bool(
+            role == "teacher"
+            and own_teacher
+            and period.teacher_id == own_teacher.id
+        )
+
+    @transaction.atomic
+    def patch(self, request, availability_id):
+        department = request.tuition_department
+        anchor = self.get_object(department, availability_id)
+
+        if not anchor:
+            return Response(
+                {"detail": "Availability period not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not self.can_edit(request, department, anchor):
+            return Response(
+                {"detail": "You cannot edit this availability period."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        old_group = list(tuition_availability_group(anchor))
+        before = {
+            "availability": [
+                availability_payload(item)
+                for item in old_group
+            ]
+        }
+
+        try:
+            start_time = (
+                parse_clock(
+                    request.data.get("start_time"),
+                    "start_time",
+                )
+                if "start_time" in request.data
+                else anchor.start_time
+            )
+            end_time = (
+                parse_clock(
+                    request.data.get("end_time"),
+                    "end_time",
+                )
+                if "end_time" in request.data
+                else anchor.end_time
+            )
+            timezone_name = (
+                request.data.get("timezone_name")
+                if "timezone_name" in request.data
+                else anchor.timezone_name
+            ) or "Asia/Karachi"
+            notes = (
+                request.data.get("notes")
+                if "notes" in request.data
+                else anchor.notes
+            ) or "Not available"
+
+            old_ids = [item.id for item in old_group]
+            TuitionTeacherAvailability.objects.filter(
+                id__in=old_ids
+            ).update(
+                is_active=False,
+                updated_by=request.user,
+            )
+
+            reusable_rows = {
+                item.weekday: item
+                for item in old_group
+                if item.weekday in TUITION_OPERATING_DAYS
+            }
+
+            periods = save_availability_for_operating_days(
+                department=department,
+                teacher=anchor.teacher,
+                start_time=start_time,
+                end_time=end_time,
+                timezone_name=timezone_name,
+                notes=notes,
+                actor=request.user,
+                reusable_rows=reusable_rows,
+            )
+        except serializers.ValidationError:
+            raise
+        except DjangoValidationError as exc:
+            return tuition_validation_response(exc)
+
+        representative = periods[0]
+        after = {
+            "availability": [
+                availability_payload(item)
+                for item in periods
+            ]
+        }
+
+        audit(
+            department,
+            request.user,
+            "tuition_availability_updated_all_days",
+            "tuition.TuitionTeacherAvailability",
+            representative.id,
+            before_data=before,
+            after_data=after,
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_availability_updated",
+            {
+                "availability_id": representative.id,
+                "teacher_id": representative.teacher_id,
+                "weekdays": list(TUITION_OPERATING_DAYS),
+            },
+            user_ids=[representative.teacher.user_id],
+        )
+
+        payload = availability_payload(representative)
+        payload["applies_to_weekdays"] = list(
+            TUITION_OPERATING_DAYS
+        )
+        return Response(payload)
+
+    @transaction.atomic
+    def delete(self, request, availability_id):
+        department = request.tuition_department
+        anchor = self.get_object(department, availability_id)
+
+        if not anchor:
+            return Response(
+                {"detail": "Availability period not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not self.can_edit(request, department, anchor):
+            return Response(
+                {"detail": "You cannot delete this availability period."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        group = list(tuition_availability_group(anchor))
+        before = {
+            "availability": [
+                availability_payload(item)
+                for item in group
+            ]
+        }
+        group_ids = [item.id for item in group]
+        teacher_user_id = anchor.teacher.user_id
+        teacher_id = anchor.teacher_id
+        permanent = parse_bool(
+            request.query_params.get("permanent"),
+            False,
+        )
+
+        if permanent:
+            TuitionTeacherAvailability.objects.filter(
+                id__in=group_ids
+            ).delete()
+            action = "tuition_availability_deleted_all_days"
+        else:
+            TuitionTeacherAvailability.objects.filter(
+                id__in=group_ids
+            ).update(
+                is_active=False,
+                updated_by=request.user,
+            )
+            action = "tuition_availability_disabled_all_days"
+
+        audit(
+            department,
+            request.user,
+            action,
+            "tuition.TuitionTeacherAvailability",
+            anchor.id,
+            before_data=before,
+        )
+
+        notify_tuition_update(
+            department,
+            "tuition_availability_updated",
+            {
+                "availability_id": anchor.id,
+                "availability_ids": group_ids,
+                "teacher_id": teacher_id,
+                "deleted": permanent,
+                "is_active": False,
+                "weekdays": list(TUITION_OPERATING_DAYS),
+            },
+            user_ids=[teacher_user_id],
+        )
+
+        return Response({
+            "detail": (
+                "Not Available removed for Sunday through Thursday."
+            )
+        })
+
+
+# ============================================================
+# Tuition Attendance API
+# ============================================================
+from django.utils import timezone as tuition_timezone
+from .models import TuitionAttendance
+
+
+def tuition_attendance_payload(item):
+    marked_by = item.marked_by
+    marked_by_name = ""
+    if marked_by:
+        marked_by_name = marked_by.get_full_name().strip() or marked_by.username
+
+    schedule = item.schedule
+    enrollment = item.enrollment or (schedule.enrollment if schedule else None)
+
+    return {
+        "id": item.id,
+        "entity_type": item.entity_type,
+        "schedule_id": item.schedule_id,
+        "enrollment_id": item.enrollment_id,
+        "teacher_id": item.teacher_id,
+        "teacher_name": str(item.teacher) if item.teacher else "",
+        "student_id": item.student_id,
+        "student_name": str(item.student) if item.student else "",
+        "class_name": enrollment.display_class if enrollment else "",
+        "subject_name": enrollment.display_subject if enrollment else "",
+        "date": str(item.date),
+        "status": item.status,
+        "class_key": item.class_key or "",
+        "classKey": item.class_key or "",
+        "marked_by": marked_by.username if marked_by else "",
+        "marked_by_id": marked_by.id if marked_by else None,
+        "marked_by_username": marked_by.username if marked_by else "",
+        "marked_by_name": marked_by_name,
+        "marked_by_role": str(getattr(marked_by, "role", "") or "") if marked_by else "",
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+    }
+
+
+def tuition_manager_can_write(user):
+    role = str(getattr(user, "role", "") or "").lower()
+    return bool(
+        getattr(user, "is_superuser", False)
+        or role in {"platform_admin", "institution_admin", "department_admin", "coordinator"}
+    )
+
+
+def normalize_tuition_attendance_status(value):
+    normalized = str(value or "").strip().lower()
+    mapping = {
+        "present": "present",
+        "absent": "absent",
+        "leave": "leave",
+        "present ": "present",
+        "absent ": "absent",
+        "leave ": "leave",
+        "Present".lower(): "present",
+        "Absent".lower(): "absent",
+        "Leave".lower(): "leave",
+    }
+    return mapping.get(normalized, normalized)
+
+
+class TuitionAttendanceListCreateView(APIView):
+    feature_keys = (
+        "tab_tuition_dashboard",
+        "tab_tuition_attendance",
+        "tab_tuition_reports",
+    )
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionManagerPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def get(self, request):
+        department = request.tuition_department
+        date_value = str(request.query_params.get("date", "")).strip()
+        student_id = str(request.query_params.get("student_id", "")).strip()
+        teacher_id = str(request.query_params.get("teacher_id", "")).strip()
+        schedule_id = str(request.query_params.get("schedule_id", "")).strip()
+
+        attendance = TuitionAttendance.objects.filter(department=department).select_related(
+            "schedule",
+            "enrollment",
+            "teacher__user",
+            "student__user",
+            "marked_by",
+        )
+
+        if date_value:
+            attendance = attendance.filter(date=date_value)
+        if student_id.isdigit():
+            attendance = attendance.filter(student_id=int(student_id))
+        if teacher_id.isdigit():
+            attendance = attendance.filter(teacher_id=int(teacher_id))
+        if schedule_id.isdigit():
+            attendance = attendance.filter(schedule_id=int(schedule_id))
+
+        total = attendance.count()
+        rows = list(attendance.order_by("-date", "-updated_at", "-id")[:3000])
+        return Response({"count": total, "results": [tuition_attendance_payload(item) for item in rows]})
+
+    def post(self, request):
+        department = request.tuition_department
+        user = request.user
+
+        blocked = require_feature_response(
+            request,
+            department,
+            "tuition_mark_attendance",
+        )
+        if blocked:
+            return blocked
+
+        if not tuition_manager_can_write(user):
+            return Response({"detail": "Only Tuition admins and coordinators can mark attendance."}, status=status.HTTP_403_FORBIDDEN)
+
+        entity_type = str(request.data.get("entity_type", "")).strip().lower()
+        status_value = normalize_tuition_attendance_status(request.data.get("status"))
+        date_value = request.data.get("date") or tuition_timezone.localdate().isoformat()
+        class_key = str(request.data.get("class_key") or request.data.get("classKey") or "").strip()[:80]
+        schedule_id = request.data.get("schedule_id")
+        teacher_id = request.data.get("teacher_id")
+        student_id = request.data.get("student_id")
+
+        if entity_type not in {"teacher", "student"}:
+            return Response({"detail": "entity_type must be teacher or student."}, status=status.HTTP_400_BAD_REQUEST)
+        if status_value not in {"present", "absent", "leave"}:
+            return Response({"detail": "status must be present, absent, or leave."}, status=status.HTTP_400_BAD_REQUEST)
+
+        schedule = None
+        enrollment = None
+        teacher = None
+        student = None
+
+        if schedule_id:
+            try:
+                schedule = TuitionSchedule.objects.select_related("enrollment", "teacher", "student").get(id=schedule_id, department=department, is_active=True)
+            except TuitionSchedule.DoesNotExist:
+                return Response({"detail": "Tuition schedule not found."}, status=status.HTTP_404_NOT_FOUND)
+            enrollment = schedule.enrollment
+            teacher = schedule.teacher
+            student = schedule.student
+            class_key = class_key or f"schedule:{schedule.id}"
+
+        elif entity_type == "student":
+            if not student_id:
+                return Response({"detail": "student_id or schedule_id is required for student attendance."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                student = StudentProfile.objects.get(id=student_id)
+            except StudentProfile.DoesNotExist:
+                return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        elif entity_type == "teacher":
+            if not teacher_id:
+                return Response({"detail": "teacher_id is required for teacher attendance."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                teacher = TeacherProfile.objects.get(id=teacher_id)
+            except TeacherProfile.DoesNotExist:
+                return Response({"detail": "Teacher not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        delete_filter = {
+            "department": department,
+            "entity_type": entity_type,
+            "date": date_value,
+            "class_key": class_key,
+        }
+        if schedule:
+            delete_filter["schedule"] = schedule
+        elif entity_type == "teacher":
+            delete_filter["teacher"] = teacher
+        else:
+            delete_filter["student"] = student
+
+        TuitionAttendance.objects.filter(**delete_filter).delete()
+
+        item = TuitionAttendance.objects.create(
+            institution=department.institution,
+            department=department,
+            entity_type=entity_type,
+            schedule=schedule,
+            enrollment=enrollment,
+            teacher=teacher,
+            student=student,
+            date=date_value,
+            status=status_value,
+            class_key=class_key,
+            marked_by=user,
+        )
+
+        try:
+            notify_tuition_update(
+                department=department,
+                event="tuition_attendance_updated",
+                payload=tuition_attendance_payload(item),
+            )
+        except Exception:
+            pass
+
+        return Response(tuition_attendance_payload(item), status=status.HTTP_201_CREATED)
+
+
+class TuitionAttendanceDetailView(APIView):
+    feature_keys = (
+        "tab_tuition_dashboard",
+        "tab_tuition_attendance",
+        "tab_tuition_reports",
+    )
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+        TuitionManagerPermission,
+        TuitionFeaturePermission,
+    ]
+
+    def delete(self, request, attendance_id):
+        department = request.tuition_department
+
+        blocked = require_feature_response(
+            request,
+            department,
+            "tuition_mark_attendance",
+        )
+        if blocked:
+            return blocked
+
+        if not tuition_manager_can_write(request.user):
+            return Response({"detail": "Only Tuition admins and coordinators can delete attendance."}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            item = TuitionAttendance.objects.get(id=attendance_id, department=department)
+        except TuitionAttendance.DoesNotExist:
+            return Response({"detail": "Attendance record not found."}, status=status.HTTP_404_NOT_FOUND)
+        item.delete()
+        return Response({"detail": "Attendance deleted successfully."})
+
+# ============================================================
+# Tuition Student Portal API v32
+# ============================================================
+class TuitionStudentPortalView(APIView):
+    """Read-only, student-scoped Tuition dashboard data.
+
+    The response is intentionally limited to the authenticated student's own
+    enrollments, schedules, subjects, and attendance records.
+    """
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+    ]
+
+    def get(self, request):
+        department = request.tuition_department
+        linked_role = tuition_role_for_user(request.user, department)
+        global_role = str(getattr(request.user, "role", "") or "").lower()
+
+        if linked_role != User.Role.STUDENT and global_role != User.Role.STUDENT:
+            return Response(
+                {"detail": "Only Tuition student accounts can open this portal."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            student = (
+                StudentProfile.objects
+                .select_related("user")
+                .get(user=request.user)
+            )
+        except StudentProfile.DoesNotExist:
+            return Response(
+                {"detail": "A student profile is not connected to this account."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        enrollments = list(
+            TuitionEnrollment.objects
+            .filter(
+                department=department,
+                student=student,
+                is_active=True,
+            )
+            .select_related(
+                "class_level",
+                "subject",
+                "teacher__user",
+            )
+            .prefetch_related("schedules")
+            .order_by(
+                "subject__sort_order",
+                "subject__name",
+                "custom_subject_name",
+                "id",
+            )
+        )
+
+        schedules = list(
+            TuitionSchedule.objects
+            .filter(
+                department=department,
+                student=student,
+                is_active=True,
+                enrollment__is_active=True,
+            )
+            .select_related(
+                "enrollment__class_level",
+                "enrollment__subject",
+                "teacher__user",
+                "student__user",
+            )
+            .order_by("weekday", "start_time", "id")
+        )
+
+        attendance = list(
+            TuitionAttendance.objects
+            .filter(
+                department=department,
+                entity_type="student",
+                student=student,
+            )
+            .select_related(
+                "schedule__enrollment__class_level",
+                "schedule__enrollment__subject",
+                "schedule__teacher__user",
+                "enrollment__class_level",
+                "enrollment__subject",
+                "enrollment__teacher__user",
+                "marked_by",
+            )
+            .order_by("-date", "-updated_at", "-id")[:2000]
+        )
+
+        def user_name(user):
+            if not user:
+                return ""
+            full_name = f"{user.first_name} {user.last_name}".strip()
+            return full_name or user.username
+
+        subject_rows = []
+        for enrollment in enrollments:
+            schedule_count = sum(
+                1
+                for item in schedules
+                if item.enrollment_id == enrollment.id
+            )
+            subject_rows.append({
+                "enrollment_id": enrollment.id,
+                "program_type": enrollment.program_type,
+                "class_name": enrollment.display_class,
+                "subject_name": enrollment.display_subject,
+                "teacher_id": enrollment.teacher_id,
+                "teacher_name": user_name(enrollment.teacher.user),
+                "start_date": str(enrollment.start_date),
+                "end_date": str(enrollment.end_date) if enrollment.end_date else None,
+                "notes": enrollment.notes,
+                "schedule_count": schedule_count,
+            })
+
+        schedule_rows = []
+        for item in schedules:
+            enrollment = item.enrollment
+            schedule_rows.append({
+                "id": item.id,
+                "enrollment_id": item.enrollment_id,
+                "student_id": item.student_id,
+                "student_name": user_name(item.student.user),
+                "teacher_id": item.teacher_id,
+                "teacher_name": user_name(item.teacher.user),
+                "class_name": enrollment.display_class,
+                "subject_name": enrollment.display_subject,
+                "program_type": enrollment.program_type,
+                "weekday": item.weekday,
+                "start_time": item.start_time.strftime("%H:%M"),
+                "end_time": item.end_time.strftime("%H:%M"),
+                "timezone_name": item.timezone_name or "Asia/Karachi",
+                "meeting_link": item.meeting_link,
+            })
+
+        attendance_rows = []
+        for item in attendance:
+            schedule = item.schedule
+            enrollment = item.enrollment or (schedule.enrollment if schedule else None)
+            teacher = None
+            if schedule:
+                teacher = schedule.teacher
+            elif enrollment:
+                teacher = enrollment.teacher
+
+            attendance_rows.append({
+                "id": item.id,
+                "schedule_id": item.schedule_id,
+                "enrollment_id": item.enrollment_id or (schedule.enrollment_id if schedule else None),
+                "date": str(item.date),
+                "status": item.status,
+                "class_key": item.class_key or "",
+                "class_name": enrollment.display_class if enrollment else "",
+                "subject_name": enrollment.display_subject if enrollment else "",
+                "teacher_id": teacher.id if teacher else None,
+                "teacher_name": user_name(teacher.user) if teacher else "",
+                "weekday": schedule.weekday if schedule else "",
+                "start_time": schedule.start_time.strftime("%H:%M") if schedule else "",
+                "end_time": schedule.end_time.strftime("%H:%M") if schedule else "",
+                "timezone_name": schedule.timezone_name if schedule else "",
+                "marked_by": user_name(item.marked_by),
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+                "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            })
+
+        present_count = sum(1 for item in attendance if item.status == "present")
+        absent_count = sum(1 for item in attendance if item.status == "absent")
+        leave_count = sum(1 for item in attendance if item.status == "leave")
+        teacher_names = []
+        for enrollment in enrollments:
+            name = user_name(enrollment.teacher.user)
+            if name and name not in teacher_names:
+                teacher_names.append(name)
+
+        return Response({
+            "department": {
+                "id": department.id,
+                "name": department.name,
+                "code": department.code,
+            },
+            "user": {
+                "id": request.user.id,
+                "username": request.user.username,
+                "email": request.user.email,
+                "full_name": user_name(request.user),
+            },
+            "student": {
+                "id": student.id,
+                "name": user_name(student.user),
+                "phone": student.phone,
+                "teacher_names": teacher_names,
+            },
+            "counts": {
+                "subjects": len(subject_rows),
+                "active_enrollments": len(enrollments),
+                "scheduled_classes": len(schedule_rows),
+                "attendance_records": len(attendance_rows),
+                "present": present_count,
+                "absent": absent_count,
+                "leave": leave_count,
+                "assignments": 0,
+            },
+            "subjects": subject_rows,
+            "schedules": schedule_rows,
+            "attendance": attendance_rows,
+            "assignments": [],
+        })
+
+# ============================================================
+# Tuition Teacher Portal API v51
+# ============================================================
+from .models import TuitionAttendance as TuitionTeacherPortalAttendanceModel
+
+
+class TuitionTeacherPortalView(APIView):
+    """Read-only, teacher-scoped Tuition dashboard data."""
+
+    permission_classes = [
+        IsAuthenticated,
+        TuitionDepartmentAccessPermission,
+    ]
+
+    def get(self, request):
+        department = request.tuition_department
+        linked_role = tuition_role_for_user(request.user, department)
+        global_role = str(getattr(request.user, "role", "") or "").lower()
+
+        if linked_role != User.Role.TEACHER and global_role != User.Role.TEACHER:
+            return Response(
+                {"detail": "Only Tuition teacher accounts can open this portal."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            teacher = (
+                TeacherProfile.objects
+                .select_related("user")
+                .get(user=request.user)
+            )
+        except TeacherProfile.DoesNotExist:
+            return Response(
+                {"detail": "A teacher profile is not connected to this account."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        schedules = list(
+            TuitionSchedule.objects
+            .filter(
+                department=department,
+                teacher=teacher,
+                is_active=True,
+                enrollment__is_active=True,
+            )
+            .select_related(
+                "enrollment__class_level",
+                "enrollment__subject",
+                "student__user",
+                "teacher__user",
+            )
+            .order_by("weekday", "start_time", "student__user__first_name", "id")
+        )
+
+        attendance = list(
+            TuitionTeacherPortalAttendanceModel.objects
+            .filter(
+                department=department,
+                entity_type="teacher",
+                teacher=teacher,
+            )
+            .select_related(
+                "schedule__enrollment__class_level",
+                "schedule__enrollment__subject",
+                "schedule__student__user",
+                "enrollment__class_level",
+                "enrollment__subject",
+                "enrollment__student__user",
+                "marked_by",
+            )
+            .order_by("-date", "-updated_at", "-id")[:2500]
+        )
+
+        def user_name(user):
+            if not user:
+                return ""
+            full_name = f"{user.first_name} {user.last_name}".strip()
+            return full_name or user.username
+
+        class_rows = []
+        for item in schedules:
+            enrollment = item.enrollment
+            class_rows.append({
+                "id": item.id,
+                "enrollment_id": item.enrollment_id,
+                "student_id": item.student_id,
+                "student_name": user_name(item.student.user),
+                "student_phone": getattr(item.student, "phone", "") or "",
+                "class_name": enrollment.display_class,
+                "subject_name": enrollment.display_subject,
+                "program_type": enrollment.program_type,
+                "weekday": item.weekday,
+                "start_time": item.start_time.strftime("%H:%M"),
+                "end_time": item.end_time.strftime("%H:%M"),
+                "timezone_name": item.timezone_name or "Asia/Karachi",
+                "meeting_link": item.meeting_link or teacher.zoom_link or "",
+            })
+
+        attendance_rows = []
+        for item in attendance:
+            schedule = item.schedule
+            enrollment = item.enrollment or (schedule.enrollment if schedule else None)
+            student = None
+            if schedule:
+                student = schedule.student
+            elif enrollment:
+                student = enrollment.student
+
+            attendance_rows.append({
+                "id": item.id,
+                "schedule_id": item.schedule_id,
+                "enrollment_id": item.enrollment_id or (schedule.enrollment_id if schedule else None),
+                "date": str(item.date),
+                "status": item.status,
+                "class_key": item.class_key or "",
+                "class_name": enrollment.display_class if enrollment else "",
+                "subject_name": enrollment.display_subject if enrollment else "",
+                "student_id": student.id if student else None,
+                "student_name": user_name(student.user) if student else "",
+                "weekday": schedule.weekday if schedule else "",
+                "start_time": schedule.start_time.strftime("%H:%M") if schedule else "",
+                "end_time": schedule.end_time.strftime("%H:%M") if schedule else "",
+                "timezone_name": schedule.timezone_name if schedule else "",
+                "marked_by": user_name(item.marked_by),
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+                "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            })
+
+        present_count = sum(1 for item in attendance if item.status == "present")
+        absent_count = sum(1 for item in attendance if item.status == "absent")
+        leave_count = sum(1 for item in attendance if item.status == "leave")
+        active_student_ids = {item.student_id for item in schedules if item.student_id}
+        subject_names = {
+            item.enrollment.display_subject
+            for item in schedules
+            if item.enrollment and item.enrollment.display_subject
+        }
+
+        return Response({
+            "department": {
+                "id": department.id,
+                "name": department.name,
+                "code": department.code,
+            },
+            "user": {
+                "id": request.user.id,
+                "username": request.user.username,
+                "email": request.user.email,
+                "full_name": user_name(request.user),
+            },
+            "teacher": {
+                "id": teacher.id,
+                "name": user_name(teacher.user),
+                "phone": teacher.phone,
+                "joining_date": str(teacher.joining_date) if teacher.joining_date else None,
+                "zoom_link": teacher.zoom_link,
+            },
+            "counts": {
+                "total_classes": len(class_rows),
+                "active_students": len(active_student_ids),
+                "subjects": len(subject_names),
+                "attendance_records": len(attendance_rows),
+                "present": present_count,
+                "absent": absent_count,
+                "leave": leave_count,
+            },
+            "classes": class_rows,
+            "attendance": attendance_rows,
+        })

@@ -4,18 +4,52 @@
     "experimentalDecorators": true,
     "useDefineForClassFields": false,
     "module": "ESNext",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "skipLibCheck": true,
-    "types": ["vite/client", "node"],
+    "types": [
+      "vite/client",
+      "node"
+    ],
     "moduleResolution": "bundler",
     "isolatedModules": true,
     "moduleDetection": "force",
     "allowJs": true,
     "jsx": "react-jsx",
     "paths": {
-      "@/*": ["./*"]
+      "@/*": [
+        "./*"
+      ]
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "include": [
+    "*.ts",
+    "*.tsx",
+    "*.d.ts",
+    "components/**/*.ts",
+    "components/**/*.tsx",
+    "components/**/*.d.ts",
+    "hooks/**/*.ts",
+    "hooks/**/*.tsx",
+    "hooks/**/*.d.ts",
+    "services/**/*.ts",
+    "services/**/*.tsx",
+    "services/**/*.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "backend",
+    "_update_backups",
+    "**/_update_backups/**",
+    "**/*.bak",
+    "**/*.backup",
+    "**/*.backup*",
+    "**/__pycache__"
+  ]
 }

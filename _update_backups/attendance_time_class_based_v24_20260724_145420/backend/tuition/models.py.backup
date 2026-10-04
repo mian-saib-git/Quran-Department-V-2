@@ -1,0 +1,1342 @@
+from datetime import date, datetime, time, timedelta
+
+from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.db import models
+from django.db.models import F, Q
+
+from .constants import (
+    CLASS_DURATION_MINUTES,
+    OFF_WEEKDAYS,
+    OPERATING_END_HOUR,
+    OPERATING_START_HOUR,
+)
+
+
+def add_minutes(value, minutes=CLASS_DURATION_MINUTES):
+    combined = datetime.combine(
+        date.today(),
+        value,
+    )
+
+    return (
+        combined + timedelta(minutes=minutes)
+    ).time()
+
+
+class DepartmentScopedModel(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        on_delete=models.CASCADE,
+        related_name="+",
+    )
+
+    department = models.ForeignKey(
+        "accounts.Department",
+        on_delete=models.CASCADE,
+        related_name="+",
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        abstract = True
+
+
+class TuitionDepartmentConfig(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        on_delete=models.CASCADE,
+        related_name="tuition_configs",
+    )
+
+    department = models.OneToOneField(
+        "accounts.Department",
+        on_delete=models.CASCADE,
+        related_name="tuition_config",
+    )
+
+    default_timezone = models.CharField(
+        max_length=80,
+        default="Asia/Karachi",
+    )
+
+    operating_start = models.TimeField(
+        default=time(10, 0),
+    )
+
+    operating_end = models.TimeField(
+        default=time(22, 0),
+    )
+
+    class_duration_minutes = (
+        models.PositiveSmallIntegerField(
+            default=CLASS_DURATION_MINUTES,
+            choices=[
+                (
+                    CLASS_DURATION_MINUTES,
+                    "40 minutes",
+                )
+            ],
+        )
+    )
+
+    operating_weekdays = models.JSONField(
+        default=list,
+        blank=True,
+    )
+
+    allow_custom_start_times = (
+        models.BooleanField(default=True)
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    def clean(self):
+        errors = {}
+
+        if self.class_duration_minutes != 40:
+            errors["class_duration_minutes"] = (
+                "Every Tuition class must be "
+                "exactly 40 minutes."
+            )
+
+        if self.operating_start >= self.operating_end:
+            errors["operating_end"] = (
+                "Operating end time must be "
+                "after the start time."
+            )
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"{self.department.name} "
+            f"Tuition configuration"
+        )
+
+
+class TuitionClassLevel(
+    DepartmentScopedModel
+):
+    class Board(models.TextChoices):
+        GENERAL = "general", "General"
+        FEDERAL = "federal", "Federal Board"
+        IGCSE = "igcse", "IGCSE"
+        CAMBRIDGE = "cambridge", "Cambridge"
+
+    code = models.SlugField(max_length=80)
+    name = models.CharField(max_length=150)
+
+    board = models.CharField(
+        max_length=30,
+        choices=Board.choices,
+        default=Board.GENERAL,
+    )
+
+    sort_order = models.PositiveSmallIntegerField(
+        default=0
+    )
+
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["sort_order", "name", "id"]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["department", "code"],
+                name=(
+                    "unique_tuition_class_code_"
+                    "per_department"
+                ),
+            ),
+        ]
+
+        indexes = [
+            models.Index(
+                fields=["department", "is_active"]
+            ),
+            models.Index(
+                fields=["board", "is_active"]
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class TuitionSubject(
+    DepartmentScopedModel
+):
+    code = models.SlugField(max_length=80)
+    name = models.CharField(max_length=150)
+
+    is_standard = models.BooleanField(
+        default=True
+    )
+
+    is_active = models.BooleanField(default=True)
+
+    sort_order = models.PositiveSmallIntegerField(
+        default=0
+    )
+
+    class Meta:
+        ordering = ["sort_order", "name", "id"]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["department", "code"],
+                name=(
+                    "unique_tuition_subject_code_"
+                    "per_department"
+                ),
+            ),
+        ]
+
+        indexes = [
+            models.Index(
+                fields=["department", "is_active"]
+            ),
+            models.Index(
+                fields=["is_standard", "is_active"]
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class TuitionStandardSlot(
+    DepartmentScopedModel
+):
+    class Region(models.TextChoices):
+        PAKISTAN = "PK", "Pakistan"
+        SAUDI_ARABIA = "KSA", "Saudi Arabia"
+        UAE = "UAE", "United Arab Emirates"
+
+    region = models.CharField(
+        max_length=10,
+        choices=Region.choices,
+    )
+
+    timezone_name = models.CharField(
+        max_length=80
+    )
+
+    label = models.CharField(max_length=80)
+
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+
+    sort_order = models.PositiveSmallIntegerField(
+        default=0
+    )
+
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = [
+            "region",
+            "sort_order",
+            "start_time",
+        ]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "department",
+                    "region",
+                    "label",
+                ],
+                name=(
+                    "unique_tuition_standard_slot_"
+                    "label"
+                ),
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    end_time__gt=F("start_time")
+                ),
+                name=(
+                    "tuition_standard_slot_"
+                    "end_after_start"
+                ),
+            ),
+        ]
+
+    def clean(self):
+        if self.start_time and self.end_time:
+            expected_end = add_minutes(
+                self.start_time
+            )
+
+            if self.end_time != expected_end:
+                raise ValidationError(
+                    {
+                        "end_time":
+                        "Standard lecture slots must "
+                        "be exactly 40 minutes."
+                    }
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"{self.get_region_display()} — "
+            f"{self.label}"
+        )
+
+
+class TuitionTeacherCapability(
+    DepartmentScopedModel
+):
+    teacher = models.ForeignKey(
+        "academy.TeacherProfile",
+        on_delete=models.CASCADE,
+        related_name=(
+            "tuition_subject_capabilities"
+        ),
+    )
+
+    subject = models.ForeignKey(
+        TuitionSubject,
+        on_delete=models.CASCADE,
+        related_name="teacher_capabilities",
+    )
+
+    is_active = models.BooleanField(default=True)
+
+    notes = models.TextField(blank=True)
+
+    # Permanent Tuition timetable availability. Empty means available for all fixed slots.
+    available_schedule_slots = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        ordering = [
+            "teacher__user__first_name",
+            "subject__sort_order",
+        ]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "department",
+                    "teacher",
+                    "subject",
+                ],
+                name=(
+                    "unique_tuition_teacher_"
+                    "subject_capability"
+                ),
+            ),
+        ]
+
+        indexes = [
+            models.Index(
+                fields=["teacher", "is_active"]
+            ),
+            models.Index(
+                fields=["subject", "is_active"]
+            ),
+        ]
+
+    def clean(self):
+        if (
+            self.subject_id
+            and self.subject.department_id
+            != self.department_id
+        ):
+            raise ValidationError(
+                {
+                    "subject":
+                    "The subject must belong to "
+                    "the same Tuition Department."
+                }
+            )
+
+    def __str__(self):
+        return (
+            f"{self.teacher} — {self.subject}"
+        )
+
+
+class TuitionEnrollment(
+    DepartmentScopedModel
+):
+    class ProgramType(models.TextChoices):
+        REGULAR = "regular", "Regular Class"
+        CRASH = "crash", "Crash Program"
+
+    student = models.ForeignKey(
+        "academy.StudentProfile",
+        on_delete=models.CASCADE,
+        related_name="tuition_enrollments",
+    )
+
+    teacher = models.ForeignKey(
+        "academy.TeacherProfile",
+        on_delete=models.PROTECT,
+        related_name="tuition_enrollments",
+    )
+
+    program_type = models.CharField(
+        max_length=20,
+        choices=ProgramType.choices,
+        default=ProgramType.REGULAR,
+    )
+
+    class_level = models.ForeignKey(
+        TuitionClassLevel,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="enrollments",
+    )
+
+    subject = models.ForeignKey(
+        TuitionSubject,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="enrollments",
+    )
+
+    custom_class_name = models.CharField(
+        max_length=150,
+        blank=True,
+    )
+
+    custom_subject_name = models.CharField(
+        max_length=150,
+        blank=True,
+    )
+
+    start_date = models.DateField()
+    end_date = models.DateField(
+        null=True,
+        blank=True,
+    )
+
+    notes = models.TextField(blank=True)
+
+    is_active = models.BooleanField(default=True)
+
+    # Permanent Tuition timetable fields. Each Tuition class is fixed at 40 minutes.
+    schedule_country = models.CharField(max_length=12, default="PK", blank=True)
+    schedule_slot = models.CharField(max_length=24, default="PK_L1", blank=True)
+    schedule_label = models.CharField(max_length=80, default="", blank=True)
+    schedule_start_time = models.TimeField(null=True, blank=True)
+    schedule_end_time = models.TimeField(null=True, blank=True)
+    duration_minutes = models.PositiveSmallIntegerField(default=40)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name=(
+            "created_tuition_enrollments"
+        ),
+    )
+
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name=(
+            "updated_tuition_enrollments"
+        ),
+    )
+
+    class Meta:
+        ordering = [
+            "student__user__first_name",
+            "subject__sort_order",
+            "custom_subject_name",
+        ]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "subject"],
+                condition=Q(
+                    is_active=True,
+                    subject__isnull=False,
+                ),
+                name=(
+                    "unique_active_tuition_"
+                    "student_subject"
+                ),
+            ),
+            models.UniqueConstraint(
+                fields=[
+                    "student",
+                    "custom_subject_name",
+                ],
+                condition=Q(
+                    is_active=True,
+                    subject__isnull=True,
+                ),
+                name=(
+                    "unique_active_tuition_"
+                    "student_custom_subject"
+                ),
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(end_date__isnull=True)
+                    | Q(
+                        end_date__gte=F(
+                            "start_date"
+                        )
+                    )
+                ),
+                name=(
+                    "tuition_enrollment_"
+                    "end_after_start"
+                ),
+            ),
+        ]
+
+        indexes = [
+            models.Index(
+                fields=["student", "is_active"]
+            ),
+            models.Index(
+                fields=["teacher", "is_active"]
+            ),
+            models.Index(
+                fields=["department", "is_active"]
+            ),
+            models.Index(
+                fields=[
+                    "program_type",
+                    "is_active",
+                ]
+            ),
+        ]
+
+    @property
+    def display_class(self):
+        if self.program_type == self.ProgramType.CRASH:
+            return self.custom_class_name.strip()
+
+        return (
+            self.class_level.name
+            if self.class_level_id
+            else ""
+        )
+
+    @property
+    def display_subject(self):
+        if self.program_type == self.ProgramType.CRASH:
+            return self.custom_subject_name.strip()
+
+        return (
+            self.subject.name
+            if self.subject_id
+            else ""
+        )
+
+    def clean(self):
+        errors = {}
+
+        if self.program_type == self.ProgramType.REGULAR:
+            if not self.class_level_id:
+                errors["class_level"] = (
+                    "A class is required for a "
+                    "regular Tuition enrollment."
+                )
+
+            if not self.subject_id:
+                errors["subject"] = (
+                    "A subject is required for a "
+                    "regular Tuition enrollment."
+                )
+
+            self.custom_class_name = ""
+            self.custom_subject_name = ""
+
+        elif self.program_type == self.ProgramType.CRASH:
+            if not self.custom_class_name.strip():
+                errors["custom_class_name"] = (
+                    "Enter the class or program "
+                    "name for a crash program."
+                )
+
+            if not self.custom_subject_name.strip():
+                errors["custom_subject_name"] = (
+                    "Enter the crash-program "
+                    "subject."
+                )
+
+            self.class_level = None
+            self.subject = None
+
+        if (
+            self.class_level_id
+            and self.class_level.department_id
+            != self.department_id
+        ):
+            errors["class_level"] = (
+                "The class must belong to the "
+                "same Tuition Department."
+            )
+
+        if (
+            self.subject_id
+            and self.subject.department_id
+            != self.department_id
+        ):
+            errors["subject"] = (
+                "The subject must belong to the "
+                "same Tuition Department."
+            )
+
+        if (
+            self.subject_id
+            and self.teacher_id
+            and not TuitionTeacherCapability.objects.filter(
+                department_id=self.department_id,
+                teacher_id=self.teacher_id,
+                subject_id=self.subject_id,
+                is_active=True,
+            ).exists()
+        ):
+            errors["teacher"] = (
+                "This teacher is not enabled "
+                "for the selected subject."
+            )
+
+        if (
+            self.end_date
+            and self.start_date
+            and self.end_date < self.start_date
+        ):
+            errors["end_date"] = (
+                "End date cannot be before "
+                "the start date."
+            )
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"{self.student} — "
+            f"{self.display_subject} — "
+            f"{self.teacher}"
+        )
+
+
+class TuitionTeacherAvailability(
+    DepartmentScopedModel
+):
+    class WeekDay(models.TextChoices):
+        SUNDAY = "sunday", "Sunday"
+        MONDAY = "monday", "Monday"
+        TUESDAY = "tuesday", "Tuesday"
+        WEDNESDAY = "wednesday", "Wednesday"
+        THURSDAY = "thursday", "Thursday"
+        FRIDAY = "friday", "Friday"
+        SATURDAY = "saturday", "Saturday"
+
+    teacher = models.ForeignKey(
+        "academy.TeacherProfile",
+        on_delete=models.CASCADE,
+        related_name=(
+            "tuition_availability_periods"
+        ),
+    )
+
+    weekday = models.CharField(
+        max_length=20,
+        choices=WeekDay.choices,
+    )
+
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+
+    timezone_name = models.CharField(
+        max_length=80,
+        default="Asia/Karachi",
+    )
+
+    is_active = models.BooleanField(default=True)
+
+    notes = models.CharField(
+        max_length=250,
+        blank=True,
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name=(
+            "created_tuition_availability"
+        ),
+    )
+
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name=(
+            "updated_tuition_availability"
+        ),
+    )
+
+    class Meta:
+        ordering = [
+            "teacher__user__first_name",
+            "weekday",
+            "start_time",
+        ]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "teacher",
+                    "weekday",
+                    "start_time",
+                    "end_time",
+                ],
+                name=(
+                    "unique_tuition_teacher_"
+                    "availability_period"
+                ),
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    end_time__gt=F("start_time")
+                ),
+                name=(
+                    "tuition_availability_"
+                    "end_after_start"
+                ),
+            ),
+        ]
+
+        indexes = [
+            models.Index(
+                fields=[
+                    "teacher",
+                    "weekday",
+                    "is_active",
+                ]
+            ),
+            models.Index(
+                fields=[
+                    "department",
+                    "weekday",
+                    "is_active",
+                ]
+            ),
+        ]
+
+    def clean(self):
+        errors = {}
+
+        if self.weekday in OFF_WEEKDAYS:
+            errors["weekday"] = (
+                "Friday and Saturday are off "
+                "for the Tuition Department."
+            )
+
+        if (
+            self.start_time
+            and self.end_time
+            and self.start_time >= self.end_time
+        ):
+            errors["end_time"] = (
+                "Availability end time must be "
+                "after the start time."
+            )
+
+        opening = time(
+            OPERATING_START_HOUR,
+            0,
+        )
+
+        closing = time(
+            OPERATING_END_HOUR,
+            0,
+        )
+
+        if (
+            self.start_time
+            and self.start_time < opening
+        ):
+            errors["start_time"] = (
+                "Teacher availability cannot "
+                "start before 10:00 AM local time."
+            )
+
+        if (
+            self.end_time
+            and self.end_time > closing
+        ):
+            errors["end_time"] = (
+                "Teacher availability cannot "
+                "end after 10:00 PM local time."
+            )
+
+        if (
+            self.teacher_id
+            and self.weekday
+            and self.start_time
+            and self.end_time
+        ):
+            overlap = (
+                TuitionTeacherAvailability.objects
+                .filter(
+                    teacher_id=self.teacher_id,
+                    is_active=True,
+                    start_time__lt=self.end_time,
+                    end_time__gt=self.start_time,
+                )
+                .exclude(pk=self.pk)
+                .exclude(
+                    start_time=self.start_time,
+                    end_time=self.end_time,
+                )
+                .exists()
+            )
+
+            if overlap:
+                errors["start_time"] = (
+                    "This not-available period "
+                    "overlaps another not-available period."
+                )
+
+            class_overlap = (
+                TuitionSchedule.objects
+                .filter(
+                    teacher_id=self.teacher_id,
+                    weekday__in=[
+                        self.WeekDay.SUNDAY,
+                        self.WeekDay.MONDAY,
+                        self.WeekDay.TUESDAY,
+                        self.WeekDay.WEDNESDAY,
+                        self.WeekDay.THURSDAY,
+                    ],
+                    is_active=True,
+                    start_time__lt=self.end_time,
+                    end_time__gt=self.start_time,
+                )
+                .exists()
+            )
+
+            if class_overlap:
+                errors["start_time"] = (
+                    "This teacher already has a Tuition class during this time. "
+                    "Remove the class first, then mark this cell as Not Available."
+                )
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"{self.teacher} — "
+            f"{self.get_weekday_display()} — "
+            f"{self.start_time}–{self.end_time}"
+        )
+
+
+class TuitionSchedule(
+    DepartmentScopedModel
+):
+    class WeekDay(models.TextChoices):
+        SUNDAY = "sunday", "Sunday"
+        MONDAY = "monday", "Monday"
+        TUESDAY = "tuesday", "Tuesday"
+        WEDNESDAY = "wednesday", "Wednesday"
+        THURSDAY = "thursday", "Thursday"
+        FRIDAY = "friday", "Friday"
+        SATURDAY = "saturday", "Saturday"
+
+    enrollment = models.ForeignKey(
+        TuitionEnrollment,
+        on_delete=models.CASCADE,
+        related_name="schedules",
+    )
+
+    teacher = models.ForeignKey(
+        "academy.TeacherProfile",
+        on_delete=models.PROTECT,
+        related_name="tuition_schedules",
+    )
+
+    student = models.ForeignKey(
+        "academy.StudentProfile",
+        on_delete=models.CASCADE,
+        related_name="tuition_schedules",
+    )
+
+    weekday = models.CharField(
+        max_length=20,
+        choices=WeekDay.choices,
+    )
+
+    start_time = models.TimeField()
+    end_time = models.TimeField(
+        editable=False,
+    )
+
+    timezone_name = models.CharField(
+        max_length=80,
+        default="Asia/Karachi",
+    )
+
+    standard_slot = models.ForeignKey(
+        TuitionStandardSlot,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="schedules",
+    )
+
+    meeting_link = models.URLField(blank=True)
+
+    is_active = models.BooleanField(default=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name=(
+            "created_tuition_schedules"
+        ),
+    )
+
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name=(
+            "updated_tuition_schedules"
+        ),
+    )
+
+    class Meta:
+        ordering = [
+            "weekday",
+            "start_time",
+            "teacher__user__first_name",
+        ]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "teacher",
+                    "weekday",
+                    "start_time",
+                ],
+                condition=Q(is_active=True),
+                name=(
+                    "unique_active_tuition_"
+                    "teacher_slot"
+                ),
+            ),
+            models.UniqueConstraint(
+                fields=[
+                    "student",
+                    "weekday",
+                    "start_time",
+                ],
+                condition=Q(is_active=True),
+                name=(
+                    "unique_active_tuition_"
+                    "student_slot"
+                ),
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    end_time__gt=F("start_time")
+                ),
+                name=(
+                    "tuition_schedule_"
+                    "end_after_start"
+                ),
+            ),
+        ]
+
+        indexes = [
+            models.Index(
+                fields=[
+                    "department",
+                    "weekday",
+                    "start_time",
+                ]
+            ),
+            models.Index(
+                fields=[
+                    "teacher",
+                    "weekday",
+                    "is_active",
+                ]
+            ),
+            models.Index(
+                fields=[
+                    "student",
+                    "weekday",
+                    "is_active",
+                ]
+            ),
+        ]
+
+    def clean(self):
+        errors = {}
+
+        if self.weekday in OFF_WEEKDAYS:
+            errors["weekday"] = (
+                "Friday and Saturday are off "
+                "for the Tuition Department."
+            )
+
+        opening = time(
+            OPERATING_START_HOUR,
+            0,
+        )
+
+        closing = time(
+            OPERATING_END_HOUR,
+            0,
+        )
+
+        if self.start_time < opening:
+            errors["start_time"] = (
+                "A Tuition class cannot start "
+                "before 10:00 AM local time."
+            )
+
+        if self.end_time > closing:
+            errors["start_time"] = (
+                "A Tuition class cannot finish "
+                "after 10:00 PM local time."
+            )
+
+        if self.enrollment_id:
+            enrollment = self.enrollment
+
+            if not enrollment.is_active:
+                errors["enrollment"] = (
+                    "The selected enrollment "
+                    "is inactive."
+                )
+
+            if (
+                enrollment.department_id
+                != self.department_id
+            ):
+                errors["department"] = (
+                    "The schedule and enrollment "
+                    "must belong to the same "
+                    "department."
+                )
+
+        if (
+            self.teacher_id
+            and self.weekday
+            and self.start_time
+            and self.end_time
+        ):
+            not_available_block = (
+                TuitionTeacherAvailability.objects
+                .filter(
+                    teacher_id=self.teacher_id,
+                    weekday__in=[
+                        TuitionTeacherAvailability.WeekDay.SUNDAY,
+                        TuitionTeacherAvailability.WeekDay.MONDAY,
+                        TuitionTeacherAvailability.WeekDay.TUESDAY,
+                        TuitionTeacherAvailability.WeekDay.WEDNESDAY,
+                        TuitionTeacherAvailability.WeekDay.THURSDAY,
+                    ],
+                    is_active=True,
+                    start_time__lt=self.end_time,
+                    end_time__gt=self.start_time,
+                )
+                .exists()
+            )
+
+            if not_available_block:
+                errors["start_time"] = (
+                    "This teacher is marked Not Available for this time. "
+                    "Remove the Not Available block first, then add the class."
+                )
+
+            teacher_overlap = (
+                TuitionSchedule.objects
+                .filter(
+                    teacher_id=self.teacher_id,
+                    weekday=self.weekday,
+                    is_active=True,
+                    start_time__lt=self.end_time,
+                    end_time__gt=self.start_time,
+                )
+                .exclude(pk=self.pk)
+                .exists()
+            )
+
+            if teacher_overlap:
+                errors["teacher"] = (
+                    "The teacher already has a "
+                    "class during this time."
+                )
+
+        if (
+            self.student_id
+            and self.weekday
+            and self.start_time
+            and self.end_time
+        ):
+            student_overlap = (
+                TuitionSchedule.objects
+                .filter(
+                    student_id=self.student_id,
+                    weekday=self.weekday,
+                    is_active=True,
+                    start_time__lt=self.end_time,
+                    end_time__gt=self.start_time,
+                )
+                .exclude(pk=self.pk)
+                .exists()
+            )
+
+            if student_overlap:
+                errors["student"] = (
+                    "The student already has a "
+                    "class during this time."
+                )
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if self.enrollment_id:
+            self.teacher = self.enrollment.teacher
+            self.student = self.enrollment.student
+            self.institution = (
+                self.enrollment.institution
+            )
+            self.department = (
+                self.enrollment.department
+            )
+
+        self.end_time = add_minutes(
+            self.start_time
+        )
+
+        self.full_clean()
+
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"{self.student} — {self.teacher} — "
+            f"{self.get_weekday_display()} "
+            f"{self.start_time}"
+        )
+
+
+
+
+class TuitionAttendance(DepartmentScopedModel):
+    class EntityType(models.TextChoices):
+        TEACHER = "teacher", "Teacher"
+        STUDENT = "student", "Student"
+
+    class Status(models.TextChoices):
+        PRESENT = "present", "Present"
+        ABSENT = "absent", "Absent"
+        LEAVE = "leave", "Leave"
+
+    entity_type = models.CharField(max_length=20, choices=EntityType.choices)
+    schedule = models.ForeignKey(
+        "tuition.TuitionSchedule",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="attendance_records",
+    )
+    enrollment = models.ForeignKey(
+        "tuition.TuitionEnrollment",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="attendance_records",
+    )
+    teacher = models.ForeignKey(
+        "academy.TeacherProfile",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="tuition_attendance_records",
+    )
+    student = models.ForeignKey(
+        "academy.StudentProfile",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="tuition_attendance_records",
+    )
+    date = models.DateField()
+    status = models.CharField(max_length=20, choices=Status.choices)
+    class_key = models.CharField(max_length=80, blank=True)
+    marked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="marked_tuition_attendance",
+    )
+
+    class Meta:
+        ordering = ["-date", "-updated_at", "-id"]
+        indexes = [
+            models.Index(fields=["department", "date"]),
+            models.Index(fields=["schedule", "date"]),
+            models.Index(fields=["teacher", "date"]),
+            models.Index(fields=["student", "date"]),
+            models.Index(fields=["entity_type", "status"]),
+        ]
+
+    def clean(self):
+        errors = {}
+        if self.entity_type == self.EntityType.STUDENT and not (self.schedule_id or self.student_id):
+            errors["student"] = "Student attendance requires a Tuition schedule or student."
+        if self.entity_type == self.EntityType.TEACHER and not self.teacher_id:
+            errors["teacher"] = "Teacher attendance requires a teacher."
+        if self.schedule_id:
+            self.enrollment = self.schedule.enrollment
+            self.teacher = self.schedule.teacher
+            self.student = self.schedule.student
+            self.class_key = self.class_key or f"schedule:{self.schedule_id}"
+            if self.schedule.department_id != self.department_id:
+                errors["schedule"] = "Schedule must belong to this Tuition Department."
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.entity_type} {self.date} {self.status}"
+
+
+class TuitionAuditLog(models.Model):
+    institution = models.ForeignKey(
+        "accounts.Institution",
+        on_delete=models.CASCADE,
+        related_name="+",
+    )
+
+    department = models.ForeignKey(
+        "accounts.Department",
+        on_delete=models.CASCADE,
+        related_name=(
+            "tuition_audit_logs"
+        ),
+    )
+
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name=(
+            "tuition_audit_actions"
+        ),
+    )
+
+    action = models.CharField(max_length=120)
+    target_model = models.CharField(
+        max_length=120,
+        blank=True,
+    )
+    target_id = models.CharField(
+        max_length=120,
+        blank=True,
+    )
+
+    before_data = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
+    after_data = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+        indexes = [
+            models.Index(
+                fields=[
+                    "department",
+                    "created_at",
+                ]
+            ),
+            models.Index(
+                fields=[
+                    "actor",
+                    "created_at",
+                ]
+            ),
+            models.Index(
+                fields=[
+                    "action",
+                    "created_at",
+                ]
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.action} — "
+            f"{self.target_model} "
+            f"{self.target_id}"
+        )

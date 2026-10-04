@@ -1,0 +1,28 @@
+{
+  "include": [
+    "backend"
+  ],
+  "exclude": [
+    "backend/venv",
+    "backend/**/__pycache__",
+    "backend/**/migrations",
+    "backend/**/*.bak",
+    "backend/**/*_backup.py",
+    "_update_backups",
+    "node_modules",
+    "dist"
+  ],
+  "venvPath": "backend",
+  "venv": "venv",
+  "typeCheckingMode": "off",
+  "reportMissingImports": "error",
+  "reportMissingModuleSource": "warning",
+  "executionEnvironments": [
+    {
+      "root": "backend",
+      "extraPaths": [
+        "backend"
+      ]
+    }
+  ]
+}

@@ -37,6 +37,7 @@ def notify_lesson_saved(report, created: bool):
     }
     # Notify coordinator role
     notify_role("coordinator", "lesson_saved", payload)
+    notify_role("department_admin", "lesson_saved", payload)
     # Notify the teacher
     notify_user(report.teacher.user_id, "lesson_saved", payload)
 
@@ -56,8 +57,7 @@ def notify_permission_granted(permission):
     # Notify the teacher so they immediately see the permission
     notify_user(permission.teacher.user_id, "permission_granted", payload)
     notify_role("coordinator", "permission_granted", payload)
-
-
+    notify_role("department_admin", "permission_granted", payload)
 def notify_permission_disabled(permission):
     payload = {
         "type": "permission_disabled",
@@ -70,8 +70,7 @@ def notify_permission_disabled(permission):
     }
     notify_user(permission.teacher.user_id, "permission_disabled", payload)
     notify_role("coordinator", "permission_disabled", payload)
-
-
+    notify_role("department_admin", "permission_disabled", payload)
 def notify_request_reviewed(request_obj, action: str):
     payload = {
         "type": "request_reviewed",
@@ -86,8 +85,7 @@ def notify_request_reviewed(request_obj, action: str):
     }
     notify_user(request_obj.teacher.user_id, "request_reviewed", payload)
     notify_role("coordinator", "request_reviewed", payload)
-
-
+    notify_role("department_admin", "request_reviewed", payload)
 def notify_request_created(request_obj):
     payload = {
         "type": "lesson_request_created",
@@ -102,8 +100,7 @@ def notify_request_created(request_obj):
         "reason": request_obj.reason or "",
     }
     notify_role("coordinator", "lesson_request_created", payload)
-
-
+    notify_role("department_admin", "lesson_request_created", payload)
 def notify_attendance_marked(attendance):
     payload = {
         "type": "attendance_marked",
@@ -116,6 +113,7 @@ def notify_attendance_marked(attendance):
         "status": attendance.status,
     }
     notify_role("coordinator", "attendance_marked", payload)
+    notify_role("department_admin", "attendance_marked", payload)
     if attendance.student_id:
         notify_user(attendance.student.user_id, "attendance_marked", payload)
     if attendance.teacher_id:
@@ -132,6 +130,7 @@ def notify_account_created(user, student_profile=None, teacher_profile=None):
         "teacher_id": teacher_profile.id if teacher_profile else None,
     }
     notify_role("coordinator", "academy_update", payload)
+    notify_role("department_admin", "academy_update", payload)
     notify_role("teacher", "academy_update", payload)
 
 
@@ -144,6 +143,7 @@ def notify_account_updated(user):
         "username": user.username,
     }
     notify_role("coordinator", "academy_update", payload)
+    notify_role("department_admin", "academy_update", payload)
     notify_role("teacher", "academy_update", payload)
 
 
@@ -155,4 +155,5 @@ def notify_account_deleted(user_id, role):
         "role": role,
     }
     notify_role("coordinator", "academy_update", payload)
+    notify_role("department_admin", "academy_update", payload)
     notify_role("teacher", "academy_update", payload)

@@ -1,5 +1,5 @@
-// STUDENT_PORTAL_UPDATED_FINAL_VERSION_3_NO_SCHEDULE_FILTERS - cleaner schedule cards and today class status
-import React, { useEffect, useMemo, useState } from "react";
+// IVS_QURAN_STUDENT_PORTAL_V49_SAFE_CARD_REVEAL_FIX
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen,
   CalendarDays,
@@ -17,6 +17,8 @@ import {
   X,
   XCircle,
   AlertCircle,
+  IdCard,
+  RefreshCw,
 } from "lucide-react";
 
 import {
@@ -26,8 +28,12 @@ import {
 } from "../services/djangoApiService";
 import { useAcademyWS } from "../hooks/useAcademyWS";
 
+import QRCode from "qrcode";
+import { PageSkeleton } from "./ui/SkeletonLoaders";
+import Lanyard from "./tuition/lanyard/Lanyard";
 type Props = {
   onLogout: () => void;
+  departmentName?: string;
 };
 
 type Tab = "overview" | "attendance" | "lessons" | "schedule";
@@ -75,12 +81,18 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function getCurrentDate() {
-  return new Date().toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
+function formatPortalLongDate(date: Date) {
+  const day = date.toLocaleDateString("en-US", { weekday: "long" });
+  const fullDate = date.toLocaleDateString("en-GB", {
     day: "numeric",
+    month: "long",
+    year: "numeric",
   });
+  return `${day} . ${fullDate}`;
+}
+
+function getCurrentDate() {
+  return formatPortalLongDate(new Date());
 }
 
 function normalizeDay(day: string) {
@@ -129,6 +141,221 @@ function getInitials(name: string) {
       .join("")
       .toUpperCase() || "S"
   );
+}
+
+
+type QuranStudentCardSide = "front" | "back";
+
+type QuranStudentCardDetails = {
+  side: QuranStudentCardSide;
+  studentName: string;
+  studentId: string;
+  teacherName: string;
+  departmentName: string;
+};
+
+function quranRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const safeRadius = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + safeRadius, y);
+  ctx.arcTo(x + width, y, x + width, y + height, safeRadius);
+  ctx.arcTo(x + width, y + height, x, y + height, safeRadius);
+  ctx.arcTo(x, y + height, x, y, safeRadius);
+  ctx.arcTo(x, y, x + width, y, safeRadius);
+  ctx.closePath();
+}
+
+function quranFitText(
+  ctx: CanvasRenderingContext2D,
+  value: string,
+  maxWidth: number,
+  startSize: number,
+  minSize: number,
+  weight = 800,
+) {
+  let size = startSize;
+  const text = String(value || "Not assigned");
+  while (size > minSize) {
+    ctx.font = `${weight} ${size}px Inter, Arial, sans-serif`;
+    if (ctx.measureText(text).width <= maxWidth) break;
+    size -= 2;
+  }
+  return { text, size };
+}
+
+function loadQuranCardImage(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`Could not load image: ${src}`));
+    image.src = src;
+  });
+}
+
+async function createQuranStudentCardImage(details: QuranStudentCardDetails) {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 840;
+  canvas.height = 1190;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  const rawStudentId = String(details.studentId || "STUDENT").replace(/\s+/g, "-").toUpperCase();
+  const studentCode = rawStudentId.startsWith("IVS-") ? rawStudentId : `IVS-Q-${rawStudentId}`;
+  const logo = await loadQuranCardImage("/ivs-logo.png").catch(() => null);
+
+  ctx.fillStyle = "#f8fafc";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const brandGradient = ctx.createLinearGradient(0, 0, canvas.width, 260);
+  brandGradient.addColorStop(0, "#172554");
+  brandGradient.addColorStop(0.55, "#3730a3");
+  brandGradient.addColorStop(1, "#0369a1");
+
+  if (details.side === "front") {
+    ctx.fillStyle = brandGradient;
+    ctx.fillRect(0, 0, canvas.width, 258);
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    quranRoundedRect(ctx, 48, 42, 106, 106, 30);
+    ctx.fill();
+    if (logo) ctx.drawImage(logo, 58, 52, 86, 86);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "900 32px Inter, Arial, sans-serif";
+    ctx.fillText("IQRA VIRTUAL SCHOOL", 178, 82);
+    ctx.fillStyle = "rgba(224,231,255,0.92)";
+    ctx.font = "800 20px Inter, Arial, sans-serif";
+    ctx.fillText(String(details.departmentName || "Quran Department").toUpperCase(), 178, 118);
+
+    ctx.fillStyle = "rgba(255,255,255,0.14)";
+    quranRoundedRect(ctx, 600, 52, 188, 52, 26);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "900 18px Inter, Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("ACTIVE STUDENT", 694, 85);
+    ctx.textAlign = "left";
+
+    ctx.fillStyle = "#64748b";
+    ctx.font = "900 18px Inter, Arial, sans-serif";
+    ctx.fillText("STUDENT NAME", 58, 328);
+    const fittedName = quranFitText(ctx, details.studentName, 724, 58, 36, 900);
+    ctx.fillStyle = "#0f172a";
+    ctx.font = `900 ${fittedName.size}px Inter, Arial, sans-serif`;
+    ctx.fillText(fittedName.text, 58, 392);
+
+    ctx.strokeStyle = "#e2e8f0";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(58, 434);
+    ctx.lineTo(782, 434);
+    ctx.stroke();
+
+    const rows = [
+      { label: "STUDENT ID", value: studentCode, icon: "ID" },
+      { label: "PROGRAM", value: "Quran Studies", icon: "QS" },
+      { label: "DEPARTMENT", value: details.departmentName || "Quran Department", icon: "DP" },
+      { label: "TEACHER", value: details.teacherName || "Not assigned", icon: "TR" },
+    ];
+
+    rows.forEach((row, index) => {
+      const y = 478 + index * 148;
+      ctx.fillStyle = index % 2 === 0 ? "#f1f5f9" : "#eef2ff";
+      quranRoundedRect(ctx, 50, y, 740, 118, 28);
+      ctx.fill();
+
+      const gradient = ctx.createLinearGradient(72, y + 24, 138, y + 90);
+      gradient.addColorStop(0, index < 2 ? "#4338ca" : "#0284c7");
+      gradient.addColorStop(1, index < 2 ? "#6366f1" : "#06b6d4");
+      ctx.fillStyle = gradient;
+      quranRoundedRect(ctx, 72, y + 24, 72, 72, 22);
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.textAlign = "center";
+      ctx.font = "900 20px Inter, Arial, sans-serif";
+      ctx.fillText(row.icon, 108, y + 69);
+      ctx.textAlign = "left";
+
+      ctx.fillStyle = "#64748b";
+      ctx.font = "900 17px Inter, Arial, sans-serif";
+      ctx.fillText(row.label, 172, y + 44);
+      const fitted = quranFitText(ctx, row.value, 574, 31, 22, 850);
+      ctx.fillStyle = "#0f172a";
+      ctx.font = `850 ${fitted.size}px Inter, Arial, sans-serif`;
+      ctx.fillText(fitted.text, 172, y + 86);
+    });
+
+    ctx.fillStyle = brandGradient;
+    ctx.fillRect(0, 1084, canvas.width, 106);
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.font = "800 18px Inter, Arial, sans-serif";
+    ctx.fillText("OFFICIAL QURAN STUDENT IDENTITY CARD", 58, 1148);
+  } else {
+    ctx.fillStyle = brandGradient;
+    ctx.fillRect(0, 0, canvas.width, 242);
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    quranRoundedRect(ctx, 52, 46, 104, 104, 28);
+    ctx.fill();
+    if (logo) ctx.drawImage(logo, 62, 56, 84, 84);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "900 34px Inter, Arial, sans-serif";
+    ctx.fillText("IQRA VIRTUAL SCHOOL", 180, 88);
+    ctx.fillStyle = "rgba(224,231,255,0.92)";
+    ctx.font = "800 20px Inter, Arial, sans-serif";
+    ctx.fillText("QURAN STUDENT IDENTITY", 180, 126);
+
+    ctx.fillStyle = "#0f172a";
+    ctx.font = "900 36px Inter, Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Student verification", 420, 316);
+    ctx.fillStyle = "#64748b";
+    ctx.font = "700 20px Inter, Arial, sans-serif";
+    ctx.fillText("Scan the QR code to read the student card reference", 420, 354);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.shadowColor = "rgba(15,23,42,0.14)";
+    ctx.shadowBlur = 30;
+    ctx.shadowOffsetY = 12;
+    quranRoundedRect(ctx, 126, 410, 588, 588, 48);
+    ctx.fill();
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+
+    const qrDataUrl = await QRCode.toDataURL(`IVS-QURAN-STUDENT:${studentCode}`, {
+      errorCorrectionLevel: "H",
+      margin: 1,
+      width: 500,
+      color: { dark: "#111827", light: "#ffffff" },
+    });
+    const qrImage = await loadQuranCardImage(qrDataUrl).catch(() => null);
+    if (qrImage) ctx.drawImage(qrImage, 170, 454, 500, 500);
+
+    ctx.fillStyle = "#0f172a";
+    ctx.font = "900 26px Inter, Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(studentCode, 420, 1050);
+    ctx.fillStyle = "#64748b";
+    ctx.font = "700 18px Inter, Arial, sans-serif";
+    ctx.fillText(details.departmentName || "Quran Department", 420, 1085);
+
+    ctx.fillStyle = brandGradient;
+    ctx.fillRect(0, 1120, canvas.width, 70);
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.font = "800 17px Inter, Arial, sans-serif";
+    ctx.fillText(`INSTITUTE BRANDING • ${String(details.departmentName || "IVS QURAN").toUpperCase()}`, 420, 1164);
+    ctx.textAlign = "left";
+  }
+
+  return canvas.toDataURL("image/png", 0.98);
 }
 
 function timeToMinutes(value: string) {
@@ -456,7 +683,7 @@ function paginateItems<T>(items: T[], page: number, pageSize = PAGE_SIZE) {
   };
 }
 
-export function StudentPortal({ onLogout }: Props) {
+export function StudentPortal({ onLogout, departmentName = "Quran Department" }: Props) {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -466,6 +693,10 @@ export function StudentPortal({ onLogout }: Props) {
 
   const [clockNow, setClockNow] = useState(new Date());
   const [studentTheme, setStudentTheme] = useState<"light" | "dark">("light");
+  const [studentCardVisible, setStudentCardVisible] = useState(true);
+  const [studentCardHasToggled, setStudentCardHasToggled] = useState(false);
+  const [studentCardImages, setStudentCardImages] = useState<{ front: string | null; back: string | null }>({ front: null, back: null });
+  const portalSurfaceRef = useRef<HTMLElement | null>(null);
 
   const [lessonSearch, setLessonSearch] = useState("");
   const [lessonView, setLessonView] = useState<FilterView>("all");
@@ -540,6 +771,25 @@ export function StudentPortal({ onLogout }: Props) {
   const student = dashboard?.student;
   const studentName = student?.name || dashboard?.user?.username || "Student";
   const teacherName = student?.teacher_name || "Teacher not assigned";
+  const studentCode = String((student as any)?.student_id || (student as any)?.id || dashboard?.user?.username || "STUDENT");
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      createQuranStudentCardImage({ side: "front", studentName, studentId: studentCode, teacherName, departmentName }),
+      createQuranStudentCardImage({ side: "back", studentName, studentId: studentCode, teacherName, departmentName }),
+    ]).then(([front, back]) => {
+      if (!cancelled) setStudentCardImages({ front, back });
+    }).catch(() => {
+      if (!cancelled) setStudentCardImages({ front: null, back: null });
+    });
+    return () => { cancelled = true; };
+  }, [studentCode, studentName, teacherName, departmentName]);
+
+  const handleStudentCardToggle = () => {
+    setStudentCardHasToggled(true);
+    setStudentCardVisible((visible) => !visible);
+  };
 
   const schedules = dashboard?.schedules || [];
   const attendance = dashboard?.attendance || [];
@@ -798,18 +1048,8 @@ const lessons = (dashboard as any)?.lessons || [];
 
   if (loading) {
     return (
-      <div className="sp-root min-h-screen grid place-items-center">
-        <div className="sp-card w-full max-w-md text-center p-10">
-          <div className="sp-brand-icon mx-auto">
-            <Loader2 size={26} className="animate-spin" />
-          </div>
-          <h2 className="mt-5 text-xl font-black text-slate-900">
-            Loading Student Portal
-          </h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Getting your lessons, attendance, schedule, and teacher details.
-          </p>
-        </div>
+      <div className="sp-root min-h-screen bg-slate-50 p-4 sm:p-6">
+        <div className="mx-auto max-w-[1400px]"><PageSkeleton variant="portal" cards={6} label="Loading Student Portal" /></div>
       </div>
     );
   }
@@ -879,7 +1119,7 @@ const lessons = (dashboard as any)?.lessons || [];
         </div>
       </aside>
 
-      <main className="flex-1 min-w-0 flex flex-col h-screen overflow-hidden">
+      <main ref={portalSurfaceRef} className="relative flex-1 min-w-0 flex flex-col h-screen overflow-hidden">
         <header className="sp-topbar flex items-center justify-between px-6 py-3">
           <div className="flex items-center gap-4 min-w-0">
             <button
@@ -902,12 +1142,31 @@ const lessons = (dashboard as any)?.lessons || [];
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <ClockCard
-              currentTime={currentTime}
-              currentDate={getCurrentDate()}
-              clockAngles={clockAngles}
-            />
+          <div className="flex items-center gap-2 sm:gap-3">
+            <ClockCard now={clockNow} />
+
+            <button
+              type="button"
+              onClick={handleStudentCardToggle}
+              className={`relative inline-flex h-11 w-11 items-center justify-center rounded-2xl border shadow-sm transition hover:-translate-y-0.5 ${studentCardVisible ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-500 hover:text-indigo-600"}`}
+              aria-label={studentCardVisible ? "Hide student ID card" : "Show student ID card"}
+              title={studentCardVisible ? "Hide student ID card" : "Show student ID card"}
+              aria-pressed={studentCardVisible}
+            >
+              <IdCard size={19} />
+              <span className={`absolute bottom-1.5 right-1.5 h-2 w-2 rounded-full border-2 border-white ${studentCardVisible ? "bg-emerald-500" : "bg-slate-300"}`} />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void loadDashboard()}
+              disabled={refreshing}
+              className="sp-theme-btn"
+              title="Refresh student portal"
+              aria-label="Refresh student portal"
+            >
+              <RefreshCw size={18} className={refreshing ? "animate-spin" : ""} />
+            </button>
 
             <button
               type="button"
@@ -919,6 +1178,25 @@ const lessons = (dashboard as any)?.lessons || [];
             </button>
           </div>
         </header>
+
+        <div
+          className={`quran-global-lanyard-layer ${studentCardVisible ? "is-visible" : "is-hidden"} ${studentCardHasToggled ? (studentCardVisible ? "motion-showing" : "motion-hiding") : "motion-idle"}`}
+          aria-hidden={!studentCardVisible}
+          aria-label="Interactive Quran student identity lanyard"
+        >
+          <Lanyard
+            eventSource={portalSurfaceRef}
+            position={[0, 0, 15.4]}
+            gravity={[0, -34, 0]}
+            fov={29}
+            frontImage={studentCardImages.front}
+            backImage={studentCardImages.back}
+            imageFit="cover"
+            lanyardWidth={1.2}
+            interactive={studentCardVisible}
+            safeReveal
+          />
+        </div>
 
         {message && (
           <div className="mx-6 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-800 flex items-center gap-2">
@@ -2368,41 +2646,33 @@ const lessons = (dashboard as any)?.lessons || [];
   );
 }
 
-function ClockCard({
-  currentTime,
-  currentDate,
-  clockAngles,
-}: {
-  currentTime: string;
-  currentDate: string;
-  clockAngles: ClockAngles;
-}) {
+function ClockCard({ now }: { now: Date }) {
+  const second = now.getSeconds();
+  const minute = now.getMinutes() + second / 60;
+  const hour = (now.getHours() % 12) + minute / 60;
+  const dayLabel = now.toLocaleDateString("en-US", { weekday: "long" });
+  const dateLabel = now.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  const timeLabel = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
+
   return (
-    <div className="sp-clock-card">
-      <div className="sp-analog-clock">
-        <span className="sp-clock-mark sp-clock-mark-12">XII</span>
-        <span className="sp-clock-mark sp-clock-mark-3">III</span>
-        <span className="sp-clock-mark sp-clock-mark-6">VI</span>
-        <span className="sp-clock-mark sp-clock-mark-9">IX</span>
-
-        <span
-          className="sp-clock-hand sp-clock-hour"
-          style={{ transform: `translateX(-50%) rotate(${clockAngles.hour}deg)` }}
-        />
-        <span
-          className="sp-clock-hand sp-clock-minute"
-          style={{ transform: `translateX(-50%) rotate(${clockAngles.minute}deg)` }}
-        />
-        <span
-          className="sp-clock-hand sp-clock-second"
-          style={{ transform: `translateX(-50%) rotate(${clockAngles.second}deg)` }}
-        />
-        <span className="sp-clock-center" />
+    <div className="hidden h-[58px] items-center gap-3 rounded-[24px] border border-slate-200/90 bg-white/95 px-2.5 py-1.5 shadow-[0_10px_28px_rgba(15,23,42,0.09)] sm:flex">
+      <div className="relative h-[46px] w-[46px] shrink-0 rounded-full border border-white bg-gradient-to-br from-white to-slate-100 shadow-[0_8px_22px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)]">
+        <span className="absolute left-1/2 top-[2px] -translate-x-1/2 text-[6px] font-black text-slate-400">12</span>
+        <span className="absolute right-[4px] top-1/2 -translate-y-1/2 text-[6px] font-black text-slate-400">3</span>
+        <span className="absolute bottom-[2px] left-1/2 -translate-x-1/2 text-[6px] font-black text-slate-400">6</span>
+        <span className="absolute left-[4px] top-1/2 -translate-y-1/2 text-[6px] font-black text-slate-400">9</span>
+        <span className="absolute left-1/2 top-1/2 h-[13px] w-[3px] origin-bottom rounded-full bg-slate-800" style={{ transform: `translate(-50%, -100%) rotate(${hour * 30}deg)` }} />
+        <span className="absolute left-1/2 top-1/2 h-[17px] w-[2px] origin-bottom rounded-full bg-indigo-600" style={{ transform: `translate(-50%, -100%) rotate(${minute * 6}deg)` }} />
+        <span className="absolute left-1/2 top-1/2 h-[19px] w-px origin-bottom rounded-full bg-rose-500" style={{ transform: `translate(-50%, -100%) rotate(${second * 6}deg)` }} />
+        <span className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-indigo-600 shadow-sm" />
       </div>
-
-      <div className="hidden sm:block">
-        <div className="text-sm font-black text-slate-900">{currentTime}</div>
-        <div className="text-[11px] font-bold text-slate-400">{currentDate}</div>
+      <div className="hidden min-w-[152px] lg:block">
+        <div className="text-[18px] font-black leading-none tracking-tight text-slate-950">{timeLabel}</div>
+        <div className="mt-1.5 flex items-center gap-2 text-[11px] font-extrabold text-slate-500">
+          <span>{dayLabel}</span>
+          <span className="text-indigo-500">.</span>
+          <span>{dateLabel}</span>
+        </div>
       </div>
     </div>
   );

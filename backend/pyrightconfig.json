@@ -1,0 +1,25 @@
+{
+  "include": [
+    "."
+  ],
+  "exclude": [
+    "venv",
+    "**/__pycache__",
+    "**/migrations",
+    "**/*.bak",
+    "**/*_backup.py"
+  ],
+  "venvPath": ".",
+  "venv": "venv",
+  "typeCheckingMode": "off",
+  "reportMissingImports": "error",
+  "reportMissingModuleSource": "warning",
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": [
+        "."
+      ]
+    }
+  ]
+}

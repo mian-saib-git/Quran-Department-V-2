@@ -1,3 +1,4 @@
+// IVS_ATTENDANCE_FILTER_LAYOUT_V25
 import ReactDOM from "react-dom";
 import React, { useMemo, useState } from "react";
 import {
@@ -5,7 +6,12 @@ import {
   AttendanceRecord,
   AttendanceStatus,
   EntityType,
+  Student,
 } from "../types";
+import {
+  getQuranTeacherSessionAttendance,
+  type QuranTeacherSessionPayload,
+} from "../services/djangoApiService";
 import {
   CalendarDays,
   Search,
@@ -18,22 +24,30 @@ import {
   Filter,
   X,
   Clock,
+  Info,
 } from "lucide-react";
+
+type CoverageAssignmentInput = {
+  student_id: number;
+  substitute_teacher_id: number;
+};
 
 type UpsertFn = (args: {
   entityId: string;
   entityType: EntityType;
-  date: string; // YYYY-MM-DD
+  date: string;
   status: AttendanceStatus;
   classKey?: string;
-}) => void;
+  coverageAssignments?: CoverageAssignmentInput[];
+}) => boolean | Promise<boolean>;
 
 type DeleteFn = (args: {
   entityId: string;
   entityType: EntityType;
-  date: string; // YYYY-MM-DD
+  date: string;
   classKey?: string;
-}) => void;
+}) => boolean | Promise<boolean>;
+
 function useDebouncedValue<T>(value: T, delay = 200) {
   const [v, setV] = React.useState(value);
   React.useEffect(() => {
@@ -44,6 +58,80 @@ function useDebouncedValue<T>(value: T, delay = 200) {
 }
 
 const todayStr = () => new Date().toISOString().split("T")[0];
+
+function localDateInputValue(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function latestOperationalAttendanceDate(
+  operationalWeekdays?: number[],
+): string {
+  const now = new Date();
+  const localToday = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  );
+
+  if (!operationalWeekdays?.length) {
+    return localDateInputValue(localToday);
+  }
+
+  const allowed = new Set(operationalWeekdays);
+  const candidate = new Date(localToday);
+
+  // Seven checks are enough to find a valid weekday in a weekly timetable.
+  for (let offset = 0; offset < 7; offset += 1) {
+    if (allowed.has(candidate.getDay())) {
+      return localDateInputValue(candidate);
+    }
+    candidate.setDate(candidate.getDate() - 1);
+  }
+
+  return localDateInputValue(localToday);
+}
+
+function attendanceDateOnly(value: unknown): string {
+  const text = String(value ?? "").trim();
+  const match = text.match(/^\d{4}-\d{2}-\d{2}/);
+  return match?.[0] ?? "";
+}
+
+function studentExpectedOnAttendanceDate(
+  student: unknown,
+  attendanceDate: string,
+): boolean {
+  const row = (student ?? {}) as Record<string, unknown>;
+  const startCandidates = [
+    row.attendanceStartDate,
+    row.enrollmentStartDate,
+    row.enrollment_start_date,
+    row.attendanceCreatedDate,
+    row.enrollmentCreatedAt,
+    row.enrollment_created_at,
+  ]
+    .map(attendanceDateOnly)
+    .filter(Boolean)
+    .sort();
+
+  // The strict lower bound is the latest known enrollment start/creation date.
+  const effectiveStart = startCandidates.at(-1) ?? "";
+  const effectiveEnd = attendanceDateOnly(
+    row.attendanceEndDate ??
+      row.enrollmentEndDate ??
+      row.enrollment_end_date,
+  );
+
+  if (effectiveStart && attendanceDate < effectiveStart) return false;
+  if (effectiveEnd && attendanceDate > effectiveEnd) return false;
+  return true;
+}
+const defaultTeacherClassKeyForStudent = (student: Student) =>
+  String(student.timeSlot || "");
+
 const PAGE_SIZE = 20;
 
 function getPagedItems<T>(items: T[], page: number, pageSize: number) {
@@ -66,6 +154,55 @@ const formatTime12 = (time24: string): string => {
   if (h12 === 0) h12 = 12;
   return `${String(h12).padStart(2, "0")}:${m} ${ampm}`;
 };
+
+function timeToMinutes(value: string): number | null {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function timeMatchesWindow(value: string, from: string, to: string): boolean {
+  if (!from && !to) return true;
+  const current = timeToMinutes(value);
+  if (current === null) return false;
+  const start = from ? timeToMinutes(from) : null;
+  const end = to ? timeToMinutes(to) : null;
+  if (start === null && end === null) return true;
+  if (start !== null && end === null) return current >= start;
+  if (start === null && end !== null) return current <= end;
+  if (start === end) return current === start;
+  if ((start as number) < (end as number)) {
+    return current >= (start as number) && current <= (end as number);
+  }
+  // Overnight windows are supported, e.g. 20:00 to 02:00.
+  return current >= (start as number) || current <= (end as number);
+}
+
+function uniqueAttendanceStudentLabels<T extends { id: string; name: string }>(
+  students: T[],
+): T[] {
+  const seen = new Set<string>();
+  const unique: T[] = [];
+
+  for (const student of students) {
+    const normalizedLabel = String(student.name || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLocaleLowerCase();
+
+    const key = normalizedLabel || `id:${student.id}`;
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    unique.push(student);
+  }
+
+  return unique;
+}
 
 const weekdayName = (date: string) => {
   try {
@@ -112,13 +249,19 @@ function Segmented({
   value,
   onChange,
   options,
+  fullWidth = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: { value: string; label: string }[];
+  fullWidth?: boolean;
 }) {
   return (
-    <div className="inline-flex rounded-2xl bg-white/70 border border-slate-200/70 p-1 shadow-sm">
+    <div
+      className={`${
+        fullWidth ? "flex h-12 w-full" : "inline-flex"
+      } rounded-2xl border border-slate-200/70 bg-slate-100/80 p-1 shadow-sm`}
+    >
       {options.map((o) => {
         const active = value === o.value;
         return (
@@ -126,10 +269,12 @@ function Segmented({
             key={o.value}
             type="button"
             onClick={() => onChange(o.value)}
-            className={`px-3 py-2 rounded-xl text-xs font-extrabold transition ${
+            className={`${
+              fullWidth ? "flex-1 px-4" : "px-3"
+            } rounded-xl py-2 text-xs font-extrabold transition ${
               active
-                ? "bg-white text-indigo-700 shadow-[0_10px_22px_rgba(15,23,42,0.08)] border border-slate-200/70"
-                : "text-slate-600 hover:text-slate-900"
+                ? "border border-slate-200/70 bg-white text-indigo-700 shadow-[0_8px_18px_rgba(79,70,229,0.12)]"
+                : "text-slate-600 hover:bg-white/60 hover:text-slate-900"
             }`}
           >
             {o.label}
@@ -211,152 +356,530 @@ function StatusButtonsLight({
 function TeacherAttendanceModal({
   open,
   onClose,
+  teacherId,
   title,
   subtitle,
+  date,
   sessions,
   onSetStatus,
   onClearStatus,
 }: {
   open: boolean;
   onClose: () => void;
+  teacherId: string;
   title: string;
   subtitle: string;
+  date: string;
   sessions: Array<{
     timeSlot: string;
-    students: { id: string; name: string }[];
+    students: {
+      id: string;
+      name: string;
+    }[];
     status: StatusOrUnmarked;
   }>;
-  onSetStatus: (timeSlot: string, status: AttendanceStatus) => void;
-  onClearStatus: (timeSlot: string) => void;
+  onSetStatus: (
+    timeSlot: string,
+    status: AttendanceStatus,
+    coverageAssignments?: CoverageAssignmentInput[],
+  ) => boolean | Promise<boolean>;
+  onClearStatus: (
+    timeSlot: string,
+  ) => boolean | Promise<boolean>;
 }) {
-  React.useEffect(() => {
-    if (!open) return;
+  const [error, setError] = useState("");
 
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+  const [
+    loadingTimeSlot,
+    setLoadingTimeSlot,
+  ] = useState<string | null>(null);
+
+  const [
+    savingTimeSlot,
+    setSavingTimeSlot,
+  ] = useState<string | null>(null);
+
+  const [
+    coverageEditor,
+    setCoverageEditor,
+  ] = useState<{
+    timeSlot: string;
+    status: AttendanceStatus;
+    payload: QuranTeacherSessionPayload;
+    assignments: Record<number, string>;
+  } | null>(null);
+
+  React.useEffect(() => {
+    if (!open) {
+      setCoverageEditor(null);
+      setError("");
+      return;
+    }
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+
+      if (coverageEditor) {
+        setCoverageEditor(null);
+        setError("");
+      } else {
+        onClose();
+      }
     };
+
     window.addEventListener("keydown", onKey);
 
-    // lock background scroll
-    const prevOverflow = document.body.style.overflow;
-    const prevPaddingRight = document.body.style.paddingRight;
+    const previousOverflow =
+      document.body.style.overflow;
 
-    // prevent layout jump when scrollbar disappears
-    const scrollBarWidth = window.innerWidth - document.documentElement.clientWidth;
     document.body.style.overflow = "hidden";
-    if (scrollBarWidth > 0) document.body.style.paddingRight = `${scrollBarWidth}px`;
 
     return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prevOverflow;
-      document.body.style.paddingRight = prevPaddingRight;
+      window.removeEventListener(
+        "keydown",
+        onKey,
+      );
+
+      document.body.style.overflow =
+        previousOverflow;
     };
-  }, [open, onClose]);
+  }, [open, onClose, coverageEditor]);
+
+  React.useEffect(() => {
+    setCoverageEditor(null);
+    setError("");
+  }, [teacherId, date]);
 
   if (!open) return null;
 
-  const metaFor = (s: StatusOrUnmarked) => statusMeta(s);
+  const statusLabel = (value: string) => {
+    if (value === "present") return "Present";
+    if (value === "absent") return "Absent";
+    if (value === "leave") return "Leave";
+    return "Not marked";
+  };
+
+  const openCoverage = async (
+    timeSlot: string,
+    status: AttendanceStatus,
+  ) => {
+    setError("");
+    setLoadingTimeSlot(timeSlot);
+
+    try {
+      const payload =
+        await getQuranTeacherSessionAttendance({
+          teacher_id: Number(teacherId),
+          date,
+          class_key: timeSlot,
+        });
+
+      const assignments:
+        Record<number, string> = {};
+
+      for (const student of payload.students) {
+        if (
+          student.coverage?.coverage_status ===
+            "assigned" &&
+          student.coverage
+            .substitute_teacher_id
+        ) {
+          assignments[student.student_id] =
+            String(
+              student.coverage
+                .substitute_teacher_id,
+            );
+        }
+      }
+
+      setCoverageEditor({
+        timeSlot,
+        status,
+        payload,
+        assignments,
+      });
+    } catch (err: any) {
+      setError(
+        err?.message ||
+          "Could not load this teacher session.",
+      );
+    } finally {
+      setLoadingTimeSlot(null);
+    }
+  };
+
+  const savePresent = async (
+    timeSlot: string,
+  ) => {
+    setError("");
+    setSavingTimeSlot(timeSlot);
+
+    try {
+      await onSetStatus(
+        timeSlot,
+        AttendanceStatus.PRESENT,
+        [],
+      );
+    } finally {
+      setSavingTimeSlot(null);
+    }
+  };
+
+  const clearAttendance = async (
+    timeSlot: string,
+  ) => {
+    setError("");
+    setSavingTimeSlot(timeSlot);
+
+    try {
+      await onClearStatus(timeSlot);
+    } finally {
+      setSavingTimeSlot(null);
+    }
+  };
+
+  const saveAbsence = async () => {
+    if (!coverageEditor) return;
+
+    const required =
+      coverageEditor.payload.students.filter(
+        (student) =>
+          student.requires_substitute,
+      );
+
+    const missing = required.filter(
+      (student) =>
+        !coverageEditor.assignments[
+          student.student_id
+        ],
+    );
+
+    if (missing.length > 0) {
+      setError(
+        `Select a substitute for ${missing.length} student${
+          missing.length === 1 ? "" : "s"
+        }.`,
+      );
+
+      return;
+    }
+
+    const assignments =
+      required.map((student) => ({
+        student_id: student.student_id,
+        substitute_teacher_id: Number(
+          coverageEditor.assignments[
+            student.student_id
+          ],
+        ),
+      }));
+
+    setError("");
+    setSavingTimeSlot(
+      coverageEditor.timeSlot,
+    );
+
+    try {
+      const result = await onSetStatus(
+        coverageEditor.timeSlot,
+        coverageEditor.status,
+        assignments,
+      );
+
+      if (result !== false) {
+        setCoverageEditor(null);
+      }
+    } finally {
+      setSavingTimeSlot(null);
+    }
+  };
 
   const modal = (
     <div
       className="fixed inset-0 z-[99999]"
-      aria-modal="true"
       role="dialog"
+      aria-modal="true"
     >
-      {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/35 backdrop-blur-sm"
-        onClick={onClose}
+        onClick={() => {
+          if (coverageEditor) {
+            setCoverageEditor(null);
+            setError("");
+          } else {
+            onClose();
+          }
+        }}
       />
 
-      {/* Centered modal */}
       <div className="absolute inset-0 flex items-end sm:items-center justify-center sm:p-4">
         <div
-          className="w-full sm:max-w-5xl rounded-t-[28px] sm:rounded-[28px] border border-slate-200/70 bg-white/90 backdrop-blur-xl shadow-[0_30px_90px_rgba(0,0,0,0.25)] overflow-hidden"
-          onClick={(e) => e.stopPropagation()}
+          className="w-full sm:max-w-5xl max-h-[92vh] rounded-t-[28px] sm:rounded-[28px] border border-slate-200/70 bg-white/95 shadow-[0_30px_90px_rgba(0,0,0,0.25)] overflow-hidden"
+          onClick={(event) =>
+            event.stopPropagation()
+          }
         >
-          {/* Header */}
-          <div className="p-5 border-b border-slate-200/70 bg-white/80">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-xs font-extrabold text-slate-500 uppercase tracking-wide">
-                  Teacher Sessions
+          <div className="p-5 border-b border-slate-200 bg-white">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xs font-extrabold uppercase tracking-wide text-slate-500">
+                  Teacher attendance
                 </div>
-                <div className="mt-1 text-lg font-extrabold text-slate-900 truncate">
+
+                <div className="mt-1 text-lg font-extrabold text-slate-900">
                   {title}
                 </div>
-                <div className="mt-1 text-xs text-slate-500">{subtitle}</div>
+
+                <div className="mt-1 text-xs text-slate-500">
+                  {subtitle}
+                </div>
               </div>
 
               <button
                 type="button"
-                onClick={onClose}
-                className="h-11 w-11 rounded-2xl bg-white border border-slate-200/70 text-slate-600 hover:bg-slate-50 transition flex items-center justify-center"
-                title="Close"
+                onClick={() => {
+                  if (coverageEditor) {
+                    setCoverageEditor(null);
+                    setError("");
+                  } else {
+                    onClose();
+                  }
+                }}
+                className="h-10 w-10 rounded-xl border border-slate-200 bg-white flex items-center justify-center text-slate-600"
               >
                 <X size={18} />
               </button>
             </div>
           </div>
 
-          {/* Body (scroll INSIDE modal only) */}
-          <div className="p-4 sm:p-5 max-h-[65vh] sm:max-h-[70vh] overflow-auto overscroll-contain">
-            {sessions.length === 0 ? (
-              <div className="rounded-3xl border border-slate-200/70 bg-white/80 p-6 text-center text-slate-600">
-                No sessions found for this teacher on this day.
+          <div className="p-4 sm:p-5 overflow-y-auto max-h-[72vh]">
+            {error && (
+              <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+                {error}
+              </div>
+            )}
+
+            {coverageEditor ? (
+              <div className="space-y-4">
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="font-extrabold text-amber-900">
+                    {coverageEditor.status ===
+                    AttendanceStatus.LEAVE
+                      ? "Teacher Leave"
+                      : "Teacher Absent"}
+                    {" ? "}
+                    {formatTime12(
+                      coverageEditor.timeSlot,
+                    )}
+                  </div>
+
+                  <div className="mt-2 text-sm text-amber-900/80">
+                    Present and Not marked
+                    students require a substitute.
+                    Absent and Leave students do not.
+                  </div>
+                </div>
+
+                {coverageEditor.payload.students.map(
+                  (student) => (
+                    <div
+                      key={student.student_id}
+                      className="rounded-2xl border border-slate-200 bg-white p-4"
+                    >
+                      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <div>
+                          <div className="font-extrabold text-slate-900">
+                            {student.student_name}
+                          </div>
+
+                          <div className="mt-1 text-xs font-bold text-slate-500">
+                            Student status:{" "}
+                            {statusLabel(
+                              student.student_status,
+                            )}
+                          </div>
+
+                          <div className="mt-1 text-xs font-extrabold">
+                            {student.requires_substitute
+                              ? "Substitute required"
+                              : "No substitute required"}
+                          </div>
+                        </div>
+
+                        {student.requires_substitute && (
+                          <select
+                            value={
+                              coverageEditor.assignments[
+                                student.student_id
+                              ] || ""
+                            }
+                            onChange={(event) =>
+                              setCoverageEditor(
+                                (current) => {
+                                  if (!current) {
+                                    return current;
+                                  }
+
+                                  return {
+                                    ...current,
+                                    assignments: {
+                                      ...current.assignments,
+                                      [student.student_id]:
+                                        event.target.value,
+                                    },
+                                  };
+                                },
+                              )
+                            }
+                            className="w-full md:w-72 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold"
+                          >
+                            <option value="">
+                              Select substitute teacher
+                            </option>
+
+                            {coverageEditor.payload
+                              .available_substitutes
+                              .map((teacher) => (
+                                <option
+                                  key={teacher.id}
+                                  value={String(
+                                    teacher.id,
+                                  )}
+                                >
+                                  {teacher.name}
+                                </option>
+                              ))}
+                          </select>
+                        )}
+                      </div>
+                    </div>
+                  ),
+                )}
+
+                {coverageEditor.payload
+                  .available_substitutes.length ===
+                  0 &&
+                  coverageEditor.payload.students.some(
+                    (student) =>
+                      student.requires_substitute,
+                  ) && (
+                    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-700">
+                      No substitute teacher is
+                      currently available for this
+                      session.
+                    </div>
+                  )}
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCoverageEditor(null);
+                      setError("");
+                    }}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-extrabold text-slate-700"
+                  >
+                    Back
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={saveAbsence}
+                    disabled={
+                      savingTimeSlot ===
+                      coverageEditor.timeSlot
+                    }
+                    className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
+                  >
+                    {savingTimeSlot ===
+                    coverageEditor.timeSlot
+                      ? "Saving..."
+                      : "Confirm attendance & coverage"}
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {sessions.map((ses) => {
-                  const meta = metaFor(ses.status);
+                {sessions.map((session) => {
+                  const meta =
+                    statusMeta(session.status);
+
+                  const busy =
+                    loadingTimeSlot ===
+                      session.timeSlot ||
+                    savingTimeSlot ===
+                      session.timeSlot;
 
                   return (
                     <div
-                      key={ses.timeSlot}
-                      className="rounded-3xl border border-slate-200/70 bg-white/80 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)]"
+                      key={session.timeSlot}
+                      className="rounded-2xl border border-slate-200 bg-white p-4"
                     >
-                      <div className="flex flex-wrap gap-2">
-                        <span className="px-3 py-1.5 rounded-full bg-white border border-slate-200/70 text-xs font-extrabold text-slate-800 inline-flex items-center gap-2">
-                          <Clock size={14} className="text-slate-500" />
-                          {formatTime12(ses.timeSlot)}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-extrabold text-slate-700">
+                          {formatTime12(
+                            session.timeSlot,
+                          )}
                         </span>
 
-                        <span className={`px-3 py-1.5 rounded-full border text-xs font-extrabold ${meta.pill}`}>
+                        <span
+                          className={`rounded-full border px-3 py-1.5 text-xs font-extrabold ${meta.pill}`}
+                        >
                           {meta.label}
                         </span>
                       </div>
 
                       <div className="mt-3 flex flex-wrap gap-2">
-                        {ses.students.length === 0 ? (
-                          <span className="px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200 text-xs font-extrabold text-slate-700">
-                            No students
-                          </span>
-                        ) : (
-                          <>
-                            {ses.students.slice(0, 10).map((st) => (
-                              <span
-                                key={st.id}
-                                className="px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200 text-xs font-extrabold text-slate-700"
-                              >
-                                {st.name}
-                              </span>
-                            ))}
-                            {ses.students.length > 10 && (
-                              <span className="px-3 py-1.5 rounded-full bg-indigo-50 border border-indigo-100 text-xs font-extrabold text-indigo-700">
-                                +{ses.students.length - 10} more
-                              </span>
-                            )}
-                          </>
-                        )}
+                        {session.students
+                          .slice(0, 10)
+                          .map((student) => (
+                            <span
+                              key={student.id}
+                              className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600"
+                            >
+                              {student.name}
+                            </span>
+                          ))}
                       </div>
 
                       <div className="mt-4">
                         <StatusButtonsLight
-                          current={ses.status}
-                          onSet={(st) => onSetStatus(ses.timeSlot, st)}
-                          onClear={() => onClearStatus(ses.timeSlot)}
+                          current={session.status}
+                          onSet={(nextStatus) => {
+                            if (busy) return;
+
+                            if (
+                              nextStatus ===
+                              AttendanceStatus.PRESENT
+                            ) {
+                              void savePresent(
+                                session.timeSlot,
+                              );
+                            } else {
+                              void openCoverage(
+                                session.timeSlot,
+                                nextStatus,
+                              );
+                            }
+                          }}
+                          onClear={() => {
+                            if (!busy) {
+                              void clearAttendance(
+                                session.timeSlot,
+                              );
+                            }
+                          }}
                         />
                       </div>
+
+                      {busy && (
+                        <div className="mt-3 text-xs font-bold text-indigo-600">
+                          {loadingTimeSlot ===
+                          session.timeSlot
+                            ? "Loading session..."
+                            : "Saving..."}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -364,47 +887,47 @@ function TeacherAttendanceModal({
             )}
           </div>
 
-          {/* Footer */}
-          <div className="p-4 border-t border-slate-200/70 bg-white/80 flex items-center justify-between">
-            <div className="text-xs text-slate-500">
-              Press <span className="font-semibold">Esc</span> to close.
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-2xl text-xs font-extrabold bg-white border border-slate-200/70 text-slate-800 hover:bg-slate-50 transition"
-            >
-              Close
-            </button>
+          <div className="border-t border-slate-200 bg-slate-50 px-5 py-3 text-xs text-slate-500">
+            Teacher attendance is stored separately
+            from student attendance.
           </div>
         </div>
       </div>
     </div>
   );
 
-  // ✅ Portal fixes the “scroll down to find modal” problem
-  return ReactDOM.createPortal(modal, document.body);
+  return ReactDOM.createPortal(
+    modal,
+    document.body,
+  );
 }
-
-
-
-    
-  
 
 
 export function AttendanceEditor({
   appState,
   onUpsert,
   onDelete,
+  dedupeStudentLabels = false,
+  fixedScheduleLabel = "",
+  operationalWeekdays,
+  teacherClassKeyForStudent = defaultTeacherClassKeyForStudent,
 }: {
   appState: AppState;
   onUpsert: UpsertFn;
   onDelete: DeleteFn;
+  dedupeStudentLabels?: boolean;
+  fixedScheduleLabel?: string;
+  operationalWeekdays?: number[];
+  teacherClassKeyForStudent?: (student: Student) => string;
 }) {
   
-  const [date, setDate] = useState<string>(todayStr());
+  const [date, setDate] = useState<string>(() =>
+    latestOperationalAttendanceDate(operationalWeekdays),
+  );
   const [teacherId, setTeacherId] = useState<string>("all");
   const [entityFilter, setEntityFilter] = useState<"teachers" | "students">("teachers");
+  const [timeFrom, setTimeFrom] = useState("");
+  const [timeTo, setTimeTo] = useState("");
  const [search, setSearch] = useState("");
 const debouncedSearch = useDebouncedValue(search, 200);
 
@@ -414,7 +937,7 @@ const [openTeacherId, setOpenTeacherId] = useState<string | null>(null);
 const [page, setPage] = useState(1);
 React.useEffect(() => {
   setPage(1);
-}, [date, teacherId, entityFilter, search, onlyScheduled, statusFilter]);
+}, [date, teacherId, entityFilter, search, onlyScheduled, statusFilter, timeFrom, timeTo]);
 
   const day = useMemo(() => weekdayName(date), [date]);
 
@@ -427,6 +950,15 @@ React.useEffect(() => {
     return map;
   }, [appState.attendance, date]);
 
+  const teacherIdsWithSpecificAttendance = useMemo(() => {
+    const ids = new Set<string>();
+    for (const record of appState.attendance) {
+      if (record.date !== date || record.entityType !== EntityType.TEACHER) continue;
+      if (String(record.classKey || "").trim()) ids.add(String(record.entityId));
+    }
+    return ids;
+  }, [appState.attendance, date]);
+
   const teacherNameById = useMemo(() => {
     const map = new Map<string, string>();
     for (const t of appState.teachers) map.set(t.id, t.name);
@@ -435,8 +967,12 @@ React.useEffect(() => {
 
   const scheduledStudentsForDate = useMemo(() => {
     if (!day) return [];
-    return appState.students.filter((s) => (s.classDays || []).includes(day));
-  }, [appState.students, day]);
+    return appState.students.filter(
+      (s) =>
+        (s.classDays || []).includes(day) &&
+        studentExpectedOnAttendanceDate(s, date),
+    );
+  }, [appState.students, day, date]);
 
   const studentsBase = useMemo(() => {
     const base = onlyScheduled ? scheduledStudentsForDate : appState.students;
@@ -444,6 +980,7 @@ React.useEffect(() => {
 
     return base
       .filter((s) => (teacherId === "all" ? true : s.teacherId === teacherId))
+      .filter((s) => timeMatchesWindow(String(s.timeSlot || ""), timeFrom, timeTo))
       .filter((s) => (q ? (s.name || "").toLowerCase().includes(q) : true))
       .slice()
       .sort((a, b) => {
@@ -455,7 +992,7 @@ React.useEffect(() => {
           (a.name || "").localeCompare(b.name || "")
         );
       });
-  }, [onlyScheduled, scheduledStudentsForDate, appState.students, teacherId, debouncedSearch, teacherNameById]);
+  }, [onlyScheduled, scheduledStudentsForDate, appState.students, teacherId, debouncedSearch, teacherNameById, timeFrom, timeTo]);
 
   const getCurrentStatus = (entityType: EntityType, entityId: string, classKey?: string): StatusOrUnmarked => {
     const key = `${entityType}:${entityId}:${classKey || ""}`;
@@ -480,6 +1017,7 @@ React.useEffect(() => {
         teacherId: string;
         teacherName: string;
         sessions: Array<{
+          classKey: string;
           timeSlot: string;
           students: { id: string; name: string }[];
           status: StatusOrUnmarked;
@@ -503,32 +1041,47 @@ React.useEffect(() => {
       }
 
       const bucket = byTeacher.get(s.teacherId)!;
-      const timeSlot = s.timeSlot || "00:00";
-      let session = bucket.sessions.find((x) => x.timeSlot === timeSlot);
-if (!session) {
-  session = {
-    timeSlot,
-    students: [],
-    status: "Unmarked",
-  };
-  bucket.sessions.push(session);
-}
+      const timeSlot = String(s.timeSlot || "00:00").slice(0, 5);
+      if (!timeMatchesWindow(timeSlot, timeFrom, timeTo)) continue;
 
-session.students.push({ id: s.id, name: s.name });
+      const computedClassKey = String(teacherClassKeyForStudent(s) || timeSlot).trim();
+      const classKey = computedClassKey || timeSlot;
+      let session = bucket.sessions.find((item) => item.classKey === classKey);
+      if (!session) {
+        const exactStatus = getCurrentStatus(
+          EntityType.TEACHER,
+          s.teacherId,
+          classKey,
+        );
+        const legacyStatus = teacherIdsWithSpecificAttendance.has(String(s.teacherId))
+          ? "Unmarked"
+          : getCurrentStatus(EntityType.TEACHER, s.teacherId, "");
 
-// Session status is based on student attendance, not teacher attendance.
-const studentStatuses = session.students.map((st) =>
-  getCurrentStatus(EntityType.STUDENT, st.id)
+        session = {
+          classKey,
+          timeSlot,
+          students: [],
+          status: exactStatus === "Unmarked" ? legacyStatus : exactStatus,
+        };
+        bucket.sessions.push(session);
+      }
+
+      session.students.push({
+  id: s.id,
+  name: s.name,
+});
+
+// Teacher attendance is independent from student attendance.
+session.status = getCurrentStatus(
+  EntityType.TEACHER,
+  s.teacherId,
+  timeSlot,
 );
 
-const allSame =
-  studentStatuses.length > 0 &&
-  studentStatuses.every((x) => x === studentStatuses[0]);
-
-session.status = allSame ? studentStatuses[0] : "Unmarked";
     }
 
     const cards = Array.from(byTeacher.values())
+      .filter((teacher) => teacher.sessions.length > 0)
       .map((t) => ({
         ...t,
         sessions: t.sessions
@@ -552,6 +1105,10 @@ session.status = allSame ? studentStatuses[0] : "Unmarked";
     teacherNameById,
     statusFilter,
     recordsForDate,
+    timeFrom,
+    timeTo,
+    teacherClassKeyForStudent,
+    teacherIdsWithSpecificAttendance,
   ]);
 
   const filteredStudents = useMemo(() => {
@@ -585,105 +1142,172 @@ const pagedStudents = getPagedItems(filteredStudents, page, PAGE_SIZE);
   }, [openTeacherId, teacherCards]);
 
 return (
-  <div className="w-full max-w-none ui-glass ui-card ui-gradient-border ui-card-hover p-3 sm:p-6 anim-fade-up">
+  <div className="w-full max-w-none ui-glass ui-card ui-gradient-border ui-card-hover p-4 sm:p-6 anim-fade-up">
       {/* Header */}
-      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-[0_18px_36px_-18px_rgba(37,99,235,0.60)]">
-              <CalendarDays size={18} />
-            </div>
-            <div>
-              <h3 className="text-lg font-extrabold text-slate-900">Attendance</h3>
-              <p className="text-xs text-slate-500">
-                Pick a date, filter, then mark attendance with one click.
-              </p>
-            </div>
-          </div>
+      <div className="flex items-center gap-3">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 via-violet-600 to-purple-600 text-white shadow-[0_12px_26px_-12px_rgba(79,70,229,0.70)]">
+          <CalendarDays size={20} />
         </div>
+        <div className="min-w-0">
+          <h3 className="text-xl font-extrabold tracking-tight text-slate-950 sm:text-2xl">Attendance</h3>
+          <p className="mt-0.5 text-xs font-medium text-slate-500 sm:text-sm">
+            Pick a date, filter, then mark attendance with one click.
+          </p>
+        </div>
+      </div>
 
-        {/* Controls - mobile friendly grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full lg:w-auto mt-3 lg:mt-0">
-          <div className="relative">
-            <CalendarDays size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+      {/* Primary filters */}
+      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-12 xl:gap-4">
+        <label className="block xl:col-span-3">
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-slate-700">
+            Date
+          </span>
+          <span className="relative block">
+            <CalendarDays size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               id="attendance-date"
               name="attendance_date"
               type="date"
               value={date}
               onChange={(e) => setDate(e.target.value)}
-              className="w-full pl-9 pr-3 py-2.5 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-indigo-400/50"
+              className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-10 pr-3 text-sm font-semibold text-slate-800 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100/80"
             />
-          </div>
+          </span>
+        </label>
+
+        <label className="block xl:col-span-3">
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-slate-700">
+            Teacher
+          </span>
           <select
             id="attendance-teacher"
             name="attendance_teacher"
             value={teacherId}
             onChange={(e) => setTeacherId(e.target.value)}
-            className="w-full px-3 py-2.5 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-indigo-400/50"
+            className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100/80"
           >
             <option value="all">All Teachers</option>
             {appState.teachers.slice().sort((a, b) => a.name.localeCompare(b.name)).map((t) => (
               <option key={t.id} value={t.id}>{t.name}</option>
             ))}
           </select>
-          <div className="relative sm:col-span-2">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        </label>
+
+        <label className="block xl:col-span-3">
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-slate-700">
+            Time from
+          </span>
+          <span className="relative block">
+            <Clock size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              id="attendance-time-from"
+              name="attendance_time_from"
+              type="time"
+              value={timeFrom}
+              onChange={(event) => setTimeFrom(event.target.value)}
+              className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-10 pr-3 text-sm font-semibold text-slate-800 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100/80"
+              title="Show classes from this time"
+            />
+          </span>
+        </label>
+
+        <label className="block xl:col-span-3">
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-slate-700">
+            Time to
+          </span>
+          <span className="relative block">
+            <Clock size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              id="attendance-time-to"
+              name="attendance_time_to"
+              type="time"
+              value={timeTo}
+              onChange={(event) => setTimeTo(event.target.value)}
+              className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-10 pr-3 text-sm font-semibold text-slate-800 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100/80"
+              title="Show classes up to this time"
+            />
+          </span>
+        </label>
+
+        <label className="block sm:col-span-2 xl:col-span-9">
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-slate-700">
+            Search
+          </span>
+          <span className="relative block">
+            <Search size={17} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               id="attendance-search"
               name="attendance_search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search teacher or student..."
-              className="w-full pl-9 pr-3 py-2.5 rounded-2xl bg-white/80 border border-slate-200/70 text-sm shadow-sm outline-none focus:ring-2 focus:ring-indigo-400/50"
+              placeholder="Teacher or student..."
+              className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-11 pr-4 text-sm font-medium text-slate-800 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100/80"
             />
+          </span>
+        </label>
+
+        <div className="sm:col-span-2 xl:col-span-3">
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-slate-700">
+            View
+          </span>
+          <Segmented
+            value={entityFilter}
+            onChange={(v) => setEntityFilter(v as any)}
+            options={[
+              { value: "teachers", label: "Teachers" },
+              { value: "students", label: "Students" },
+            ]}
+            fullWidth
+          />
+        </div>
+      </div>
+
+      {/* Secondary filters */}
+      <div className="mt-5 border-t border-slate-200/80 pt-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-xs font-extrabold text-slate-700 shadow-sm">
+              <Filter size={14} className="text-slate-500" />
+              Day: <span className="text-slate-950">{day || "—"}</span>
+            </div>
+            {fixedScheduleLabel ? (
+              <div className="inline-flex h-10 items-center gap-2 rounded-2xl border border-indigo-100 bg-gradient-to-r from-indigo-50 to-violet-50 px-3 text-xs font-extrabold text-indigo-700 shadow-sm">
+                <CalendarDays size={14} />
+                <span>{fixedScheduleLabel}</span>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setOnlyScheduled((v) => !v)}
+                className={`h-10 rounded-2xl border px-4 text-xs font-extrabold shadow-sm transition ${
+                  onlyScheduled
+                    ? "border-indigo-100 bg-gradient-to-r from-indigo-50 to-violet-50 text-indigo-700"
+                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                {onlyScheduled ? "Scheduled: ON" : "Scheduled: OFF"}
+              </button>
+            )}
           </div>
-          <div className="sm:col-span-2">
+
+          <div className="min-w-0 overflow-x-auto xl:ml-1">
             <Segmented
-              value={entityFilter}
-              onChange={(v) => setEntityFilter(v as any)}
+              value={statusFilter}
+              onChange={(v) => setStatusFilter(v as any)}
               options={[
-                { value: "teachers", label: "Teachers" },
-                { value: "students", label: "Students" },
+                { value: "all", label: "All" },
+                { value: AttendanceStatus.PRESENT, label: "Present" },
+                { value: AttendanceStatus.ABSENT, label: "Absent" },
+                { value: AttendanceStatus.LEAVE, label: "Leave" },
+                { value: "Unmarked", label: "Unmarked" },
               ]}
             />
           </div>
-        </div>
-      </div>
-      {/* Secondary controls - mobile friendly */}
-      <div className="mt-4 flex flex-col gap-2 rounded-3xl bg-white/60 border border-slate-200/70 p-3 sm:p-4 shadow-[0_12px_28px_rgba(15,23,42,0.06)]">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex items-center gap-2 px-3 py-2 rounded-2xl bg-white/75 border border-slate-200/70 text-xs font-extrabold text-slate-700">
-            <Filter size={14} className="text-slate-500" />
-            Day: <span className="text-slate-900">{day || "—"}</span>
+
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-500 xl:ml-auto xl:whitespace-nowrap">
+            <Info size={14} className="shrink-0 text-slate-400" />
+            <span>Click a card to mark attendance.</span>
           </div>
-          <button
-            type="button"
-            onClick={() => setOnlyScheduled((v) => !v)}
-            className={`px-3 py-2 rounded-2xl text-xs font-extrabold border transition ${
-              onlyScheduled
-                ? "bg-indigo-50 text-indigo-700 border-indigo-100"
-                : "bg-white/80 text-slate-700 border-slate-200/70 hover:bg-white"
-            }`}
-          >
-            {onlyScheduled ? "Scheduled: ON" : "Scheduled: OFF"}
-          </button>
-        </div>
-        <div className="overflow-x-auto">
-          <Segmented
-            value={statusFilter}
-            onChange={(v) => setStatusFilter(v as any)}
-            options={[
-              { value: "all", label: "All" },
-              { value: AttendanceStatus.PRESENT, label: "Present" },
-              { value: AttendanceStatus.ABSENT, label: "Absent" },
-              { value: AttendanceStatus.LEAVE, label: "Leave" },
-              { value: "Unmarked", label: "Unmarked" },
-            ]}
-          />
-        </div>
-        <div className="text-xs text-slate-500">
-          Tip: Click a card to mark attendance.
         </div>
       </div>
 
@@ -743,7 +1367,12 @@ return (
 
                   // cute preview: show a few student names from earliest session
                   const firstSession = t.sessions[0];
-                  const previewStudents = firstSession ? firstSession.students.slice(0, 4) : [];
+                  const previewStudentSource = firstSession
+                    ? (dedupeStudentLabels
+                        ? uniqueAttendanceStudentLabels(firstSession.students)
+                        : firstSession.students)
+                    : [];
+                  const previewStudents = previewStudentSource.slice(0, 4);
 
                   return (
                     <button
@@ -785,9 +1414,9 @@ return (
                                 {st.name}
                               </span>
                             ))}
-                            {firstSession && firstSession.students.length > 4 && (
+                            {firstSession && previewStudentSource.length > 4 && (
                               <span className="px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200 text-xs font-extrabold text-slate-700">
-                                +{firstSession.students.length - 4} more
+                                +{previewStudentSource.length - 4} more
                               </span>
                             )}
                           </div>
@@ -906,50 +1535,76 @@ return (
       {/* Teacher Modal */}
       <TeacherAttendanceModal
         open={!!openTeacher}
-        onClose={() => setOpenTeacherId(null)}
-        title={openTeacher?.teacherName || ""}
-        subtitle={`${day || "—"} • ${date}`}
+        onClose={() =>
+          setOpenTeacherId(null)
+        }
+        teacherId={
+          openTeacher?.teacherId || ""
+        }
+        title={
+          openTeacher?.teacherName || ""
+        }
+        subtitle={`${day || "?"} ? ${date}`}
+        date={date}
         sessions={
           openTeacher
-            ? openTeacher.sessions.map((ses) => ({
-                timeSlot: ses.timeSlot,
-                status: ses.status,
-                students: ses.students.slice().sort((a, b) => (a.name || "").localeCompare(b.name || "")),
-              }))
+            ? openTeacher.sessions.map(
+                (session) => ({
+                  timeSlot:
+                    session.timeSlot,
+                  status:
+                    session.status,
+                  students: (
+                    dedupeStudentLabels
+                      ? uniqueAttendanceStudentLabels(
+                          session.students,
+                        )
+                      : session.students
+                  )
+                    .slice()
+                    .sort((a, b) =>
+                      (a.name || "").localeCompare(
+                        b.name || "",
+                      ),
+                    ),
+                }),
+              )
             : []
         }
-onSetStatus={(timeSlot, status) => {
-  if (!openTeacher) return;
+        onSetStatus={(
+          timeSlot,
+          status,
+          coverageAssignments = [],
+        ) => {
+          if (!openTeacher) {
+            return false;
+          }
 
-  const session = openTeacher.sessions.find((ses) => ses.timeSlot === timeSlot);
-  if (!session) return;
+          return onUpsert({
+            entityId:
+              openTeacher.teacherId,
+            entityType:
+              EntityType.TEACHER,
+            date,
+            status,
+            classKey: timeSlot,
+            coverageAssignments,
+          });
+        }}
+        onClearStatus={(timeSlot) => {
+          if (!openTeacher) {
+            return false;
+          }
 
-  // Mark every student in this teacher session.
-  // Do NOT save teacher attendance here.
-  for (const student of session.students) {
-    onUpsert({
-      entityId: student.id,
-      entityType: EntityType.STUDENT,
-      date,
-      status,
-    });
-  }
-}}
-onClearStatus={(timeSlot) => {
-  if (!openTeacher) return;
-
-  const session = openTeacher.sessions.find((ses) => ses.timeSlot === timeSlot);
-  if (!session) return;
-
-  // Unmark every student in this teacher session.
-  for (const student of session.students) {
-    onDelete({
-      entityId: student.id,
-      entityType: EntityType.STUDENT,
-      date,
-    });
-  }
-}}
+          return onDelete({
+            entityId:
+              openTeacher.teacherId,
+            entityType:
+              EntityType.TEACHER,
+            date,
+            classKey: timeSlot,
+          });
+        }}
       />
     </div>
   );

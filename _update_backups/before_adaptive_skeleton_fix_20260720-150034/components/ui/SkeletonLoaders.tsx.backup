@@ -1,0 +1,160 @@
+import React from "react";
+
+type SkeletonVariant =
+  | "page"
+  | "table"
+  | "cards"
+  | "schedule"
+  | "settings"
+  | "portal"
+  | "list";
+
+type PageSkeletonProps = {
+  variant?: SkeletonVariant;
+  rows?: number;
+  cards?: number;
+  className?: string;
+  compact?: boolean;
+  label?: string;
+};
+
+function Shimmer({ className = "" }: { className?: string }) {
+  return <div aria-hidden="true" className={`ivs-skeleton ${className}`} />;
+}
+
+function SkeletonHeader({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className={`flex items-center justify-between gap-4 ${compact ? "mb-3" : "mb-5"}`}>
+      <div className="flex min-w-0 items-center gap-3">
+        <Shimmer className={`${compact ? "h-9 w-9" : "h-12 w-12"} shrink-0 rounded-2xl`} />
+        <div className="min-w-0 space-y-2">
+          <Shimmer className={`${compact ? "h-3 w-36" : "h-4 w-52"} max-w-[58vw] rounded-full`} />
+          <Shimmer className={`${compact ? "h-2.5 w-48" : "h-3 w-72"} max-w-[70vw] rounded-full`} />
+        </div>
+      </div>
+      <Shimmer className={`${compact ? "h-9 w-20" : "h-11 w-28"} shrink-0 rounded-2xl`} />
+    </div>
+  );
+}
+
+function TableSkeleton({ rows = 6, compact = false }: { rows?: number; compact?: boolean }) {
+  return (
+    <div className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white/90 shadow-[0_12px_32px_rgba(15,23,42,0.05)] dark:border-slate-800 dark:bg-slate-900/75">
+      <div className="grid grid-cols-[minmax(0,1.7fr)_minmax(90px,.7fr)_minmax(90px,.6fr)_110px] gap-3 border-b border-slate-200 bg-slate-50/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/40">
+        <Shimmer className="h-3 w-28 rounded-full" />
+        <Shimmer className="h-3 w-20 rounded-full" />
+        <Shimmer className="h-3 w-16 rounded-full" />
+        <Shimmer className="ml-auto h-3 w-16 rounded-full" />
+      </div>
+      <div className="divide-y divide-slate-100 dark:divide-slate-800">
+        {Array.from({ length: rows }).map((_, index) => (
+          <div key={index} className={`grid grid-cols-[minmax(0,1.7fr)_minmax(90px,.7fr)_minmax(90px,.6fr)_110px] items-center gap-3 px-4 ${compact ? "py-2.5" : "py-3.5"}`}>
+            <div className="flex items-center gap-3">
+              <Shimmer className={`${compact ? "h-8 w-8" : "h-10 w-10"} shrink-0 rounded-xl`} />
+              <div className="min-w-0 flex-1 space-y-2">
+                <Shimmer className="h-3 w-[58%] rounded-full" />
+                <Shimmer className="h-2.5 w-[38%] rounded-full" />
+              </div>
+            </div>
+            <Shimmer className="h-7 w-20 rounded-full" />
+            <Shimmer className="h-6 w-16 rounded-full" />
+            <div className="flex justify-end gap-2">
+              <Shimmer className="h-8 w-16 rounded-xl" />
+              <Shimmer className="h-8 w-8 rounded-xl" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CardGridSkeleton({ cards = 6, compact = false }: { cards?: number; compact?: boolean }) {
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {Array.from({ length: cards }).map((_, index) => (
+        <div key={index} className={`rounded-[22px] border border-slate-200/80 bg-white/90 ${compact ? "p-3" : "p-4"} shadow-[0_10px_26px_rgba(15,23,42,0.045)] dark:border-slate-800 dark:bg-slate-900/75`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <Shimmer className={`${compact ? "h-9 w-9" : "h-11 w-11"} shrink-0 rounded-2xl`} />
+              <div className="min-w-0 flex-1 space-y-2">
+                <Shimmer className="h-3.5 w-32 max-w-full rounded-full" />
+                <Shimmer className="h-2.5 w-24 max-w-full rounded-full" />
+              </div>
+            </div>
+            <Shimmer className="h-8 w-8 shrink-0 rounded-xl" />
+          </div>
+          <div className={`${compact ? "mt-3" : "mt-5"} space-y-2.5`}>
+            <Shimmer className="h-3 w-full rounded-full" />
+            <Shimmer className="h-3 w-[82%] rounded-full" />
+            <Shimmer className="h-3 w-[64%] rounded-full" />
+          </div>
+          <div className={`${compact ? "mt-3" : "mt-5"} flex gap-2`}>
+            <Shimmer className="h-9 flex-1 rounded-xl" />
+            <Shimmer className="h-9 w-20 rounded-xl" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ScheduleSkeleton() {
+  return (
+    <div className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white/90 dark:border-slate-800 dark:bg-slate-900/75">
+      <div className="grid grid-cols-[150px_repeat(5,minmax(150px,1fr))] gap-px bg-slate-200 dark:bg-slate-800">
+        {Array.from({ length: 12 }).map((_, index) => (
+          <div key={index} className={`bg-white p-3 dark:bg-slate-900 ${index < 6 ? "min-h-24" : "min-h-36"}`}>
+            <Shimmer className="h-3 w-[70%] rounded-full" />
+            <Shimmer className="mt-3 h-8 w-full rounded-xl" />
+            {index >= 6 && <Shimmer className="mt-3 h-16 w-full rounded-2xl" />}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SettingsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <div key={index} className="rounded-[24px] border border-slate-200/80 bg-white/90 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/75">
+          <div className="flex items-center gap-3">
+            <Shimmer className="h-10 w-10 rounded-2xl" />
+            <div className="space-y-2"><Shimmer className="h-4 w-40 rounded-full" /><Shimmer className="h-3 w-56 max-w-[60vw] rounded-full" /></div>
+          </div>
+          <div className="mt-5 space-y-3"><Shimmer className="h-12 w-full rounded-2xl" /><Shimmer className="h-12 w-full rounded-2xl" /><Shimmer className="h-10 w-36 rounded-xl" /></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function PageSkeleton({ variant = "page", rows = 6, cards = 6, className = "", compact = false, label }: PageSkeletonProps) {
+  return (
+    <div role="status" aria-live="polite" aria-label={label || "Loading content"} className={`ivs-skeleton-stage w-full ${className}`}>
+      <span className="sr-only">{label || "Loading content"}</span>
+      <SkeletonHeader compact={compact} />
+      {variant === "table" && <TableSkeleton rows={rows} compact={compact} />}
+      {(variant === "cards" || variant === "portal" || variant === "page") && <CardGridSkeleton cards={cards} compact={compact} />}
+      {variant === "schedule" && <ScheduleSkeleton />}
+      {variant === "settings" && <SettingsSkeleton />}
+      {variant === "list" && (
+        <div className="space-y-3">
+          {Array.from({ length: rows }).map((_, index) => (
+            <div key={index} className="flex items-center gap-3 rounded-[20px] border border-slate-200/80 bg-white/90 p-3 dark:border-slate-800 dark:bg-slate-900/75">
+              <Shimmer className="h-11 w-11 shrink-0 rounded-2xl" />
+              <div className="min-w-0 flex-1 space-y-2"><Shimmer className="h-3.5 w-[42%] rounded-full" /><Shimmer className="h-3 w-[70%] rounded-full" /></div>
+              <Shimmer className="h-9 w-20 shrink-0 rounded-xl" />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function InlineSkeleton({ className = "h-4 w-24" }: { className?: string }) {
+  return <Shimmer className={`rounded-full ${className}`} />;
+}

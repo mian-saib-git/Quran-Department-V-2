@@ -1,0 +1,21 @@
+{
+  "App.tsx": true,
+  "components/CoordinatorAccounts.tsx": true,
+  "components/CoordinatorLessons.tsx": true,
+  "components/DepartmentSettings.tsx": true,
+  "components/MonthlyLessonPlans.tsx": true,
+  "components/PlatformAdmin.tsx": true,
+  "components/SkeletonLoader.tsx": true,
+  "components/StudentPortal.tsx": true,
+  "components/TeacherPortal.tsx": true,
+  "components/tuition/TuitionAccountsEnrollment.tsx": true,
+  "components/tuition/TuitionLiveScheduleCard.tsx": true,
+  "components/tuition/TuitionManagersPanel.tsx": true,
+  "hooks/useAcademyWS.ts": true,
+  "index.css": true,
+  "index.tsx": true,
+  "package.json": true,
+  "services/djangoApiService.ts": true,
+  "tailwind.config.js": true,
+  "tsconfig.json": true
+}

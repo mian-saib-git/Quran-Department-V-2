@@ -1,0 +1,1199 @@
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  BarChart3,
+  BookOpen,
+  Calendar,
+  CalendarClock,
+  ChevronRight,
+  Clock3,
+  FileCheck2,
+  GraduationCap,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  Moon,
+  Settings,
+  ShieldCheck,
+  Sun,
+  UserCog,
+  UserRound,
+  Users,
+  X,
+  ChevronDown,
+  CheckCircle2,
+  XCircle,
+  PauseCircle,
+  MinusCircle,
+  Loader2,
+} from "lucide-react";
+
+import TuitionAccountsEnrollment from "./TuitionAccountsEnrollment";
+import TuitionAttendance from "./TuitionAttendance";
+import TuitionReports from "./TuitionReports";
+import TuitionScheduling from "./TuitionScheduling";
+import TuitionInsightsPanel from "./TuitionInsightsPanel";
+import TuitionDepartmentSettingsModal from "./TuitionDepartmentSettingsModal";
+import TuitionAssistantChat, { TuitionAiAvatar } from "./TuitionAssistantChat";
+import { showFeatureLocked } from "../../services/featureAccess";
+import {
+  getTuitionDashboard,
+  type TuitionDashboardClass,
+  type TuitionDashboardResponse,
+  getTuitionAttendance,
+  markTuitionAttendance,
+  deleteTuitionAttendance,
+  type TuitionAttendanceRecord,
+} from "../../services/tuitionApiService";
+
+type Department = {
+  id: number;
+  name: string;
+  code: string;
+  department_type: string;
+};
+
+type Props = {
+  department: Department;
+  features: Record<string, boolean>;
+  user?: {
+    id?: number;
+    username?: string;
+    first_name?: string;
+    last_name?: string;
+    role?: string;
+  } | null;
+  themeMode: "light" | "dark";
+  onToggleTheme: () => void;
+  onLogout: () => void;
+};
+
+type Tab =
+  | "dashboard"
+  | "accounts"
+  | "scheduling"
+  | "assignments"
+  | "attendance"
+  | "reports";
+
+const nav = [
+  {
+    id: "dashboard" as const,
+    label: "Dashboard",
+    icon: LayoutDashboard,
+    feature: "tab_tuition_dashboard",
+  },
+  {
+    id: "accounts" as const,
+    label: "Accounts & Enrollment",
+    icon: Users,
+    feature: "tab_tuition_accounts",
+  },
+  {
+    id: "scheduling" as const,
+    label: "Scheduling",
+    icon: CalendarClock,
+    feature: "tab_tuition_scheduling",
+  },
+  {
+    id: "assignments" as const,
+    label: "Assignments",
+    icon: BookOpen,
+    feature: "tab_tuition_assignments",
+  },
+  {
+    id: "attendance" as const,
+    label: "Attendance",
+    icon: Calendar,
+    feature: "tab_tuition_attendance",
+  },
+  {
+    id: "reports" as const,
+    label: "Reports",
+    icon: BarChart3,
+    feature: "tab_tuition_reports",
+  },
+];
+
+const emptyDashboard: TuitionDashboardResponse = {
+  counts: {
+    students: 0,
+    teachers: 0,
+    managers: 0,
+    active_subjects: 0,
+    active_schedules: 0,
+  },
+  live_classes: [],
+  up_next_classes: [],
+};
+
+function formatTime(value: string) {
+  const [hours, minutes] = String(value || "00:00").split(":").map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return value;
+  const suffix = hours >= 12 ? "PM" : "AM";
+  const hour = hours % 12 || 12;
+  return `${hour}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
+function TuitionClock() {
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const hourDeg = ((now.getHours() % 12) + now.getMinutes() / 60) * 30;
+  const minuteDeg = (now.getMinutes() + now.getSeconds() / 60) * 6;
+  const secondDeg = now.getSeconds() * 6;
+
+  return (
+    <div className="flex items-center gap-3">
+      <div className="relative h-[58px] w-[58px] shrink-0 rounded-full border border-white bg-gradient-to-br from-white to-slate-100 shadow-[0_10px_28px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)]">
+        <span className="absolute left-1/2 top-[3px] -translate-x-1/2 text-[7px] font-black text-slate-400">12</span>
+        <span className="absolute right-[5px] top-1/2 -translate-y-1/2 text-[7px] font-black text-slate-400">3</span>
+        <span className="absolute bottom-[3px] left-1/2 -translate-x-1/2 text-[7px] font-black text-slate-400">6</span>
+        <span className="absolute left-[5px] top-1/2 -translate-y-1/2 text-[7px] font-black text-slate-400">9</span>
+
+        <div
+          className="absolute left-1/2 top-1/2 h-[16px] w-[3px] origin-bottom rounded-full bg-slate-800"
+          style={{ transform: `translate(-50%, -100%) rotate(${hourDeg}deg)` }}
+        />
+        <div
+          className="absolute left-1/2 top-1/2 h-[21px] w-[2px] origin-bottom rounded-full bg-indigo-600"
+          style={{ transform: `translate(-50%, -100%) rotate(${minuteDeg}deg)` }}
+        />
+        <div
+          className="absolute left-1/2 top-1/2 h-[23px] w-px origin-bottom rounded-full bg-rose-500"
+          style={{ transform: `translate(-50%, -100%) rotate(${secondDeg}deg)` }}
+        />
+        <div className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-indigo-600 shadow-sm" />
+      </div>
+
+      <div className="tuition-clock-copy min-w-[92px] leading-tight">
+        <div className="tuition-clock-time text-sm font-black tabular-nums text-slate-950">
+          {now.toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: true,
+          })}
+        </div>
+        <div className="tuition-clock-day mt-1 text-[10px] font-bold text-slate-500">
+          {now.toLocaleDateString(undefined, { weekday: "long" })}
+        </div>
+        <div className="tuition-clock-date mt-0.5 text-[10px] font-bold text-slate-400">
+          {now.toLocaleDateString(undefined, { month: "long", day: "2-digit" })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ModulePlaceholder({
+  title,
+  description,
+  icon: Icon,
+}: {
+  title: string;
+  description: string;
+  icon: React.ComponentType<{ size?: number }>;
+}) {
+  return (
+    <div className="rounded-[28px] border border-slate-200/80 bg-white p-6 shadow-[0_18px_48px_rgba(15,23,42,0.07)]">
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
+        <Icon size={22} />
+      </div>
+      <h2 className="mt-4 text-xl font-black text-slate-950">{title}</h2>
+      <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-slate-500">
+        {description}
+      </p>
+      <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-4 py-2 text-xs font-black text-emerald-700">
+        <FileCheck2 size={15} /> Enabled in SaaS
+      </div>
+    </div>
+  );
+}
+
+// TUITION_DASHBOARD_ATTENDANCE_DROPDOWN_V1
+
+type DashboardAttendanceEntity = "student" | "teacher";
+type DashboardAttendanceValue = "present" | "absent" | "leave" | "unmarked";
+
+type DashboardAttendanceHandler = (
+  item: TuitionDashboardClass,
+  entityType: DashboardAttendanceEntity,
+  status: Exclude<DashboardAttendanceValue, "unmarked">,
+) => void;
+
+type DashboardAttendanceClearHandler = (
+  item: TuitionDashboardClass,
+  entityType: DashboardAttendanceEntity,
+) => void;
+
+const dashboardAttendanceMeta: Record<
+  DashboardAttendanceValue,
+  { label: string; icon: React.ReactNode; active: string; idle: string }
+> = {
+  present: {
+    label: "Present",
+    icon: <CheckCircle2 size={14} />,
+    active: "border-emerald-600 bg-emerald-600 text-white shadow-[0_12px_26px_-14px_rgba(5,150,105,0.75)]",
+    idle: "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800/70 dark:bg-emerald-950/35 dark:text-emerald-300",
+  },
+  absent: {
+    label: "Absent",
+    icon: <XCircle size={14} />,
+    active: "border-rose-600 bg-rose-600 text-white shadow-[0_12px_26px_-14px_rgba(225,29,72,0.72)]",
+    idle: "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 dark:border-rose-900/70 dark:bg-rose-950/35 dark:text-rose-300",
+  },
+  leave: {
+    label: "Leave",
+    icon: <PauseCircle size={14} />,
+    active: "border-amber-500 bg-amber-500 text-white shadow-[0_12px_26px_-14px_rgba(217,119,6,0.72)]",
+    idle: "border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-900/70 dark:bg-amber-950/35 dark:text-amber-300",
+  },
+  unmarked: {
+    label: "Unmark",
+    icon: <MinusCircle size={14} />,
+    active: "border-slate-900 bg-slate-900 text-white shadow-[0_12px_26px_-14px_rgba(15,23,42,0.75)] dark:border-white dark:bg-white dark:text-slate-950",
+    idle: "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800",
+  },
+};
+
+function dashboardAttendanceStatus(
+  records: TuitionAttendanceRecord[],
+  item: TuitionDashboardClass,
+  entityType: DashboardAttendanceEntity,
+): DashboardAttendanceValue {
+  const record = records.find(
+    (entry) =>
+      entry.entity_type === entityType &&
+      Number(entry.schedule_id || 0) === Number(item.id),
+  );
+  return record?.status || "unmarked";
+}
+
+function DashboardAttendanceButtons({
+  current,
+  disabled,
+  busy,
+  onSet,
+  onClear,
+}: {
+  current: DashboardAttendanceValue;
+  disabled?: boolean;
+  busy?: boolean;
+  onSet: (status: Exclude<DashboardAttendanceValue, "unmarked">) => void;
+  onClear: () => void;
+}) {
+  const choices: DashboardAttendanceValue[] = [
+    "present",
+    "absent",
+    "leave",
+    "unmarked",
+  ];
+
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+      {choices.map((choice) => {
+        const meta = dashboardAttendanceMeta[choice];
+        const active = current === choice;
+        return (
+          <button
+            key={choice}
+            type="button"
+            disabled={disabled || busy}
+            onClick={() =>
+              choice === "unmarked"
+                ? onClear()
+                : onSet(choice as Exclude<DashboardAttendanceValue, "unmarked">)
+            }
+            className={`inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2 text-[10px] font-black transition-all duration-200 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-55 ${
+              active ? meta.active : meta.idle
+            }`}
+            aria-pressed={active}
+          >
+            {busy && active ? <Loader2 className="animate-spin" size={14} /> : meta.icon}
+            <span>{meta.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// TUITION_DASHBOARD_TIME_RANGE_HOURGLASS_V2
+// TUITION_DASHBOARD_QURAN_HOURGLASS_ICON_V1
+function tuitionDashboardClockMinutes(value: unknown): number | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+
+  const twelveHour = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]m)$/i);
+  if (twelveHour) {
+    let hour = Number(twelveHour[1]);
+    const minute = Number(twelveHour[2]);
+    const suffix = twelveHour[3].toLowerCase();
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+    if (hour === 12) hour = 0;
+    if (suffix === "pm") hour += 12;
+    return hour * 60 + minute;
+  }
+
+  const twentyFourHour = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!twentyFourHour) return null;
+
+  const hour = Number(twentyFourHour[1]);
+  const minute = Number(twentyFourHour[2]);
+  if (
+    !Number.isFinite(hour) ||
+    !Number.isFinite(minute) ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null;
+  }
+  return hour * 60 + minute;
+}
+
+function tuitionDashboardMinutesUntilClock(value: unknown): number | null {
+  const target = tuitionDashboardClockMinutes(value);
+  if (target === null) return null;
+
+  const now = new Date();
+  const current = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+  let difference = target - current;
+
+  // Allow a class ending shortly after midnight without producing a negative value.
+  if (difference < -720) difference += 24 * 60;
+  return Math.max(0, Math.ceil(difference));
+}
+
+function tuitionDashboardShowClassLabel(value: unknown): boolean {
+  const label = String(value ?? "").trim();
+  if (!label) return false;
+
+  // Tuition dashboard cards must not show operational-day or days-per-week labels.
+  return !(
+    /\bdays?\s*(?:\/|per)?\s*week\b/i.test(label) ||
+    /\b(?:sun|sunday)\s*[-–—]\s*(?:thu|thursday)\b/i.test(label)
+  );
+}
+
+function ClassCard({
+  item,
+  live,
+  attendance,
+  attendanceEnabled,
+  attendanceBusyKey,
+  onSetAttendance,
+  onClearAttendance,
+}: {
+  item: TuitionDashboardClass;
+  live?: boolean;
+  attendance: TuitionAttendanceRecord[];
+  attendanceEnabled: boolean;
+  attendanceBusyKey: string;
+  onSetAttendance: DashboardAttendanceHandler;
+  onClearAttendance: DashboardAttendanceClearHandler;
+}) {
+  const studentStatus = dashboardAttendanceStatus(attendance, item, "student");
+  const teacherStatus = dashboardAttendanceStatus(attendance, item, "teacher");
+  const studentBusy = attendanceBusyKey === `${item.id}:student`;
+  const teacherBusy = attendanceBusyKey === `${item.id}:teacher`;
+
+  const startTime = formatTime(item.start_time);
+  const endTime = item.end_time ? formatTime(item.end_time) : "";
+  const timeRange = endTime ? `${startTime} – ${endTime}` : startTime;
+
+  const minutesValue = live
+    ? tuitionDashboardMinutesUntilClock(item.end_time)
+    : typeof item.minutes_until === "number"
+      ? Math.max(0, Math.ceil(item.minutes_until))
+      : tuitionDashboardMinutesUntilClock(item.start_time);
+
+  const minutesLabel =
+    minutesValue === null
+      ? live
+        ? "In progress"
+        : "Upcoming"
+      : live
+        ? `${minutesValue} min left`
+        : `${minutesValue} min`;
+
+  const showClassLabel = tuitionDashboardShowClassLabel(item.class_name);
+
+  return (
+    <article
+      className={`group overflow-hidden rounded-[24px] border bg-white shadow-[0_14px_36px_rgba(15,23,42,0.07)] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_22px_48px_rgba(15,23,42,0.11)] dark:bg-slate-900/92 ${
+        live
+          ? "border-emerald-200/90 dark:border-emerald-900/65"
+          : "border-indigo-100 dark:border-indigo-900/55"
+      }`}
+    >
+      <div className="p-4 sm:p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="truncate text-sm font-black text-slate-950 dark:text-white sm:text-base">
+                {item.student_name}
+              </h3>
+              <span
+                className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${
+                  live
+                    ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/45 dark:text-emerald-300"
+                    : "bg-indigo-50 text-indigo-700 dark:bg-indigo-950/45 dark:text-indigo-300"
+                }`}
+              >
+                {live ? "Live" : "Up next"}
+              </span>
+            </div>
+            <p className="mt-1 text-xs font-bold text-slate-600 dark:text-slate-400">
+              With:{" "}
+              <span className="text-slate-950 dark:text-slate-100">
+                {item.teacher_name}
+              </span>
+            </p>
+          </div>
+
+          <div
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-black text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+            title={`Class time: ${timeRange}`}
+          >
+            <Clock3 size={13} />
+            <span className="whitespace-nowrap">{timeRange}</span>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {showClassLabel && (
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-[10px] font-black text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              {item.class_name}
+            </span>
+          )}
+
+          <span className="rounded-full bg-sky-50 px-3 py-1 text-[10px] font-black text-sky-700 dark:bg-sky-950/45 dark:text-sky-300">
+            {item.subject_name || "Subject"}
+          </span>
+
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[10px] font-black shadow-sm ${
+              live
+                ? "border-emerald-100 bg-emerald-50 text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-300"
+                : "border-indigo-100 bg-indigo-50 text-indigo-700 dark:border-indigo-900/70 dark:bg-indigo-950/40 dark:text-indigo-300"
+            }`}
+            title={live ? "Time remaining in this live class" : "Time until this class starts"}
+          >
+            <span
+              aria-hidden="true"
+              className="inline-flex h-[15px] w-[15px] items-center justify-center text-[13px] leading-none"
+            >
+              ⏳
+            </span>
+            <span>{minutesLabel}</span>
+          </span>
+        </div>
+      </div>
+
+      {live && (
+        <div className="border-t border-slate-100 bg-slate-50/75 p-3 sm:p-4 dark:border-slate-800 dark:bg-slate-950/55">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-black text-slate-900 dark:text-white">
+                Live attendance
+              </div>
+              <div className="mt-0.5 text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                Mark the student and teacher independently.
+              </div>
+            </div>
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[9px] font-black uppercase tracking-wide text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-300">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+              Active
+            </span>
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">
+                    Student
+                  </div>
+                  <div className="truncate text-xs font-black text-slate-900 dark:text-white">
+                    {item.student_name}
+                  </div>
+                </div>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black capitalize text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                  {studentStatus}
+                </span>
+              </div>
+              <DashboardAttendanceButtons
+                current={studentStatus}
+                disabled={!attendanceEnabled}
+                busy={studentBusy}
+                onSet={(status) => onSetAttendance(item, "student", status)}
+                onClear={() => onClearAttendance(item, "student")}
+              />
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">
+                    Teacher
+                  </div>
+                  <div className="truncate text-xs font-black text-slate-900 dark:text-white">
+                    {item.teacher_name}
+                  </div>
+                </div>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black capitalize text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                  {teacherStatus}
+                </span>
+              </div>
+              <DashboardAttendanceButtons
+                current={teacherStatus}
+                disabled={!attendanceEnabled}
+                busy={teacherBusy}
+                onSet={(status) => onSetAttendance(item, "teacher", status)}
+                onClear={() => onClearAttendance(item, "teacher")}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function EmptyClassState({ title }: { title: string }) {
+  return (
+    <div className="flex min-h-[150px] items-center justify-center rounded-[22px] border border-dashed border-slate-300 bg-white/70 p-6 text-center">
+      <div>
+        <CalendarClock className="mx-auto text-slate-300" size={30} />
+        <div className="mt-3 text-sm font-black text-slate-700">{title}</div>
+        <div className="mt-1 text-xs font-semibold text-slate-400">Classes will appear here after Tuition schedules are created.</div>
+      </div>
+    </div>
+  );
+}
+
+export default function TuitionCoordinatorPortal({
+  department,
+  features,
+  user,
+  themeMode,
+  onToggleTheme,
+  onLogout,
+}: Props) {
+
+  // IVS tuition responsive body scope: CSS below is active only inside the Tuition portal.
+  useEffect(() => {
+    document.body.classList.add("tuition-portal-responsive-mode");
+    return () => document.body.classList.remove("tuition-portal-responsive-mode");
+  }, []);
+
+
+  const [activeTab, setActiveTab] = useState<Tab>("dashboard");
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [dashboard, setDashboard] = useState<TuitionDashboardResponse>(emptyDashboard);
+  const [dashboardAttendance, setDashboardAttendance] = useState<TuitionAttendanceRecord[]>([]);
+  const [dashboardAttendanceMessage, setDashboardAttendanceMessage] = useState("");
+  const [dashboardAttendanceBusyKey, setDashboardAttendanceBusyKey] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sidebarEdgeHover, setSidebarEdgeHover] = useState(false);
+  const [tuitionAssistantOpen, setTuitionAssistantOpen] = useState(false);
+  const [profileUser, setProfileUser] = useState(user || null);
+
+  useEffect(() => {
+    setProfileUser(user || null);
+  }, [user]);
+
+  const displayName = useMemo(() => {
+    const name = `${profileUser?.first_name || ""} ${profileUser?.last_name || ""}`.trim();
+    return name || profileUser?.username || "Tuition Manager";
+  }, [profileUser]);
+
+  const effectiveRole = String(
+    profileUser?.role || user?.role || ""
+  ).toLowerCase();
+
+  const roleLabel = useMemo(() => {
+    if (effectiveRole === "institution_admin") return "Institution Admin";
+    if (effectiveRole === "department_admin") return "Tuition Department Admin";
+    return "Tuition Coordinator";
+  }, [effectiveRole]);
+
+  const isDepartmentAdmin = [
+    "department_admin",
+    "institution_admin",
+  ].includes(effectiveRole);
+
+  const roleIcon =
+    effectiveRole === "coordinator"
+      ? "/coordinator-icon.png"
+      : "/superadmin-icon.png";
+
+  useEffect(() => {
+    let mounted = true;
+
+    getTuitionDashboard(department.id)
+      .then((response) => {
+        if (mounted) setDashboard(response);
+      })
+      .catch(() => {
+        if (mounted) setDashboard(emptyDashboard);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [department.id, activeTab]);
+
+  // TUITION_DASHBOARD_ATTENDANCE_HANDLERS_V1
+  const tuitionDashboardDate = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
+  useEffect(() => {
+    if (activeTab !== "dashboard") return;
+    let mounted = true;
+
+    getTuitionAttendance({
+      department_id: department.id,
+      date: tuitionDashboardDate(),
+    })
+      .then((payload) => {
+        if (!mounted) return;
+        setDashboardAttendance(payload.results || []);
+        setDashboardAttendanceMessage("");
+      })
+      .catch((error: any) => {
+        if (!mounted) return;
+        setDashboardAttendance([]);
+        setDashboardAttendanceMessage(
+          error?.message || "Unable to load live attendance.",
+        );
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [activeTab, department.id]);
+
+  const setDashboardAttendanceStatus: DashboardAttendanceHandler = (
+    item,
+    entityType,
+    status,
+  ) => {
+    void (async () => {
+      if (features.tuition_mark_attendance === false) {
+        setDashboardAttendanceMessage(
+          "Tuition attendance marking is disabled from SaaS settings.",
+        );
+        return;
+      }
+
+      const busyKey = `${item.id}:${entityType}`;
+      setDashboardAttendanceBusyKey(busyKey);
+      setDashboardAttendanceMessage("");
+
+      try {
+        const saved = await markTuitionAttendance({
+          department_id: department.id,
+          entity_type: entityType,
+          schedule_id: Number(item.id),
+          date: tuitionDashboardDate(),
+          status,
+          class_key: `schedule:${item.id}`,
+        });
+
+        setDashboardAttendance((current) => [
+          ...current.filter(
+            (entry) =>
+              !(
+                entry.entity_type === entityType &&
+                Number(entry.schedule_id || 0) === Number(item.id) &&
+                entry.date === saved.date
+              ),
+          ),
+          saved,
+        ]);
+      } catch (error: any) {
+        setDashboardAttendanceMessage(
+          error?.message || "Unable to save live attendance.",
+        );
+      } finally {
+        setDashboardAttendanceBusyKey("");
+      }
+    })();
+  };
+
+  const clearDashboardAttendanceStatus: DashboardAttendanceClearHandler = (
+    item,
+    entityType,
+  ) => {
+    void (async () => {
+      const date = tuitionDashboardDate();
+      const existing = dashboardAttendance.find(
+        (entry) =>
+          entry.entity_type === entityType &&
+          Number(entry.schedule_id || 0) === Number(item.id) &&
+          entry.date === date,
+      );
+
+      if (!existing) return;
+
+      const busyKey = `${item.id}:${entityType}`;
+      setDashboardAttendanceBusyKey(busyKey);
+      setDashboardAttendanceMessage("");
+
+      try {
+        await deleteTuitionAttendance(existing.id, department.id);
+        setDashboardAttendance((current) =>
+          current.filter((entry) => entry.id !== existing.id),
+        );
+      } catch (error: any) {
+        setDashboardAttendanceMessage(
+          error?.message || "Unable to clear live attendance.",
+        );
+      } finally {
+        setDashboardAttendanceBusyKey("");
+      }
+    })();
+  };
+
+  const openTab = (item: (typeof nav)[number]) => {
+    if (features[item.feature] !== true) {
+      showFeatureLocked(
+        item.label,
+        `${item.label} is currently disabled for the Tuition Department from SaaS feature settings.`
+      );
+      return;
+    }
+
+    setActiveTab(item.id);
+    setMobileOpen(false);
+  };
+
+  const tuitionAiEnabled = Boolean(
+    features.ai_assistant ||
+      features.tuition_ai_assistant ||
+      features.tab_tuition_ai_assistant ||
+      features.smart_tools_ai_assistant
+  );
+
+  const openTuitionAssistant = () => {
+    if (!tuitionAiEnabled) {
+      showFeatureLocked(
+        "AI Assistant",
+        "AI Assistant is currently disabled for the Tuition Department from SaaS feature settings."
+      );
+      return;
+    }
+
+    setTuitionAssistantOpen(true);
+    setMobileOpen(false);
+  };
+
+  const activeItem = nav.find((item) => item.id === activeTab) || nav[0];
+  const ActiveIcon = activeItem.icon;
+
+  return (
+    <div className="tuition-portal-root min-h-screen bg-slate-50">
+      <div className="flex min-h-screen">
+        <div
+          className="fixed left-0 top-0 z-[49] hidden h-screen w-6 md:block"
+          onMouseEnter={() => setSidebarEdgeHover(true)}
+          aria-hidden="true"
+        />
+
+        
+        <div
+    className="hidden md:block fixed left-0 top-0 z-[39] h-screen w-5 bg-transparent"
+    onMouseEnter={() => setSidebarEdgeHover(true)}
+  />
+
+{/* ═══════════════════════════════════════════════════════
+    SIDEBAR
+    Collapsed : logo → admin icon → nav icons → logout icon
+    Expanded  : full glass cards + dividers + tight icon-label gap
+═══════════════════════════════════════════════════════ */}
+<aside
+  onMouseEnter={() => setSidebarEdgeHover(true)}
+  onMouseLeave={() => setSidebarEdgeHover(false)}
+  className={`
+    group tuition-sidebar-shell
+${sidebarEdgeHover ? "is-sidebar-open" : ""}
+    fixed inset-y-0 left-0 z-40
+    transform transition-transform duration-300 ease-in-out
+    ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
+    md:translate-x-0 md:static
+
+    shrink-0
+    m-3 md:m-4
+  w-[286px] md:w-[76px] md:hover:w-[286px] ${sidebarEdgeHover ? "md:!w-[286px]" : ""}
+    rounded-[28px]
+    border border-white/70
+    bg-white/68 backdrop-blur-2xl
+    overflow-hidden
+
+    shadow-[-12px_-12px_28px_rgba(255,255,255,0.90),16px_20px_48px_rgba(15,23,42,0.13),inset_0_1px_0_rgba(255,255,255,0.88)]
+
+    md:transition-[width]
+    md:duration-300
+    md:ease-[cubic-bezier(.2,.8,.2,1)]
+  `}
+>
+  <div className="hidden md:block fixed left-0 top-0 h-screen w-5 bg-transparent" />
+  <div className="h-full flex flex-col">
+
+    {/* ─────────────────────────────────────
+        LOGO
+    ───────────────────────────────────── */}
+    <div className="px-3 pt-3 pb-0">
+
+      {/* Collapsed */}
+      <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-2">
+        <div className="w-[52px] h-[52px] rounded-[17px] bg-white border border-slate-200/80 flex items-center justify-center overflow-hidden shadow-[-6px_-6px_14px_rgba(255,255,255,0.98),6px_8px_18px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)]">
+          <img src="/tuition-logo.png" alt="IVS" className="w-10 h-10 object-contain" />
+        </div>
+      </div>
+
+      {/* Expanded */}
+      <div className="tuition-sidebar-brand-card flex md:hidden md:group-hover:flex items-center gap-2.5 rounded-[20px] bg-white/80 border border-white/90 px-2.5 py-2.5 shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)]">
+        <div className="w-[48px] h-[48px] rounded-[16px] bg-white border border-slate-200/70 flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_10px_20px_rgba(15,23,42,0.07)] shrink-0 overflow-hidden">
+          <img src="/tuition-logo.png" alt="Iqra Virtual School" className="w-9 h-9 object-contain" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13.5px] font-extrabold text-slate-950 leading-tight truncate">Iqra Virtual School</div>
+          <div className="text-[10.5px] font-semibold text-slate-500 truncate mt-0.5">Tuition Department</div>
+        </div>
+        <button onClick={() => setMobileOpen(false)} className="md:hidden h-7 w-7 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-500 shrink-0" title="Close">
+          <X size={14} />
+        </button>
+      </div>
+    </div>
+
+    {/* Divider after brand */}
+    <div className="mx-4 mt-3 h-px bg-slate-200/70 hidden md:hidden md:group-hover:block" />
+    <div className="mx-4 mt-3 h-px bg-slate-200/70 md:hidden" />
+
+    {/* ─────────────────────────────────────
+        ROLE / ACCOUNT
+    ───────────────────────────────────── */}
+    <div className="px-3 pt-3 pb-0">
+
+      {/* Collapsed */}
+      <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-2">
+        <div className="w-[52px] h-[52px] rounded-[17px] bg-slate-900 border border-slate-700/50 flex items-center justify-center overflow-hidden shadow-[0_12px_28px_rgba(15,23,42,0.30)]">
+          <img src={roleIcon} alt={roleLabel} className="w-10 h-10 object-contain" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+        </div>
+      </div>
+
+      {/* Expanded */}
+      <div className="tuition-sidebar-role-card flex md:hidden md:group-hover:flex items-center gap-2.5 rounded-[20px] bg-slate-950 px-2.5 py-2.5 text-white shadow-[0_20px_48px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.08)]">
+        <div className="w-[48px] h-[48px] rounded-[16px] bg-white/10 border border-white/10 flex items-center justify-center shadow-[0_12px_24px_rgba(0,0,0,0.25)] shrink-0 overflow-hidden">
+          <img src={roleIcon} alt={roleLabel} className="w-9 h-9 object-contain" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+        </div>
+        <div className="min-w-0">
+          <div className="text-[12.5px] font-extrabold whitespace-nowrap">{roleLabel}</div>
+          <div className="text-[10px] text-slate-400 mt-0.5 truncate font-semibold">{displayName}</div>
+        </div>
+      </div>
+    </div>
+
+    {/* Divider after account */}
+    <div className="mx-4 mt-3 h-px bg-slate-200/70 hidden md:hidden md:group-hover:block" />
+    <div className="mx-4 mt-3 h-px bg-slate-200/70 md:hidden" />
+
+    {/* ─────────────────────────────────────
+        NAVIGATION
+    ───────────────────────────────────── */}
+    <nav className="flex-1 px-3 pt-3 overflow-y-auto" style={{scrollbarWidth:'none',msOverflowStyle:'none'}}>
+
+      {/* Collapsed: stacked bare icons */}
+      <div className="hidden md:flex md:group-hover:hidden flex-col items-center gap-2.5 py-1">
+        {nav.map((item) => {
+          const Icon = item.icon;
+          const active = activeTab === item.id;
+          const enabled = features[item.feature] === true;
+          return (
+            <button key={item.id} onClick={() => openTab(item)} title={item.label} className="transition-all duration-300">
+              <div className={`relative w-[52px] h-[52px] rounded-[17px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${active ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]" : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"}`}>
+                <Icon size={20} />
+                        {!enabled && <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rose-500" />}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Expanded: icon + label — grid-cols-[52px_1fr] keeps icon & text close */}
+      <div className="tuition-sidebar-nav-list flex md:hidden md:group-hover:flex flex-col gap-1">
+        {nav.map((item) => {
+          const Icon = item.icon;
+          const active = activeTab === item.id;
+          const enabled = features[item.feature] === true;
+          return (
+            <button
+              key={item.id}
+              onClick={() => openTab(item)}
+              title={item.label}
+              className={`w-full rounded-[18px] transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${active ? "bg-white/72 shadow-[-5px_-5px_14px_rgba(255,255,255,0.97),7px_9px_18px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,1)]" : "hover:bg-white/45"}`}
+            >
+              {/* 52px col = icon (46px) + 3px padding each side — label starts right after */}
+              <div className="grid grid-cols-[52px_1fr] items-center">
+                <div className="flex items-center justify-center py-1.5">
+                  <div className={`relative w-[46px] h-[46px] rounded-[15px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${active ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]" : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"}`}>
+                    <Icon size={19} />
+                            {!enabled && <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rose-500" />}
+                  </div>
+                </div>
+                {/* No extra padding-left — label starts flush with end of icon col */}
+                <div className="min-w-0 pr-2">
+                  <span className={`block font-extrabold text-[13.5px] whitespace-nowrap truncate ${active ? "text-indigo-700" : "text-slate-700"}`}>
+                    {item.label}
+                  </span>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </nav>
+
+            <div className="px-3 pt-3 pb-2">
+              <div className="hidden md:flex md:group-hover:hidden items-center justify-center">
+                <button
+                  type="button"
+                  onClick={openTuitionAssistant}
+                  className="h-[54px] w-[54px] rounded-[18px] bg-white/90 border border-slate-200/80 shadow-[-6px_-6px_14px_rgba(255,255,255,0.95),6px_8px_18px_rgba(15,23,42,0.10)] flex items-center justify-center overflow-hidden transition hover:bg-white active:scale-[0.97]"
+                  title="Open AI Assistant"
+                  aria-label="Open AI Assistant"
+                >
+                  <TuitionAiAvatar size="sm" />
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={openTuitionAssistant}
+                className="tuition-sidebar-ai-card flex md:hidden md:group-hover:flex w-full items-center gap-3 rounded-[22px] bg-white/80 border border-white/90 px-3 py-3 text-left shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)] transition hover:bg-white active:scale-[0.99]"
+                title="Open AI Assistant"
+                aria-label="Open AI Assistant"
+              >
+                <div className="h-[58px] w-[58px] rounded-[20px] bg-white border border-slate-200/70 flex items-center justify-center overflow-hidden shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_10px_20px_rgba(15,23,42,0.07)]">
+                  <TuitionAiAvatar size="lg" />
+                </div>
+
+                <div className="min-w-0">
+                  <div className="text-[13px] font-extrabold text-slate-950 truncate">AI Assistant</div>
+                  <div className="text-[10.5px] font-semibold text-slate-500 truncate mt-0.5">Quick help anytime</div>
+                </div>
+              </button>
+            </div>
+
+<div className="mx-4 mt-2 h-px bg-slate-200/70" />
+
+    {/* ─────────────────────────────────────
+        LOGOUT
+    ───────────────────────────────────── */}
+    <div className="px-3 pt-2 pb-3">
+
+      {/* Collapsed */}
+      <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-1">
+        <button onClick={onLogout} title="Logout" className="transition-all duration-300">
+          <div className="w-[52px] h-[52px] rounded-[17px] bg-white/95 border border-rose-100 flex items-center justify-center text-rose-600 shadow-[-5px_-5px_12px_rgba(255,255,255,0.95),5px_7px_16px_rgba(244,63,94,0.12),inset_0_1px_0_rgba(255,255,255,1)]">
+            <LogOut size={19} />
+          </div>
+        </button>
+      </div>
+
+      {/* Expanded — compact pill */}
+      <button
+        onClick={onLogout}
+        title="Logout"
+        className="tuition-sidebar-logout w-full flex md:hidden md:group-hover:flex rounded-[16px] bg-rose-50/90 border border-rose-100/80 hover:bg-rose-100/90 transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] shadow-[-4px_-4px_12px_rgba(255,255,255,0.95),4px_6px_14px_rgba(244,63,94,0.08)]"
+      >
+        {/* Same 52px col as nav items — perfectly aligned */}
+        <div className="grid grid-cols-[52px_1fr] items-center w-full">
+          <div className="flex items-center justify-center py-1.5">
+            <div className="w-[40px] h-[40px] rounded-[13px] bg-white/95 border border-rose-100 flex items-center justify-center text-rose-600 shadow-[-4px_-4px_10px_rgba(255,255,255,0.95),4px_5px_12px_rgba(244,63,94,0.12),inset_0_1px_0_rgba(255,255,255,1)]">
+              <LogOut size={16} />
+            </div>
+          </div>
+          <div className="min-w-0 pr-2">
+            <span className="block font-extrabold text-[13px] whitespace-nowrap text-rose-600">Logout</span>
+          </div>
+        </div>
+      </button>
+    </div>
+
+  </div>
+</aside>
+
+        {mobileOpen && <button type="button" onClick={() => setMobileOpen(false)} className="tuition-mobile-sidebar-backdrop fixed inset-0 z-[60] bg-slate-950/30 md:hidden" aria-label="Close menu" />}
+
+        <TuitionAssistantChat
+          open={tuitionAssistantOpen}
+          onClose={() => setTuitionAssistantOpen(false)}
+          departmentId={department.id}
+          departmentName={department.name || "Tuition Department"}
+          dashboard={dashboard}
+        />
+
+        <main className="tuition-portal-main flex-1 flex flex-col h-screen overflow-hidden relative">
+          <header className="tuition-portal-header mx-3 mb-2 mt-3 md:mx-4 md:mt-4">
+            <div className="tuition-portal-header-card rounded-[28px] border border-slate-200/80 bg-white/82 px-4 py-3 shadow-[0_16px_40px_rgba(15,23,42,0.06)] backdrop-blur-xl md:px-6">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <button type="button" onClick={() => setMobileOpen(true)} className="tuition-mobile-menu-button flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 shadow-sm md:hidden"><Menu size={20} /></button>
+                  <div className="hidden items-center gap-3 md:flex">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white shadow-[0_18px_34px_-18px_rgba(37,99,235,0.70)]"><ActiveIcon size={21} /></div>
+                    <div className="min-w-0">
+                      <h1 className="truncate text-lg font-black text-slate-950 md:text-xl">{activeItem.label}</h1>
+                      <div className="mt-0.5 truncate text-xs font-bold text-slate-500">{roleLabel} Panel</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="ivs-tuition-clock-shell flex rounded-3xl border border-slate-200/80 bg-white/76 px-3 py-2 shadow-[0_12px_28px_rgba(15,23,42,0.07)]"><TuitionClock /></div>
+                  {isDepartmentAdmin ? (
+                    <button
+                      type="button"
+                      onClick={() => setSettingsOpen(true)}
+                      className="tuition-mobile-header-action flex h-11 w-11 items-center justify-center rounded-2xl border border-indigo-100 bg-white text-slate-800 shadow-[0_12px_28px_rgba(15,23,42,0.08)] transition hover:border-indigo-200 hover:text-indigo-700"
+                      title="Department admin settings"
+                    >
+                      <Settings size={18} />
+                    </button>
+                  ) : (
+                    <button type="button" onClick={onToggleTheme} className="tuition-mobile-header-action flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200/80 bg-white/80 text-slate-700 shadow-[0_12px_28px_rgba(15,23,42,0.07)]" title={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}>{themeMode === "dark" ? <Sun size={18} /> : <Moon size={18} />}</button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <div className="tuition-portal-content flex-1 overflow-y-auto p-4 md:p-8 pb-16 md:pb-8">
+            {activeTab === "dashboard" && (
+              <div className="space-y-6">
+<section className="relative overflow-hidden rounded-[32px] border border-slate-200/70 bg-white/55 p-5 shadow-[0_18px_55px_rgba(15,23,42,0.10)] backdrop-blur-xl md:p-6">
+                  <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.18),transparent_32%),radial-gradient(circle_at_bottom_left,rgba(56,189,248,0.12),transparent_28%)]" />
+                  <div className="relative grid grid-cols-2 gap-4 xl:grid-cols-4">
+                    {[
+                      ["Students", dashboard.counts.students, Users, "text-emerald-600", "bg-emerald-50"],
+                      ["Teachers", dashboard.counts.teachers, BookOpen, "text-blue-600", "bg-blue-50"],
+                      ["Coordinators", dashboard.counts.managers, UserCog, "text-violet-600", "bg-violet-50"],
+                      ["Active Subjects", dashboard.counts.active_subjects, GraduationCap, "text-indigo-600", "bg-indigo-50"],
+                    ].map(([label, value, Icon, tone, bg]: any) => (
+                      <div key={label} className="rounded-[22px] border border-white/80 bg-white/90 p-4 shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
+                        <div className="flex items-center justify-between gap-3">
+                          <div><div className="text-[11px] font-bold text-slate-500">{label}</div><div className={`mt-1 text-2xl font-black ${tone}`}>{value}</div></div>
+                          <div className={`flex h-10 w-10 items-center justify-center rounded-2xl ${bg} ${tone}`}><Icon size={19} /></div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <TuitionInsightsPanel dashboard={dashboard} />
+
+                {dashboardAttendanceMessage && (
+                  <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900 shadow-sm dark:border-amber-900/70 dark:bg-amber-950/35 dark:text-amber-200">
+                    <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+                    <span>{dashboardAttendanceMessage}</span>
+                  </div>
+                )}
+
+                <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-base font-black text-slate-900"><span className="h-2.5 w-2.5 rounded-full bg-rose-500 animate-pulse" /> Live Now</div>
+                      <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[10px] font-black text-slate-500">{dashboard.live_classes.length} class{dashboard.live_classes.length === 1 ? "" : "es"}</span>
+                    </div>
+                    <div className="space-y-3">
+                      {dashboard.live_classes.length ? dashboard.live_classes.map((item) => (
+                        <ClassCard
+                          key={item.id}
+                          item={item}
+                          live
+                          attendance={dashboardAttendance}
+                          attendanceEnabled={features.tuition_mark_attendance !== false}
+                          attendanceBusyKey={dashboardAttendanceBusyKey}
+                          onSetAttendance={setDashboardAttendanceStatus}
+                          onClearAttendance={clearDashboardAttendanceStatus}
+                        />
+                      )) : <EmptyClassState title="No live Tuition classes right now" />}
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-base font-black text-slate-900">Up Next <ChevronRight size={17} className="text-slate-400" /></div>
+                      <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[10px] font-black text-slate-500">Next scheduled classes</span>
+                    </div>
+                    <div className="space-y-3">
+                      {dashboard.up_next_classes.length ? dashboard.up_next_classes.map((item) => (
+                        <ClassCard
+                          key={item.id}
+                          item={item}
+                          attendance={dashboardAttendance}
+                          attendanceEnabled={features.tuition_mark_attendance !== false}
+                          attendanceBusyKey={dashboardAttendanceBusyKey}
+                          onSetAttendance={setDashboardAttendanceStatus}
+                          onClearAttendance={clearDashboardAttendanceStatus}
+                        />
+                      )) : <EmptyClassState title="No upcoming Tuition classes today" />}
+                    </div>
+                  </div>
+                </section>
+
+              </div>
+            )}
+
+            {activeTab === "accounts" && features.tab_tuition_accounts === true && (
+              <TuitionAccountsEnrollment
+                departmentId={department.id}
+                features={features}
+                currentUserId={profileUser?.id}
+                currentUserRole={profileUser?.role}
+              />
+            )}
+
+            {activeTab === "scheduling" && features.tab_tuition_scheduling === true && (
+              <TuitionScheduling departmentId={department.id} features={features} />
+            )}
+
+            {activeTab === "assignments" && (
+              <ModulePlaceholder title="Assignments" description="The SaaS feature is enabled. Assignment creation, submissions, feedback and grading will be connected after scheduling." icon={BookOpen} />
+            )}
+
+            {activeTab === "attendance" && (
+              <TuitionAttendance departmentId={department.id} features={features} />
+            )}
+
+            {activeTab === "reports" && (
+              <TuitionReports departmentId={department.id} features={features} generatedBy={(() => { const p = profileUser as any; const values = [p?.full_name, p?.display_name, p?.name, [p?.first_name, p?.last_name].filter(Boolean).join(" "), p?.first_name, p?.username].map((value) => String(value || "").trim()).filter(Boolean); return values.sort((a, b) => b.length - a.length)[0] || "Tuition Coordinator"; })()} />
+            )}
+          </div>
+
+          {settingsOpen && isDepartmentAdmin && (
+            <TuitionDepartmentSettingsModal
+              user={profileUser as any}
+              themeMode={themeMode}
+              onToggleTheme={onToggleTheme}
+              onClose={() => setSettingsOpen(false)}
+              onProfileUpdated={(profile) => setProfileUser(profile as any)}
+            />
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}

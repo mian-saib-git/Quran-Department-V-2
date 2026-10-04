@@ -1,0 +1,9 @@
+{
+  "update": "department_settings_icon_type_fix_v34",
+  "timestamp": "20260727_165738_910891",
+  "changed_files": [
+    "components/DepartmentSettings.tsx"
+  ],
+  "backup": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\_update_backups\\department_settings_icon_type_fix_v34_20260727_165738_910891",
+  "reason": "React 19/Lucide dynamic icon props were inferred as never after dependency resolution."
+}

@@ -1,0 +1,191 @@
+/* IVS_STUDENT_PORTALS_V48_PHYSICS_DROP_DATE_FORMAT */
+.lanyard-wrapper {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.lanyard-wrapper canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: visible;
+  outline: none;
+  pointer-events: none;
+}
+
+.tuition-overview-lanyard-layer {
+  position: absolute;
+  top: -92px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  min-height: calc(100% + 92px);
+  z-index: 70;
+  overflow: visible;
+  pointer-events: none;
+  isolation: isolate;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body.lanyard-drag-active,
+body.lanyard-drag-active * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -webkit-touch-callout: none !important;
+  cursor: grabbing !important;
+}
+
+@media (max-width: 1439px) {
+  .tuition-overview-lanyard-layer {
+    top: -76px;
+    min-height: calc(100% + 76px);
+  }
+}
+
+@media (max-width: 1023px) {
+  .tuition-overview-lanyard-layer {
+    top: -58px;
+    right: -8px;
+    left: -8px;
+    min-height: calc(100% + 58px);
+  }
+}
+
+@media (max-width: 639px) {
+  .tuition-overview-lanyard-layer {
+    top: -36px;
+    right: -6px;
+    left: -6px;
+    min-height: calc(100% + 36px);
+  }
+
+  .lanyard-wrapper {
+    touch-action: pan-y;
+  }
+}
+
+/* IVS_STUDENT_PORTALS_V48_PHYSICS_DROP_DATE_FORMAT */
+.tuition-global-lanyard-layer,
+.quran-global-lanyard-layer {
+  position: absolute;
+  top: -74px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 70;
+  min-height: calc(100% + 74px);
+  overflow: visible;
+  pointer-events: none;
+  isolation: isolate;
+  user-select: none;
+  -webkit-user-select: none;
+  transform-origin: 50% 0%;
+  will-change: transform, opacity;
+}
+
+.tuition-global-lanyard-layer.motion-idle.is-visible,
+.tuition-global-lanyard-layer.is-visible:not(.motion-showing),
+.quran-global-lanyard-layer.motion-idle.is-visible,
+.quran-global-lanyard-layer.is-visible:not(.motion-showing) {
+  transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  opacity: 1;
+  visibility: visible;
+}
+
+.tuition-global-lanyard-layer.motion-showing,
+.quran-global-lanyard-layer.motion-showing {
+  visibility: visible;
+  transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  animation: student-lanyard-physics-reveal 220ms ease-out both;
+}
+
+.tuition-global-lanyard-layer.motion-hiding,
+.quran-global-lanyard-layer.motion-hiding {
+  animation: student-lanyard-caught-up 900ms cubic-bezier(0.62, 0.01, 0.82, 0.34) both;
+}
+
+.tuition-global-lanyard-layer.is-hidden.motion-idle,
+.quran-global-lanyard-layer.is-hidden.motion-idle {
+  transform: translate3d(0, -112vh, 0) rotate(8deg) scale(0.96);
+  opacity: 0;
+  visibility: hidden;
+}
+
+.tuition-global-lanyard-layer.is-hidden,
+.tuition-global-lanyard-layer.is-hidden *,
+.quran-global-lanyard-layer.is-hidden,
+.quran-global-lanyard-layer.is-hidden *,
+.lanyard-wrapper.is-noninteractive,
+.lanyard-wrapper.is-noninteractive * {
+  cursor: default !important;
+}
+
+@keyframes student-lanyard-physics-reveal {
+  0%,
+  26% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+@keyframes student-lanyard-caught-up {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+    opacity: 1;
+    visibility: visible;
+  }
+  16% {
+    transform: translate3d(-0.8%, 6%, 0) rotate(-2deg) scale(1.012);
+  }
+  34% {
+    transform: translate3d(1.4%, -4%, 0) rotate(3deg) scale(0.995);
+  }
+  100% {
+    transform: translate3d(4%, -116vh, 0) rotate(11deg) scale(0.95);
+    opacity: 1;
+    visibility: hidden;
+  }
+}
+
+@media (max-width: 1023px) {
+  .tuition-global-lanyard-layer,
+  .quran-global-lanyard-layer {
+    top: -58px;
+    min-height: calc(100% + 58px);
+  }
+}
+
+@media (max-width: 639px) {
+  .tuition-global-lanyard-layer,
+  .quran-global-lanyard-layer {
+    top: -42px;
+    right: -6px;
+    left: -6px;
+    min-height: calc(100% + 42px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tuition-global-lanyard-layer.motion-showing,
+  .tuition-global-lanyard-layer.motion-hiding,
+  .quran-global-lanyard-layer.motion-showing,
+  .quran-global-lanyard-layer.motion-hiding {
+    animation-duration: 1ms !important;
+  }
+}

@@ -1,3 +1,4 @@
+// IVS_LIVE_CLASS_ACCOUNT_LINKS_V15
 import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -10,6 +11,7 @@ import {
   FileSpreadsheet,
   GraduationCap,
   Loader2,
+  LockKeyhole,
   Plus,
   RefreshCw,
   Save,
@@ -26,7 +28,9 @@ import {
   createCoordinatorAccount,
   disableCoordinatorAccount,
   getCoordinatorAccounts,
+  getCoordinatorTabAccess,
   updateCoordinatorAccount,
+  updateCoordinatorTabAccess,
   type CoordinatorAccountsResponse,
   type CoordinatorCoordinatorAccount,
   type CoordinatorStudentAccount,
@@ -38,6 +42,7 @@ import { loadSession } from "../services/sessionService";
 import { useAcademyWS } from "../hooks/useAcademyWS";
 
 import { showFeatureLocked } from "../services/featureAccess";
+import { PageSkeleton } from "./ui/SkeletonLoaders";
 const DEPARTMENT_ADMIN_ROLES = ["department_admin", "institution_admin"];
 
 const isDepartmentAdminRole = (role: unknown) =>
@@ -78,7 +83,34 @@ type FormState = {
   time_slot: string;
   duration_minutes: number;
   class_days: string[];
+  student_type: string;
+  class_status: string;
+  speaking_language: string;
+  first_fee_paid: boolean;
+  referral_student_id: string;
+  previous_teacher_id: string;
+  transfer_to_teacher_id: string;
+  not_counted_class: boolean;
+  tab_access: Record<string, boolean>;
 };
+
+const QURAN_COORDINATOR_TABS = [
+  { key: "tab_daily_classes", label: "Dashboard", description: "Daily classes and live class overview." },
+  { key: "tab_accounts_enrollment", label: "Accounts & Enrollment", description: "Teacher and student account management." },
+  { key: "tab_lessons_control", label: "Lessons Control", description: "Lesson records, plans and lesson controls." },
+  { key: "tab_scheduling", label: "Scheduling", description: "Quran schedules and timetable." },
+  { key: "tab_attendance", label: "Attendance", description: "Attendance workspace and records." },
+  { key: "tab_dropped_leave", label: "Dropped & Leave", description: "Dropped, leave and absence tracking." },
+  { key: "tab_reports", label: "Reports", description: "Attendance and performance reports." },
+] as const;
+
+const defaultQuranCoordinatorTabs = () =>
+  Object.fromEntries(QURAN_COORDINATOR_TABS.map((item) => [item.key, true]));
+
+function shouldDefaultNotCountedClass(now = new Date()) {
+  const finalDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  return finalDay - now.getDate() <= 4;
+}
 
 const emptyForm = (role: Mode): FormState => ({
   role,
@@ -100,6 +132,15 @@ const emptyForm = (role: Mode): FormState => ({
   time_slot: "",
   duration_minutes: 30,
   class_days: [],
+  student_type: "trial_student",
+  class_status: "running",
+  speaking_language: "urdu",
+  first_fee_paid: false,
+  referral_student_id: "",
+  previous_teacher_id: "",
+  transfer_to_teacher_id: "",
+  not_counted_class: role === "student" ? shouldDefaultNotCountedClass() : false,
+  tab_access: defaultQuranCoordinatorTabs(),
 });
 
 function displayName(first: string, last: string, username: string) {
@@ -252,6 +293,30 @@ function getStudentDays(item: CoordinatorStudentAccount): string[] {
 
   return [];
 }
+
+const STUDENT_TYPES = [
+  ["old_student", "Old Student"],
+  ["trial_student", "Trial Student"],
+  ["transferred_from_teacher", "Transferred from another teacher"],
+  ["returned_from_leave", "Student return from leave"],
+  ["transferred_to_teacher", "Class transferred to another teacher"],
+] as const;
+
+const CLASS_STATUSES = [
+  ["running", "Running"],
+  ["on_leave", "On Leave"],
+  ["old_dropped", "Old Class Dropped"],
+  ["trial_dropped", "Trial Dropped"],
+  ["old_dropped_other", "Old Dropped (Other)"],
+  ["not_counted", "Not Counted Class"],
+] as const;
+
+const SPEAKING_LANGUAGES = [
+  ["english", "English"],
+  ["urdu", "Urdu"],
+  ["arabic", "Arabic"],
+  ["other", "Other"],
+] as const;
 
 const WEEKDAYS = [
   "Monday",
@@ -570,11 +635,23 @@ function statusBadge(active: boolean) {
 type CoordinatorAccountsProps = {
   canBulkImport?: boolean;
   canDeleteAccounts?: boolean;
+  features?: Record<string, boolean>;
+
+  editTarget?: {
+    role: "teacher" | "student";
+    profileId: string;
+    requestId: number;
+  } | null;
+  onEditTargetHandled?: () => void;
 };
 
 export default function CoordinatorAccounts({
   canBulkImport = true,
   canDeleteAccounts = true,
+  features = {},
+
+  editTarget = null,
+  onEditTargetHandled,
 }: CoordinatorAccountsProps = {}) {
   const [data, setData] = useState<CoordinatorAccountsResponse>({
     coordinators: [],
@@ -594,10 +671,13 @@ export default function CoordinatorAccounts({
   const [activeMode, setActiveMode] = useState<Mode>("teacher");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
+  const [accountsLoaded, setAccountsLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [tabAccessLoading, setTabAccessLoading] = useState(false);
 
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm("teacher"));
+  const [referralSearch, setReferralSearch] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
   const [copiedUsername, setCopiedUsername] = useState("");
@@ -620,6 +700,7 @@ export default function CoordinatorAccounts({
         teachers: accountsRes.teachers || [],
         students: accountsRes.students || [],
       });
+      setAccountsLoaded(true);
     } catch (err: any) {
       setMessage(err?.message || "Failed to load accounts.");
     } finally {
@@ -650,6 +731,26 @@ export default function CoordinatorAccounts({
       setActiveMode("teacher");
     }
   }, [canManageCoordinators, activeMode]);
+
+  const referralCandidates = useMemo(() => {
+    const query = referralSearch.trim().toLowerCase();
+    return (data.students || [])
+      .filter((student) => student.is_active && student.student_profile?.id)
+      .filter((student) => {
+        if (!query) return true;
+        return [student.full_name, student.username, student.student_profile?.teacher_name]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      })
+      .slice(0, 12);
+  }, [data.students, referralSearch]);
+
+  const selectedReferralStudent = useMemo(
+    () => (data.students || []).find((student) => String(student.student_profile?.id || "") === form.referral_student_id),
+    [data.students, form.referral_student_id]
+  );
 
   const filteredCoordinators = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -772,8 +873,23 @@ export default function CoordinatorAccounts({
       first_name: coordinator.first_name || "",
       last_name: coordinator.last_name || "",
       is_active: coordinator.is_active,
+      tab_access: { ...defaultQuranCoordinatorTabs(), ...(coordinator.tab_access || {}) },
     });
     setModalMode("edit-coordinator");
+
+    setTabAccessLoading(true);
+    getCoordinatorTabAccess(coordinator.id)
+      .then((response) => {
+        setForm((current) =>
+          current.userId === coordinator.id
+            ? { ...current, tab_access: { ...defaultQuranCoordinatorTabs(), ...(response.tabs || {}) } }
+            : current,
+        );
+      })
+      .catch((error: any) => {
+        setMessage(error?.message || "Could not load coordinator tab access.");
+      })
+      .finally(() => setTabAccessLoading(false));
   };
 
   const openEditTeacher = (teacher: CoordinatorTeacherAccount) => {
@@ -819,14 +935,87 @@ export default function CoordinatorAccounts({
         profile.duration_minutes || profile.durationMinutes || 30
       ),
       class_days: getStudentDays(student),
+      student_type: profile.student_type || "trial_student",
+      class_status: profile.class_status || "running",
+      speaking_language: profile.speaking_language || "urdu",
+      first_fee_paid: Boolean(profile.first_fee_paid),
+      referral_student_id: String(profile.referral_student_id || ""),
+      previous_teacher_id: "",
+      transfer_to_teacher_id: "",
+      not_counted_class: false,
     });
     setModalMode("edit-student");
   };
+
+  // IVS_LIVE_CLASS_ACCOUNT_LINKS_V14
+  useEffect(() => {
+    if (!editTarget || loading || !accountsLoaded) return;
+
+    if (!canManageDepartmentAccounts) {
+      setMessage("You do not have permission to edit department accounts.");
+      onEditTargetHandled?.();
+      return;
+    }
+
+    const targetId = String(editTarget.profileId || "");
+    if (!targetId) {
+      onEditTargetHandled?.();
+      return;
+    }
+
+    if (editTarget.role === "teacher") {
+      const teacher = data.teachers.find(
+        (item) =>
+          String(item.teacher_profile?.id || "") === targetId ||
+          String(item.id) === targetId,
+      );
+
+      if (!teacher) {
+        setMessage("The selected teacher account could not be found.");
+        onEditTargetHandled?.();
+        return;
+      }
+
+      setActiveMode("teacher");
+      setSearch("");
+      setPage(1);
+      openEditTeacher(teacher);
+      onEditTargetHandled?.();
+      return;
+    }
+
+    const student = data.students.find(
+      (item) =>
+        String(item.student_profile?.id || "") === targetId ||
+        String(item.id) === targetId,
+    );
+
+    if (!student) {
+      setMessage("The selected student account could not be found.");
+      onEditTargetHandled?.();
+      return;
+    }
+
+    setActiveMode("student");
+    setSearch("");
+    setPage(1);
+    openEditStudent(student);
+    onEditTargetHandled?.();
+  }, [
+    editTarget,
+    loading,
+    accountsLoaded,
+    data.teachers,
+    data.students,
+    canManageDepartmentAccounts,
+    onEditTargetHandled,
+  ]);
 
   const closeModal = () => {
     setModalMode(null);
     setSaving(false);
     setMessage("");
+    setReferralSearch("");
   };
 
   const openCsvImport = () => {
@@ -1039,10 +1228,22 @@ export default function CoordinatorAccounts({
         input.time_slot = form.time_slot || null;
         input.duration_minutes = Number(form.duration_minutes || 30);
         input.class_days = form.class_days;
+        input.student_type = form.student_type;
+        if (isEdit) input.class_status = form.class_status;
+        input.speaking_language = form.speaking_language;
+        input.first_fee_paid = form.first_fee_paid;
+        if (!isEdit) {
+          input.referral_student_id = form.referral_student_id ? Number(form.referral_student_id) : null;
+          input.previous_teacher_id = form.previous_teacher_id ? Number(form.previous_teacher_id) : null;
+          input.not_counted_class = form.not_counted_class;
+        } else if (form.student_type === "transferred_to_teacher") {
+          input.transfer_to_teacher_id = form.transfer_to_teacher_id ? Number(form.transfer_to_teacher_id) : null;
+        }
       }
 
+      let savedAccount: any;
       if (isEdit && form.userId) {
-        await updateCoordinatorAccount(form.userId, {
+        savedAccount = await updateCoordinatorAccount(form.userId, {
           ...input,
           is_active: form.is_active,
         });
@@ -1053,13 +1254,21 @@ export default function CoordinatorAccounts({
           })
         );
       } else {
-        await createCoordinatorAccount(input);
+        savedAccount = await createCoordinatorAccount(input);
 
         window.dispatchEvent(
           new CustomEvent("ivs-toast", {
             detail: "Account created",
           })
         );
+      }
+
+      if (form.role === "coordinator") {
+        const coordinatorId = Number(form.userId || savedAccount?.id || 0);
+        if (!coordinatorId) {
+          throw new Error("Coordinator account was saved, but its ID was not returned for tab access.");
+        }
+        await updateCoordinatorTabAccess(coordinatorId, form.tab_access);
       }
 
       closeModal();
@@ -1226,7 +1435,7 @@ export default function CoordinatorAccounts({
                     <div className="text-xs font-bold text-slate-500">Coordinators</div>
                     <div className="mt-1 text-3xl font-extrabold text-slate-950">{data.coordinators.length}</div>
                   </div>
-                  <div className="h-12 w-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center">
+                  <div className="h-10 w-10 rounded-xl bg-slate-900 text-white flex items-center justify-center">
                     <ShieldCheck size={22} />
                   </div>
                 </div>
@@ -1239,7 +1448,7 @@ export default function CoordinatorAccounts({
                   <div className="text-xs font-bold text-slate-500">Teachers</div>
                   <div className="mt-1 text-3xl font-extrabold text-slate-950">{data.teachers.length}</div>
                 </div>
-                <div className="h-12 w-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
                   <Users size={22} />
                 </div>
               </div>
@@ -1251,7 +1460,7 @@ export default function CoordinatorAccounts({
                   <div className="text-xs font-bold text-slate-500">Students</div>
                   <div className="mt-1 text-3xl font-extrabold text-slate-950">{data.students.length}</div>
                 </div>
-                <div className="h-12 w-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                <div className="h-10 w-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
                   <GraduationCap size={22} />
                 </div>
               </div>
@@ -1263,7 +1472,7 @@ export default function CoordinatorAccounts({
                   <div className="text-xs font-bold text-slate-500">Active Accounts</div>
                   <div className="mt-1 text-3xl font-extrabold text-slate-950">{activeCount}</div>
                 </div>
-                <div className="h-12 w-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                <div className="h-10 w-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
                   <ShieldCheck size={22} />
                 </div>
               </div>
@@ -1278,7 +1487,7 @@ export default function CoordinatorAccounts({
         </div>
       )}
 
-      <div className="rounded-[28px] border border-slate-200/70 bg-white/75 backdrop-blur-xl shadow-[0_18px_50px_rgba(15,23,42,0.07)] overflow-hidden">
+      <div className="rounded-[24px] border border-slate-200/70 bg-white/75 backdrop-blur-xl shadow-[0_18px_50px_rgba(15,23,42,0.07)] overflow-hidden">
         <div className="p-5 border-b border-slate-200/70 flex flex-col lg:flex-row gap-4 lg:items-center justify-between">
           <div className="flex rounded-2xl bg-slate-100/70 p-1">
             {canManageCoordinators && (
@@ -1331,11 +1540,8 @@ export default function CoordinatorAccounts({
         </div>
 
         {loading && !data.teachers.length && !data.students.length ? (
-          <div className="p-10 flex items-center justify-center text-slate-500 bg-white/60">
-            <div className="inline-flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-3 shadow-sm">
-              <Loader2 size={18} className="animate-spin text-indigo-600" />
-              <span className="text-sm font-extrabold">Loading accounts...</span>
-            </div>
+          <div className="p-3 sm:p-5">
+            <PageSkeleton variant="accounts" rows={7} compact label="Loading accounts" />
           </div>
         ) : activeMode === "coordinator" && canManageCoordinators ? (
           <CoordinatorTable
@@ -1379,10 +1585,10 @@ export default function CoordinatorAccounts({
       {/* CSV Import Modal */}
       {modalMode === "csv-import" && (
         <div className="fixed inset-0 z-50 bg-slate-950/45 backdrop-blur-sm p-4 flex items-center justify-center">
-          <div className="w-full max-w-5xl max-h-[92vh] overflow-y-auto rounded-[32px] border border-white/50 bg-white shadow-[0_30px_90px_rgba(15,23,42,0.25)]">
+          <div className="w-full max-w-5xl max-h-[88vh] overflow-y-auto rounded-[32px] border border-white/50 bg-white shadow-[0_30px_90px_rgba(15,23,42,0.25)]">
             <div className="sticky top-0 z-10 bg-white/90 backdrop-blur-xl border-b border-slate-200/70 p-5 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-[0_18px_36px_-18px_rgba(37,99,235,0.75)]">
+                <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-[0_18px_36px_-18px_rgba(37,99,235,0.75)]">
                   <FileSpreadsheet size={20} />
                 </div>
 
@@ -1614,7 +1820,7 @@ export default function CoordinatorAccounts({
         <div className="fixed inset-0 z-50 bg-slate-950/55 backdrop-blur-md p-3 md:p-5 flex items-center justify-center">
           <form
             onSubmit={submit}
-           className="account-modal-card w-full max-w-6xl max-h-[92vh] overflow-hidden rounded-[30px] border border-white/70 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.22)] flex flex-col"
+           className="account-modal-card w-full max-w-5xl max-h-[88vh] overflow-hidden rounded-[26px] border border-white/70 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.22)] flex flex-col"
           >
             {/* Header */}
             <div className="relative overflow-hidden shrink-0 border-b border-slate-200/70 bg-white/92 backdrop-blur-xl">
@@ -1622,9 +1828,9 @@ export default function CoordinatorAccounts({
               <div className="pointer-events-none absolute top-0 left-1/3 h-40 w-72 rounded-full bg-indigo-200/35 blur-3xl" />
               <div className="pointer-events-none absolute -bottom-24 -left-24 h-64 w-64 rounded-full bg-sky-100/70 blur-3xl" />
 
-              <div className="relative px-5 md:px-7 py-5 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-4 min-w-0">
-                  <div className="h-14 w-14 rounded-3xl bg-gradient-to-br from-indigo-600 via-blue-600 to-sky-500 text-white flex items-center justify-center shadow-[0_20px_42px_rgba(37,99,235,0.28)] shrink-0">
+              <div className="relative px-4 md:px-5 py-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="h-11 w-11 rounded-2xl bg-gradient-to-br from-indigo-600 via-blue-600 to-sky-500 text-white flex items-center justify-center shadow-[0_20px_42px_rgba(37,99,235,0.28)] shrink-0">
                     {form.role === "coordinator" ? (
                       <ShieldCheck size={24} />
                     ) : form.role === "teacher" ? (
@@ -1639,7 +1845,7 @@ export default function CoordinatorAccounts({
                       {modalMode.includes("create") ? "NEW ACCOUNT" : "EDIT ACCOUNT"}
                     </div>
 
-                    <h3 className="mt-2 text-2xl md:text-3xl font-black tracking-tight text-slate-950 truncate">
+                    <h3 className="mt-1.5 text-xl md:text-2xl font-black tracking-tight text-slate-950 truncate">
                       {modalMode.includes("create") ? "Create" : "Edit"}{" "}
                       {form.role === "coordinator"
                         ? "Coordinator"
@@ -1660,7 +1866,7 @@ export default function CoordinatorAccounts({
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="h-12 w-12 rounded-2xl border border-slate-200 bg-white/90 text-slate-500 hover:text-slate-950 hover:bg-white shadow-[0_12px_26px_rgba(15,23,42,0.08)] flex items-center justify-center transition active:scale-[0.97] shrink-0"
+                  className="h-10 w-10 rounded-xl border border-slate-200 bg-white/90 text-slate-500 hover:text-slate-950 hover:bg-white shadow-[0_12px_26px_rgba(15,23,42,0.08)] flex items-center justify-center transition active:scale-[0.97] shrink-0"
                   aria-label="Close"
                 >
                   <X size={21} />
@@ -1669,7 +1875,7 @@ export default function CoordinatorAccounts({
             </div>
 
             {/* Body */}
-            <div className="account-modal-scroll flex-1 overflow-y-auto px-5 md:px-7 py-6 space-y-5 bg-gradient-to-b from-slate-50/90 via-white to-white">
+            <div className="account-modal-scroll flex-1 overflow-y-auto px-4 md:px-5 py-4 space-y-4 bg-gradient-to-b from-slate-50/90 via-white to-white">
               {message && (
                 <div className="rounded-3xl border border-rose-100 bg-rose-50 px-5 py-4 text-sm font-extrabold text-rose-700 shadow-[0_12px_28px_rgba(244,63,94,0.08)]">
                   {message}
@@ -1680,7 +1886,7 @@ export default function CoordinatorAccounts({
               <section className="account-section account-section-feature">
                 <div className="account-section-glow account-section-glow-indigo" />
 
-                <div className="relative flex items-center justify-between gap-4 mb-6">
+                <div className="relative flex items-center justify-between gap-3 mb-4">
                   <div className="flex items-center gap-3">
                     <div className="account-section-icon bg-gradient-to-br from-indigo-600 to-blue-600 text-white">
                       <UserRound size={21} />
@@ -1781,12 +1987,82 @@ export default function CoordinatorAccounts({
                 </div>
               </section>
 
+              {form.role === "coordinator" && canManageCoordinators && (
+                <section className="account-section account-section-feature">
+                  <div className="account-section-glow account-section-glow-indigo" />
+                  <div className="relative flex items-start gap-3">
+                    <div className="account-section-icon bg-slate-950 text-white">
+                      <ShieldCheck size={20} />
+                    </div>
+                    <div>
+                      <div className="account-section-title">Coordinator Tab Access</div>
+                      <div className="account-section-subtitle">
+                        Select only complete tabs this coordinator may see. Individual features remain controlled exclusively by the Main Admin.
+                      </div>
+                    </div>
+                  </div>
+
+                  {tabAccessLoading ? (
+                    <div className="relative mt-4 flex items-center justify-center gap-2 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-5 text-xs font-black text-indigo-700">
+                      <Loader2 className="animate-spin" size={16} /> Loading tab access...
+                    </div>
+                  ) : (
+                    <div className="relative mt-4 grid grid-cols-1 gap-2 md:grid-cols-2">
+                      {QURAN_COORDINATOR_TABS.map((tab) => {
+                        const mainEnabled = features[tab.key] !== false;
+                        const checked = form.tab_access[tab.key] !== false;
+                        return (
+                          <label
+                            key={tab.key}
+                            className={`flex items-start gap-3 rounded-[20px] border p-3.5 transition ${
+                              mainEnabled
+                                ? checked
+                                  ? "cursor-pointer border-indigo-200 bg-white shadow-sm"
+                                  : "cursor-pointer border-slate-200 bg-slate-50"
+                                : "cursor-not-allowed border-slate-200 bg-slate-100 opacity-75"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={!mainEnabled}
+                              onChange={(event) =>
+                                setForm({
+                                  ...form,
+                                  tab_access: { ...form.tab_access, [tab.key]: event.target.checked },
+                                })
+                              }
+                              className="mt-0.5 h-4 w-4 shrink-0 accent-indigo-600"
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center gap-2 text-sm font-black text-slate-900">
+                                {tab.label}
+                                {!mainEnabled && (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2 py-0.5 text-[8px] font-black uppercase tracking-wide text-white">
+                                    <LockKeyhole size={9} /> Main Admin locked
+                                  </span>
+                                )}
+                              </span>
+                              <span className="mt-1 block text-[10px] font-semibold leading-relaxed text-slate-500">
+                                {tab.description}
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+
+
+                </section>
+              )}
+
               {/* Teacher Profile */}
               {form.role === "teacher" && (
                 <section className="account-section">
                   <div className="account-section-glow account-section-glow-blue" />
 
-                  <div className="relative flex items-center gap-3 mb-6">
+                  <div className="relative flex items-center gap-3 mb-4">
                     <div className="account-section-icon bg-blue-50 text-blue-600 border border-blue-100">
                       <BookOpen size={21} />
                     </div>
@@ -1844,7 +2120,7 @@ export default function CoordinatorAccounts({
                 <section className="account-section">
                   <div className="account-section-glow account-section-glow-emerald" />
 
-                  <div className="relative flex items-center justify-between gap-4 mb-6">
+                  <div className="relative flex items-center justify-between gap-3 mb-4">
                     <div className="flex items-center gap-3">
                       <div className="account-section-icon bg-emerald-50 text-emerald-600 border border-emerald-100">
                         <GraduationCap size={22} />
@@ -1868,8 +2144,9 @@ export default function CoordinatorAccounts({
                       <select
                         required
                         value={form.teacher_id}
+                        disabled={modalMode === "edit-student"}
                         onChange={(e) => setForm({ ...form, teacher_id: e.target.value })}
-                        className="input-premium"
+                        className="input-premium disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
                       >
                         <option value="">Select teacher</option>
                         {data.teachers.map((teacher) => (
@@ -1959,6 +2236,116 @@ export default function CoordinatorAccounts({
                 </section>
               )}
 
+              {form.role === "student" && (
+                <section className="account-section">
+                  <div className="account-section-glow account-section-glow-indigo" />
+                  <div className="relative mb-4">
+                    <div className="account-section-title">Student Classification & Salary</div>
+                    <div className="account-section-subtitle">
+                      Choose the enrollment source, language, referral, and current class outcome without mixing salary categories.
+                    </div>
+                  </div>
+
+                  <div className="relative grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <Field label="Student Type">
+                      <select
+                        value={form.student_type}
+                        onChange={(e) => setForm({
+                          ...form,
+                          student_type: e.target.value,
+                          first_fee_paid: e.target.value === "old_student" ? form.first_fee_paid : false,
+                          previous_teacher_id: e.target.value === "transferred_from_teacher" ? form.previous_teacher_id : "",
+                          transfer_to_teacher_id: e.target.value === "transferred_to_teacher" ? form.transfer_to_teacher_id : "",
+                        })}
+                        className="input-premium"
+                      >
+                        {STUDENT_TYPES
+                          .filter(([value]) => modalMode === "create-student" ? value !== "transferred_to_teacher" : true)
+                          .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      </select>
+                    </Field>
+
+                    {modalMode === "create-student" && form.student_type === "transferred_from_teacher" && (
+                      <Field label="Transferred From Teacher">
+                        <select value={form.previous_teacher_id} onChange={(e) => setForm({ ...form, previous_teacher_id: e.target.value })} className="input-premium">
+                          <option value="">Select previous teacher</option>
+                          {data.teachers
+                            .filter((teacher) => String(teacher.teacher_profile?.id || "") !== form.teacher_id)
+                            .map((teacher) => <option key={teacher.id} value={teacher.teacher_profile?.id || ""}>{teacher.full_name || teacher.username}</option>)}
+                        </select>
+                      </Field>
+                    )}
+
+                    {modalMode === "edit-student" && form.student_type === "transferred_to_teacher" && (
+                      <Field label="Transfer To Teacher">
+                        <select value={form.transfer_to_teacher_id} onChange={(e) => setForm({ ...form, transfer_to_teacher_id: e.target.value })} className="input-premium">
+                          <option value="">Select receiving teacher</option>
+                          {data.teachers
+                            .filter((teacher) => String(teacher.teacher_profile?.id || "") !== form.teacher_id)
+                            .map((teacher) => <option key={teacher.id} value={teacher.teacher_profile?.id || ""}>{teacher.full_name || teacher.username}</option>)}
+                        </select>
+                      </Field>
+                    )}
+
+                    {modalMode === "edit-student" && (
+                      <Field label="Class Status">
+                        <select value={form.class_status} onChange={(e) => setForm({ ...form, class_status: e.target.value })} className="input-premium">
+                          {CLASS_STATUSES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                        </select>
+                      </Field>
+                    )}
+
+                    <Field label="Speaking Language">
+                      <select value={form.speaking_language} onChange={(e) => setForm({ ...form, speaking_language: e.target.value })} className="input-premium">
+                        {SPEAKING_LANGUAGES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      </select>
+                    </Field>
+
+                    {modalMode === "create-student" && (
+                      <div className="md:col-span-2 xl:col-span-3">
+                        <div className="mb-2 text-xs font-black uppercase tracking-[0.12em] text-slate-500">Referred By Student</div>
+                        <div className="rounded-[22px] border border-violet-200 bg-violet-50/45 p-3">
+                          <div className="relative">
+                            <Search size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-violet-400" />
+                            <input type="search" value={referralSearch} onChange={(event) => setReferralSearch(event.target.value)} placeholder="Search student name, username, or teacher..." className="w-full rounded-2xl border border-violet-200 bg-white py-3 pl-10 pr-3 text-sm font-bold text-slate-900 outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-100" />
+                          </div>
+                          {selectedReferralStudent && (
+                            <div className="mt-3 flex items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-white px-3 py-2.5">
+                              <div className="min-w-0"><div className="truncate text-sm font-black text-slate-950">{selectedReferralStudent.full_name || selectedReferralStudent.username}</div><div className="truncate text-xs font-bold text-slate-500">@{selectedReferralStudent.username} · {selectedReferralStudent.student_profile?.teacher_name || "No teacher"}</div></div>
+                              <button type="button" onClick={() => setForm({ ...form, referral_student_id: "" })} className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><X size={15} /></button>
+                            </div>
+                          )}
+                          {!selectedReferralStudent && <div className="mt-3 max-h-48 space-y-2 overflow-y-auto pr-1">
+                            {referralCandidates.map((student) => (
+                              <button key={student.id} type="button" onClick={() => { setForm({ ...form, referral_student_id: String(student.student_profile?.id || "") }); setReferralSearch(""); }} className="flex w-full items-center justify-between gap-3 rounded-2xl border border-transparent bg-white px-3 py-2.5 text-left transition hover:border-violet-200 hover:bg-violet-50">
+                                <div className="min-w-0"><div className="truncate text-sm font-black text-slate-900">{student.full_name || student.username}</div><div className="truncate text-xs font-bold text-slate-500">@{student.username} · {student.student_profile?.teacher_name || "No teacher"}</div></div>
+                                <span className="shrink-0 rounded-full bg-violet-100 px-2.5 py-1 text-[10px] font-black text-violet-700">Select</span>
+                              </button>
+                            ))}
+                            {referralCandidates.length === 0 && <div className="rounded-2xl bg-white px-3 py-4 text-center text-xs font-bold text-slate-500">No matching student found.</div>}
+                          </div>}
+                          <div className="mt-2 text-[11px] font-semibold text-violet-700">The selected student's teacher receives the configured reference credit. This link is locked after creation.</div>
+                        </div>
+                      </div>
+                    )}
+
+                    {modalMode === "create-student" && (
+                      <label className="md:col-span-2 xl:col-span-3 flex items-center justify-between gap-4 rounded-[22px] border border-amber-200 bg-amber-50/75 px-4 py-3 cursor-pointer">
+                        <div><div className="text-sm font-black text-amber-950">Not Counted Class</div><div className="mt-1 text-xs font-semibold text-amber-700">Automatically selected when registration happens within the final four days of the month. This class rolls into the next salary month.</div></div>
+                        <input type="checkbox" checked={form.not_counted_class} onChange={(e) => setForm({ ...form, not_counted_class: e.target.checked })} className="h-5 w-5 shrink-0 accent-amber-600" />
+                      </label>
+                    )}
+
+                    <label className="md:col-span-2 xl:col-span-3 flex items-center justify-between gap-4 rounded-[22px] border border-emerald-200 bg-emerald-50/70 px-4 py-3 cursor-pointer">
+                      <div><div className="text-sm font-black text-emerald-900">First month fee received</div><div className="text-xs font-semibold text-emerald-700 mt-1">Enabling this automatically classifies the student as Old Student.</div></div>
+                      <input type="checkbox" checked={form.first_fee_paid} onChange={(e) => setForm({ ...form, first_fee_paid: e.target.checked, student_type: e.target.checked && form.student_type === "trial_student" ? "old_student" : form.student_type })} className="h-5 w-5 accent-emerald-600" />
+                    </label>
+
+                    <div className="md:col-span-2 xl:col-span-3 rounded-[20px] border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-xs font-bold text-indigo-800">Night shift is detected automatically from the selected class time. Classes from 10:00 PM through 8:30 AM qualify for the configured night bonus.</div>
+                  </div>
+                </section>
+              )}
+
               {/* Notes */}
               {(form.role === "teacher" || form.role === "student") && (
                 <section className="account-section">
@@ -1975,7 +2362,7 @@ export default function CoordinatorAccounts({
                     <textarea
                       value={form.notes}
                       onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                      className="input-premium min-h-[116px] resize-y"
+                      className="input-premium min-h-[82px] resize-y"
                       placeholder="Optional notes..."
                     />
                   </Field>
@@ -2017,12 +2404,12 @@ export default function CoordinatorAccounts({
             </div>
 
             {/* Footer */}
-            <div className="shrink-0 border-t border-slate-200/70 bg-white/92 backdrop-blur-xl px-5 md:px-7 py-4">
+            <div className="shrink-0 border-t border-slate-200/70 bg-white/92 backdrop-blur-xl px-4 md:px-5 py-3">
               <div className="flex flex-col sm:flex-row gap-3">
                 <button
                   type="submit"
                   disabled={saving}
-                  className="account-primary-btn inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-600 via-blue-600 to-sky-500 px-5 py-4 text-sm font-black text-white shadow-[0_22px_44px_-18px_rgba(37,99,235,0.85)] disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="account-primary-btn inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-600 via-blue-600 to-sky-500 px-5 py-3 text-sm font-black text-white shadow-[0_22px_44px_-18px_rgba(37,99,235,0.85)] disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
                   {saving ? "Saving..." : "Save Account"}
@@ -2031,7 +2418,7 @@ export default function CoordinatorAccounts({
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="rounded-2xl border border-slate-200 bg-white px-7 py-4 text-sm font-black text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.06)] hover:bg-slate-50 transition active:scale-[0.98]"
+                  className="rounded-2xl border border-slate-200 bg-white px-6 py-3 text-sm font-black text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.06)] hover:bg-slate-50 transition active:scale-[0.98]"
                 >
                   Cancel
                 </button>
@@ -2083,10 +2470,10 @@ export default function CoordinatorAccounts({
   .account-section {
     position: relative;
     overflow: hidden;
-    border-radius: 28px;
+    border-radius: 22px;
     border: 1px solid rgba(226, 232, 240, 0.95);
     background: rgba(255, 255, 255, 0.86);
-    padding: 1.35rem;
+    padding: 1rem;
 box-shadow:
   0 10px 28px rgba(15, 23, 42, 0.045),
   inset 0 1px 0 rgba(255, 255, 255, 0.88);
@@ -2139,9 +2526,9 @@ box-shadow:
   }
 
   .account-section-icon {
-    width: 3rem;
-    height: 3rem;
-    border-radius: 1.25rem;
+    width: 2.65rem;
+    height: 2.65rem;
+    border-radius: 1rem;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2174,13 +2561,13 @@ box-shadow:
 
   .input-premium {
     width: 100%;
-    min-height: 3.35rem;
+    min-height: 2.9rem;
     border-radius: 1.15rem;
     border: 1px solid rgba(203, 213, 225, 0.88);
     background:
       linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.96));
-    padding: 0.92rem 1rem;
-    font-size: 0.92rem;
+    padding: 0.72rem 0.9rem;
+    font-size: 0.86rem;
     font-weight: 750;
     color: rgb(15 23 42);
     outline: none;
@@ -2514,8 +2901,8 @@ box-shadow:
 
   @media (max-width: 640px) {
     .account-section {
-      border-radius: 24px;
-      padding: 1rem;
+      border-radius: 20px;
+      padding: 0.85rem;
     }
 
     .account-section-title {
@@ -2523,7 +2910,7 @@ box-shadow:
     }
 
     .input-premium {
-      min-height: 3.1rem;
+      min-height: 2.85rem;
     }
   }
 `}</style>
@@ -3012,7 +3399,7 @@ function PaginationBar({
 function EmptyState({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div className="p-14 text-center">
-      <div className="mx-auto h-14 w-14 rounded-3xl bg-slate-100 text-slate-500 flex items-center justify-center">
+      <div className="mx-auto h-11 w-11 rounded-2xl bg-slate-100 text-slate-500 flex items-center justify-center">
         <Users size={24} />
       </div>
       <div className="mt-4 text-lg font-extrabold text-slate-950">{title}</div>

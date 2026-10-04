@@ -1,4 +1,10 @@
-export type UserRole = "coordinator" | "teacher" | "student";
+export type UserRole =
+  | "platform_admin"
+  | "institution_admin"
+  | "department_admin"
+  | "coordinator"
+  | "teacher"
+  | "student";
 
 export type SessionUser = {
   id: number;
@@ -7,21 +13,29 @@ export type SessionUser = {
   role: UserRole;
   is_staff: boolean;
   is_superuser: boolean;
+  first_name?: string;
+  last_name?: string;
+  full_name?: string;
 };
 
 export type Session = {
-  // Old frontend compatibility
   role: UserRole;
   teacherId?: string;
   studentId?: string;
-
-  // New Django JWT session
   access?: string;
   refresh?: string;
   user?: SessionUser;
 };
 
 const SESSION_KEY = "quran_academy_session_v2";
+
+export const SESSION_UPDATED_EVENT = "ivs-session-updated";
+export const SESSION_EXPIRED_EVENT = "ivs-session-expired";
+
+function emitSessionEvent(name: string, detail?: unknown) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(name, { detail }));
+}
 
 export function loadSession(): Session | null {
   try {
@@ -36,8 +50,11 @@ export function saveSession(session: Session) {
   try {
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   } catch {
-    // ignore
+    // The in-memory application session can still continue when storage is
+    // unavailable, so the update event is emitted regardless.
   }
+
+  emitSessionEvent(SESSION_UPDATED_EVENT, session);
 }
 
 export function clearSession() {
@@ -46,6 +63,8 @@ export function clearSession() {
   } catch {
     // ignore
   }
+
+  emitSessionEvent(SESSION_EXPIRED_EVENT);
 }
 
 export function getAccessToken(): string | null {

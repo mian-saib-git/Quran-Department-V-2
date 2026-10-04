@@ -1,0 +1,263 @@
+import React, { useMemo } from "react";
+import { AttendanceRecord, AttendanceStatus, Student, Teacher } from "../types";
+import { Check, CircleMinus, Clock3, PauseCircle, X } from "lucide-react";
+
+type Props = {
+  student: Student;
+  teacher?: Teacher;
+  attendanceToday?: AttendanceRecord;
+  teacherAttendanceToday?: AttendanceRecord;
+
+  onMarkAttendance: (studentId: string, status: AttendanceStatus) => void;
+  onUnmarkAttendance: (studentId: string) => void;
+
+  onMarkTeacherAttendance: (teacherId: string, status: AttendanceStatus) => void;
+  onUnmarkTeacherAttendance: (teacherId: string) => void;
+
+  isCurrentSession: boolean;
+};
+
+const formatTime12 = (time24: string): string => {
+  const [h, m] = String(time24 || "").split(":");
+  const hh = Number(h);
+  if (!Number.isFinite(hh) || !m) return time24;
+  const ampm = hh >= 12 ? "PM" : "AM";
+  let h12 = hh % 12;
+  if (h12 === 0) h12 = 12;
+  return `${h12}:${m} ${ampm}`;
+};
+
+const daysToLabel = (days?: string[]) => {
+  const n = days?.length ?? 0;
+  if (!n) return "No class days";
+  return `${n} day${n === 1 ? "" : "s"} / week`;
+};
+
+const minutesUntil = (time24: string) => {
+  const [h, m] = String(time24 || "").split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+
+  const now = new Date();
+  const target = new Date();
+  target.setHours(h, m, 0, 0);
+  return Math.round((target.getTime() - now.getTime()) / 60000);
+};
+
+function AttendanceAction({
+  active,
+  tone,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  tone: "present" | "absent" | "leave";
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  const styles = {
+    present: active
+      ? "border-emerald-500 bg-emerald-500 text-white shadow-[0_10px_24px_rgba(16,185,129,0.22)]"
+      : "border-emerald-200 bg-white text-emerald-700 hover:border-emerald-300 hover:bg-emerald-50",
+    absent: active
+      ? "border-rose-500 bg-rose-500 text-white shadow-[0_10px_24px_rgba(244,63,94,0.20)]"
+      : "border-rose-200 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50",
+    leave: active
+      ? "border-amber-500 bg-amber-500 text-white shadow-[0_10px_24px_rgba(245,158,11,0.20)]"
+      : "border-amber-200 bg-white text-amber-800 hover:border-amber-300 hover:bg-amber-50",
+  } as const;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border px-3 py-2.5 text-sm font-extrabold transition-all duration-200 active:scale-[0.98] ${styles[tone]}`}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function AttendancePanel({
+  label,
+  name,
+  status,
+  onPresent,
+  onAbsent,
+  onLeave,
+  onClear,
+}: {
+  label: string;
+  name: string;
+  status: AttendanceStatus | null;
+  onPresent: () => void;
+  onAbsent: () => void;
+  onLeave: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="rounded-[24px] border border-slate-200/90 bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.06)] sm:p-5">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-400">{label}</div>
+          <div className="mt-1 truncate text-base font-black text-slate-950">{name}</div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-extrabold text-slate-600">
+            {status ? status.charAt(0).toUpperCase() + status.slice(1).toLowerCase() : "Unmarked"}
+          </span>
+          {status && (
+            <button
+              type="button"
+              onClick={onClear}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+              title="Unmark attendance"
+              aria-label="Unmark attendance"
+            >
+              <CircleMinus size={16} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <AttendanceAction
+          tone="present"
+          active={status === AttendanceStatus.PRESENT}
+          icon={<Check size={18} strokeWidth={2.4} />}
+          label="Present"
+          onClick={onPresent}
+        />
+        <AttendanceAction
+          tone="absent"
+          active={status === AttendanceStatus.ABSENT}
+          icon={<X size={18} strokeWidth={2.4} />}
+          label="Absent"
+          onClick={onAbsent}
+        />
+        <AttendanceAction
+          tone="leave"
+          active={status === AttendanceStatus.LEAVE}
+          icon={<PauseCircle size={18} strokeWidth={2.2} />}
+          label="Leave"
+          onClick={onLeave}
+        />
+      </div>
+    </div>
+  );
+}
+
+export function ClassCard({
+  student,
+  teacher,
+  attendanceToday,
+  teacherAttendanceToday,
+  onMarkAttendance,
+  onUnmarkAttendance,
+  onMarkTeacherAttendance,
+  onUnmarkTeacherAttendance,
+  isCurrentSession,
+}: Props) {
+  const timeLabel = useMemo(() => formatTime12(student.timeSlot), [student.timeSlot]);
+  const studentStatus = attendanceToday?.status ?? null;
+  const teacherStatus = teacherAttendanceToday?.status ?? null;
+  const mins = useMemo(() => minutesUntil(student.timeSlot), [student.timeSlot]);
+  const upNextLabel = mins === null ? "Starts soon" : mins <= 0 ? "Starting" : `${mins} min left`;
+
+  return (
+    <article
+      className={`relative overflow-hidden rounded-[30px] border bg-white shadow-[0_18px_55px_rgba(15,23,42,0.08)] transition-all duration-200 ${
+        isCurrentSession
+          ? "border-emerald-200 hover:border-emerald-300"
+          : "border-indigo-200 hover:border-indigo-300"
+      }`}
+    >
+      <div className="pointer-events-none absolute -right-20 -top-24 h-52 w-52 rounded-full bg-emerald-100/55 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-24 -left-20 h-52 w-52 rounded-full bg-indigo-100/45 blur-3xl" />
+
+      <div className="relative p-5 sm:p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3">
+              <h3 className="truncate text-xl font-black tracking-tight text-slate-950 sm:text-2xl">
+                {student.name}
+              </h3>
+              <span
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-black uppercase tracking-wide ${
+                  isCurrentSession
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-indigo-200 bg-indigo-50 text-indigo-700"
+                }`}
+              >
+                <span className={`h-2 w-2 rounded-full ${isCurrentSession ? "animate-pulse bg-emerald-500" : "bg-indigo-500"}`} />
+                {isCurrentSession ? "Live" : "Up next"}
+              </span>
+            </div>
+
+            <div className="mt-2 text-base font-semibold text-slate-700 sm:text-lg">
+              <span className={isCurrentSession ? "font-black text-emerald-700" : "font-black text-indigo-700"}>With:</span>{" "}
+              <span className="font-extrabold text-slate-900">{teacher?.name ?? "—"}</span>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-extrabold text-slate-600 sm:text-sm">
+                {daysToLabel(student.classDays)}
+              </span>
+              {!isCurrentSession && (
+                <span className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-extrabold text-indigo-700 sm:text-sm">
+                  ⏳ {upNextLabel}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="shrink-0 self-start">
+            <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.07)] sm:text-base">
+              <Clock3 size={19} className="text-slate-500" />
+              {timeLabel}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {isCurrentSession && (
+        <div className="relative border-t border-slate-100 bg-slate-50/70 p-4 sm:p-6">
+          <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h4 className="text-base font-black text-slate-950 sm:text-lg">Live attendance</h4>
+              <p className="mt-1 text-sm font-semibold text-slate-500">Mark the student and teacher independently.</p>
+            </div>
+            <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-black uppercase tracking-wide text-emerald-700">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" /> Active
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <AttendancePanel
+              label="Student"
+              name={student.name}
+              status={studentStatus}
+              onPresent={() => onMarkAttendance(student.id, AttendanceStatus.PRESENT)}
+              onAbsent={() => onMarkAttendance(student.id, AttendanceStatus.ABSENT)}
+              onLeave={() => onMarkAttendance(student.id, AttendanceStatus.LEAVE)}
+              onClear={() => onUnmarkAttendance(student.id)}
+            />
+
+            <AttendancePanel
+              label="Teacher"
+              name={teacher?.name ?? "Teacher not assigned"}
+              status={teacherStatus}
+              onPresent={() => teacher && onMarkTeacherAttendance(teacher.id, AttendanceStatus.PRESENT)}
+              onAbsent={() => teacher && onMarkTeacherAttendance(teacher.id, AttendanceStatus.ABSENT)}
+              onLeave={() => teacher && onMarkTeacherAttendance(teacher.id, AttendanceStatus.LEAVE)}
+              onClear={() => teacher && onUnmarkTeacherAttendance(teacher.id)}
+            />
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}

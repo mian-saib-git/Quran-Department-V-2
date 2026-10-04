@@ -48,6 +48,18 @@ export interface Student {
 
   // NEW: login for student
   loginId?: string; // e.g. S123456 (optional for old saved data)
+  studentType?: string;
+  studentTypeLabel?: string;
+  classStatus?: string;
+  classStatusLabel?: string;
+  speakingLanguage?: string;
+  speakingLanguageLabel?: string;
+  firstFeePaid?: boolean;
+  referralTeacherId?: string;
+  statusEffectiveDate?: string;
+  salaryClassMode?: string;
+  halfMonthSalaryAmount?: number;
+  isNightClass?: boolean;
 
 }
 
@@ -59,6 +71,10 @@ export interface AttendanceRecord {
   classKey: string; // teacher: timeSlot, student: "" (or keep empty)
   status: AttendanceStatus;
   timestamp: number;
+  markedById?: string;
+  markedByUsername?: string;
+  markedByName?: string;
+  markedByRole?: string;
 }
 
 export interface AppState {

@@ -1,0 +1,1159 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Award,
+  BarChart3,
+  BookOpenCheck,
+  Calculator,
+  CalendarDays,
+  Clock3,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  CircleDollarSign,
+  Database,
+  Eye,
+  FileCheck2,
+  FileDown,
+  Edit3,
+  GraduationCap,
+  Languages,
+  Loader2,
+  MinusCircle,
+  Moon,
+  Plus,
+  RefreshCw,
+  Save,
+  Settings2,
+  Trash2,
+  TrendingUp,
+  UsersRound,
+  X,
+} from "lucide-react";
+
+import {
+  getQuranSalaryAudit,
+  getQuranSalaryDashboard,
+  markQuranSalaryPdfDownload,
+  updateQuranSalarySettings,
+  updateQuranSalarySlip,
+  type AchievementPayout,
+  type QuranSalaryAuditResponse,
+  type QuranSalaryConfiguration,
+  type QuranSalaryDashboardResponse,
+  type QuranTeacherSalarySlip,
+  type SalaryTier,
+} from "../services/djangoApiService";
+import { useAcademyWS } from "../hooks/useAcademyWS";
+import QuranSalaryProofModal from "./QuranSalaryProofModal";
+
+const PKR = new Intl.NumberFormat("en-PK", {
+  style: "currency",
+  currency: "PKR",
+  maximumFractionDigits: 0,
+});
+
+function money(value: unknown) {
+  const number = Number(value || 0);
+  return PKR.format(Number.isFinite(number) ? number : 0);
+}
+
+function monthLabel(month: number, year: number) {
+  return new Date(year, month - 1, 1).toLocaleDateString(undefined, {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function formatAuditValue(step: any, value: unknown) {
+  return step?.value_kind === "count" ? String(value ?? 0) : money(value);
+}
+
+function formatTime12(value: string) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return value;
+  const hour = Number(match[1]);
+  const suffix = hour >= 12 ? "PM" : "AM";
+  return `${String(hour % 12 || 12).padStart(2, "0")}:${match[2]} ${suffix}`;
+}
+
+function NumberInput({ value, onChange, step = "1" }: { value: any; onChange: (value: string) => void; step?: string }) {
+  return (
+    <input
+      type="number"
+      min="0"
+      step={step}
+      value={value ?? ""}
+      onChange={(event) => onChange(event.target.value)}
+      className="w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-black text-slate-900 outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-50"
+    />
+  );
+}
+
+const metricStyles = {
+  indigo: {
+    shell: "border-indigo-100 bg-gradient-to-br from-indigo-50 to-white text-indigo-700",
+    icon: "border-indigo-100 bg-white text-indigo-600",
+    bar: "bg-indigo-500",
+  },
+  emerald: {
+    shell: "border-emerald-100 bg-gradient-to-br from-emerald-50 to-white text-emerald-700",
+    icon: "border-emerald-100 bg-white text-emerald-600",
+    bar: "bg-emerald-500",
+  },
+  amber: {
+    shell: "border-amber-100 bg-gradient-to-br from-amber-50 to-white text-amber-700",
+    icon: "border-amber-100 bg-white text-amber-600",
+    bar: "bg-amber-500",
+  },
+  rose: {
+    shell: "border-rose-100 bg-gradient-to-br from-rose-50 to-white text-rose-700",
+    icon: "border-rose-100 bg-white text-rose-600",
+    bar: "bg-rose-500",
+  },
+  cyan: {
+    shell: "border-cyan-100 bg-gradient-to-br from-cyan-50 to-white text-cyan-700",
+    icon: "border-cyan-100 bg-white text-cyan-600",
+    bar: "bg-cyan-500",
+  },
+  slate: {
+    shell: "border-slate-200 bg-gradient-to-br from-slate-50 to-white text-slate-700",
+    icon: "border-slate-200 bg-white text-slate-600",
+    bar: "bg-slate-500",
+  },
+  violet: {
+    shell: "border-violet-100 bg-gradient-to-br from-violet-50 to-white text-violet-700",
+    icon: "border-violet-100 bg-white text-violet-600",
+    bar: "bg-violet-500",
+  },
+};
+
+function Metric({
+  label,
+  value,
+  accent = "indigo",
+  onClick,
+  hint = "Open proof",
+  icon,
+  helper,
+  progress,
+}: {
+  label: string;
+  value: React.ReactNode;
+  accent?: keyof typeof metricStyles;
+  onClick?: () => void;
+  hint?: string;
+  icon?: React.ReactNode;
+  helper?: string;
+  progress?: number;
+}) {
+  const tone = metricStyles[accent];
+  const className = `group flex h-full min-w-0 flex-col rounded-2xl border p-2.5 text-left ${tone.shell} ${onClick ? "transition duration-200 hover:-translate-y-0.5 hover:border-current/20 hover:shadow-[0_12px_24px_rgba(15,23,42,0.07)]" : ""}`;
+  const content = (
+    <>
+      <div className="flex items-start gap-2">
+        {icon && <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[11px] border ${tone.icon}`}>{icon}</div>}
+        <div className="min-w-0 flex-1">
+          <div className="text-[8px] font-black uppercase tracking-[0.13em] opacity-70">{label}</div>
+          <div className="mt-0.5 break-words text-base font-black leading-none">{value}</div>
+          {helper && <div className="mt-1 text-[9px] font-bold leading-[1.35] opacity-75">{helper}</div>}
+        </div>
+      </div>
+      {typeof progress === "number" && (
+        <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/80">
+          <div className={`h-full rounded-full ${tone.bar}`} style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
+        </div>
+      )}
+      {onClick && <div className="mt-1.5 inline-flex items-center gap-1 text-[9px] font-black opacity-75"><Eye size={10} />{hint}</div>}
+    </>
+  );
+  return onClick ? <button type="button" onClick={onClick} className={className}>{content}</button> : <div className={className}>{content}</div>;
+}
+
+function SalaryKpi({
+  label,
+  value,
+  helper,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: React.ReactNode;
+  helper: string;
+  icon: React.ReactNode;
+  tone: "indigo" | "rose" | "emerald";
+}) {
+  const classes = {
+    indigo: "border-indigo-100 bg-indigo-50/70 text-indigo-700",
+    rose: "border-rose-100 bg-rose-50/70 text-rose-700",
+    emerald: "border-emerald-100 bg-emerald-50/70 text-emerald-700",
+  }[tone];
+  return (
+    <div className={`grid min-w-0 grid-cols-[36px_minmax(0,1fr)] items-center gap-2.5 rounded-2xl border px-3 py-2.5 ${classes}`}>
+      <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-current/10 bg-white/90">{icon}</div>
+      <div className="min-w-0">
+        <div className="text-[8px] font-black uppercase tracking-[0.13em] opacity-70">{label}</div>
+        <div className="mt-0.5 text-xl font-black leading-none text-slate-950">{value}</div>
+        <div className="mt-1 truncate text-[9px] font-bold text-slate-500" title={helper}>{helper}</div>
+      </div>
+    </div>
+  );
+}
+
+function BreakdownTable({
+  title,
+  subtitle,
+  icon,
+  accent,
+  rows,
+  grandTotal,
+}: {
+  title: string;
+  subtitle: string;
+  icon: React.ReactNode;
+  accent: "indigo" | "emerald";
+  rows: Array<{ label: string; value: number; metric: string }>;
+  grandTotal: number;
+}) {
+  const theme = accent === "emerald"
+    ? { icon: "border-emerald-100 bg-emerald-50 text-emerald-600", total: "border-emerald-100 bg-emerald-50 text-emerald-800" }
+    : { icon: "border-indigo-100 bg-indigo-50 text-indigo-600", total: "border-indigo-100 bg-indigo-50 text-indigo-800" };
+  return (
+    <section className="flex h-full min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2.5">
+        <span className={`flex h-8 w-8 items-center justify-center rounded-xl border ${theme.icon}`}>{icon}</span>
+        <div className="min-w-0">
+          <div className="truncate text-sm font-black text-slate-950">{title}</div>
+          <div className="truncate text-[9px] font-bold text-slate-400">{subtitle}</div>
+        </div>
+      </div>
+      <div className="flex-1 divide-y divide-slate-100">
+        {rows.map((row) => (
+          <div key={row.metric} className="grid grid-cols-[minmax(0,1fr)_44px_88px] items-center gap-2 px-3 py-2 transition hover:bg-slate-50/80">
+            <div className="min-w-0 truncate text-[11px] font-bold text-slate-600" title={row.label}>{row.label}</div>
+            <div className="text-center text-xs font-black text-slate-950">{row.value || 0}</div>
+            <button type="button" data-proof-metric={row.metric} className="inline-flex items-center justify-center gap-1 rounded-lg border border-indigo-100 bg-white px-2 py-1.5 text-[9px] font-black text-indigo-700 transition hover:bg-indigo-50"><Eye size={10} /> View proof</button>
+          </div>
+        ))}
+      </div>
+      <div className={`mt-auto flex items-center justify-between border-t px-3 py-2.5 ${theme.total}`}>
+        <div><div className="text-[8px] font-black uppercase tracking-[0.13em] opacity-70">Grand total</div><div className="text-[9px] font-bold opacity-70">Distinct students</div></div>
+        <div className="text-xl font-black">{grandTotal || 0}</div>
+      </div>
+    </section>
+  );
+}
+
+function SettingsPanel({ config, onSaved }: { config: QuranSalaryConfiguration; onSaved: (value: QuranSalaryConfiguration) => void }) {
+  const [standard, setStandard] = useState<SalaryTier[]>(config.standard_tiers || []);
+  const [threeDay, setThreeDay] = useState<SalaryTier[]>(config.three_day_tiers || []);
+  const [bonuses, setBonuses] = useState(config.bonus_rates);
+  const [payouts, setPayouts] = useState<AchievementPayout[]>(config.achievement_payouts || []);
+  const [nightStart, setNightStart] = useState(config.night_start);
+  const [nightEnd, setNightEnd] = useState(config.night_end);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const updateTier = (setRows: React.Dispatch<React.SetStateAction<SalaryTier[]>>, index: number, key: keyof SalaryTier, value: string) => {
+    setRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, [key]: key === "max" && value === "" ? null : Number(value || 0) } : row));
+  };
+
+  const save = async () => {
+    setSaving(true); setMessage("");
+    try {
+      const saved = await updateQuranSalarySettings({
+        standard_tiers: standard,
+        three_day_tiers: threeDay,
+        bonus_rates: bonuses,
+        achievement_payouts: payouts,
+        night_start: nightStart,
+        night_end: nightEnd,
+      });
+      onSaved(saved);
+      setMessage("Salary configuration saved.");
+    } catch (error: any) {
+      setMessage(error?.message || "Could not save salary settings.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const TierTable = ({ title, rows, setRows }: { title: string; rows: SalaryTier[]; setRows: React.Dispatch<React.SetStateAction<SalaryTier[]>> }) => (
+    <section className="rounded-[26px] border border-slate-200 bg-white p-4 sm:p-5">
+      <h4 className="font-black text-slate-950">{title}</h4>
+      <div className="mt-2 grid grid-cols-3 gap-2 text-[10px] font-black uppercase tracking-wider text-slate-400"><span>Minimum</span><span>Maximum</span><span>PKR / class</span></div>
+      <div className="mt-2 space-y-2">
+        {rows.map((row, index) => (
+          <div key={index} className="grid grid-cols-3 gap-2">
+            <NumberInput value={row.min} onChange={(value) => updateTier(setRows, index, "min", value)} />
+            <input type="number" min="0" value={row.max ?? ""} placeholder="No max" onChange={(event) => updateTier(setRows, index, "max", event.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-black outline-none focus:border-indigo-300" />
+            <NumberInput value={row.rate} step="0.01" onChange={(value) => updateTier(setRows, index, "rate", value)} />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+
+  return (
+    <div className="space-y-4">
+      {message && <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4 text-sm font-bold text-indigo-700">{message}</div>}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <TierTable title="3+ Days Class Tiers" rows={standard} setRows={setStandard} />
+        <TierTable title="Up to 3-Day Class Tiers" rows={threeDay} setRows={setThreeDay} />
+        <section className="rounded-[26px] border border-slate-200 bg-white p-4 sm:p-5">
+          <h4 className="font-black text-slate-950">Flat bonus rates</h4>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {(["english", "lesson_filled", "night", "reference"] as const).map((key) => (
+              <label key={key} className="text-xs font-black capitalize text-slate-600">
+                {key.replace("_", " ")}
+                <NumberInput value={bonuses[key]} step="0.01" onChange={(value) => setBonuses((prev) => ({ ...prev, [key]: Number(value || 0) }))} />
+              </label>
+            ))}
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="text-xs font-black text-slate-600">Night starts <span className="text-indigo-600">({formatTime12(nightStart)})</span><input type="time" value={nightStart} onChange={(e) => setNightStart(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 font-black" /></label>
+            <label className="text-xs font-black text-slate-600">Night ends <span className="text-indigo-600">({formatTime12(nightEnd)})</span><input type="time" value={nightEnd} onChange={(e) => setNightEnd(e.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 font-black" /></label>
+          </div>
+        </section>
+        <section className="rounded-[26px] border border-slate-200 bg-white p-4 sm:p-5">
+          <h4 className="font-black text-slate-950">Achievement payouts</h4>
+          <div className="mt-2 grid grid-cols-3 gap-2 text-[10px] font-black uppercase tracking-wider text-slate-400"><span>Min points</span><span>Max points</span><span>Payout</span></div>
+          <div className="mt-2 space-y-2">
+            {payouts.map((row, index) => (
+              <div key={index} className="grid grid-cols-3 gap-2">
+                <NumberInput value={row.min_points} onChange={(value) => setPayouts((items) => items.map((item, i) => i === index ? { ...item, min_points: Number(value || 0) } : item))} />
+                <NumberInput value={row.max_points} onChange={(value) => setPayouts((items) => items.map((item, i) => i === index ? { ...item, max_points: Number(value || 0) } : item))} />
+                <NumberInput value={row.amount} step="0.01" onChange={(value) => setPayouts((items) => items.map((item, i) => i === index ? { ...item, amount: Number(value || 0) } : item))} />
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+      <button type="button" onClick={() => void save()} disabled={saving} className="inline-flex items-center gap-2 rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-black text-white disabled:opacity-60">
+        {saving ? <Loader2 className="animate-spin" size={17} /> : <Save size={17} />} Save Configuration
+      </button>
+    </div>
+  );
+}
+
+function numericValue(value: unknown) {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function overrideOrAutomatic(overrides: Record<string, string>, key: string, automatic: unknown) {
+  const raw = overrides[key];
+  if (raw !== undefined && raw.trim() !== "") return numericValue(raw);
+  return numericValue(automatic);
+}
+
+function CalculatorCard({
+  id,
+  title,
+  subtitle,
+  countLabel,
+  countKey,
+  rateLabel,
+  rateKey,
+  amountKey,
+  inputs,
+  overrides,
+  setOverrides,
+  calculatedAmount,
+  tone = "indigo",
+}: {
+  id: string;
+  title: string;
+  subtitle: string;
+  countLabel?: string;
+  countKey?: string;
+  rateLabel?: string;
+  rateKey?: string;
+  amountKey?: string;
+  inputs: Record<string, any>;
+  overrides: Record<string, string>;
+  setOverrides: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  calculatedAmount?: number;
+  tone?: "indigo" | "cyan" | "emerald" | "amber" | "violet" | "rose";
+}) {
+  const [open, setOpen] = useState(false);
+  const toneMap = {
+    indigo: "border-indigo-200 bg-indigo-50/60 text-indigo-700",
+    cyan: "border-cyan-200 bg-cyan-50/60 text-cyan-700",
+    emerald: "border-emerald-200 bg-emerald-50/60 text-emerald-700",
+    amber: "border-amber-200 bg-amber-50/60 text-amber-700",
+    violet: "border-violet-200 bg-violet-50/60 text-violet-700",
+    rose: "border-rose-200 bg-rose-50/60 text-rose-700",
+  };
+
+  const countInput = countKey ? inputs[countKey] || {} : null;
+  const rateInput = rateKey ? inputs[rateKey] || {} : null;
+  const amountInput = amountKey ? inputs[amountKey] || {} : null;
+  const automaticCount = countInput ? numericValue(countInput.automatic) : 0;
+  const automaticRate = rateInput ? numericValue(rateInput.automatic) : 0;
+  const effectiveCount = countKey ? overrideOrAutomatic(overrides, countKey, automaticCount) : 0;
+  const effectiveRate = rateKey ? overrideOrAutomatic(overrides, rateKey, automaticRate) : 0;
+  const effectiveAmount = amountKey
+    ? overrideOrAutomatic(overrides, amountKey, amountInput?.automatic ?? 0)
+    : calculatedAmount ?? effectiveCount * effectiveRate;
+  const automaticAmount = amountKey
+    ? numericValue(amountInput?.automatic)
+    : automaticCount * automaticRate;
+
+  const formula = amountKey
+    ? `${money(effectiveAmount)} manual amount`
+    : countKey && rateKey
+      ? `${effectiveCount} × ${money(effectiveRate)} = ${money(effectiveAmount)}`
+      : `${effectiveCount}`;
+
+  const clearOverride = (key?: string) => {
+    if (!key) return;
+    setOverrides((previous) => ({ ...previous, [key]: "" }));
+  };
+
+  return (
+    <article className={`overflow-hidden rounded-[22px] border ${toneMap[tone]}`}>
+      <button type="button" onClick={() => setOpen((value) => !value)} className="flex w-full items-center justify-between gap-4 p-4 text-left">
+        <div className="min-w-0">
+          <div className="font-black text-slate-950">{title}</div>
+          <div className="mt-1 text-xs font-semibold text-slate-500">{subtitle}</div>
+          <div className="mt-2 break-words text-lg font-black">{formula}</div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {(countKey && overrides[countKey]?.trim()) || (rateKey && overrides[rateKey]?.trim()) || (amountKey && overrides[amountKey]?.trim()) ? (
+            <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-black uppercase text-amber-700">Manual</span>
+          ) : (
+            <span className="rounded-full bg-white/80 px-2.5 py-1 text-[10px] font-black uppercase text-slate-500">Automatic</span>
+          )}
+          <ChevronDown size={18} className={`transition ${open ? "rotate-180" : ""}`} />
+        </div>
+      </button>
+
+      {open && (
+        <div className="border-t border-current/10 bg-white/80 p-4">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {countKey && (
+              <label className="rounded-2xl border border-slate-200 bg-white p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-black text-slate-700">{countLabel || "Count"}</span>
+                  <button type="button" onClick={() => clearOverride(countKey)} className="text-[10px] font-black text-indigo-600">Use automatic</button>
+                </div>
+                <div className="mt-1 text-[11px] font-bold text-slate-400">Automatic: {automaticCount}</div>
+                <NumberInput value={overrides[countKey] ?? ""} onChange={(value) => setOverrides((previous) => ({ ...previous, [countKey]: value }))} />
+              </label>
+            )}
+            {rateKey && (
+              <label className="rounded-2xl border border-slate-200 bg-white p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-black text-slate-700">{rateLabel || "Rate"}</span>
+                  <button type="button" onClick={() => clearOverride(rateKey)} className="text-[10px] font-black text-indigo-600">Use automatic</button>
+                </div>
+                <div className="mt-1 text-[11px] font-bold text-slate-400">Automatic: {money(automaticRate)}</div>
+                <NumberInput value={overrides[rateKey] ?? ""} step="0.01" onChange={(value) => setOverrides((previous) => ({ ...previous, [rateKey]: value }))} />
+              </label>
+            )}
+            {amountKey && (
+              <label className="rounded-2xl border border-slate-200 bg-white p-3 md:col-span-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-black text-slate-700">Manual amount</span>
+                  <button type="button" onClick={() => clearOverride(amountKey)} className="text-[10px] font-black text-indigo-600">Use automatic</button>
+                </div>
+                <div className="mt-1 text-[11px] font-bold text-slate-400">Automatic: {money(automaticAmount)}</div>
+                <NumberInput value={overrides[amountKey] ?? ""} step="0.01" onChange={(value) => setOverrides((previous) => ({ ...previous, [amountKey]: value }))} />
+              </label>
+            )}
+          </div>
+          <div className="mt-3 rounded-2xl bg-slate-950 p-3 text-white">
+            <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Current calculator result</div>
+            <div className="mt-1 text-xl font-black">{formula}</div>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function achievementPayoutFor(points: number, config?: QuranSalaryConfiguration | null) {
+  for (const row of config?.achievement_payouts || []) {
+    if (points >= Number(row.min_points) && points <= Number(row.max_points)) return numericValue(row.amount);
+  }
+  return 0;
+}
+
+function SalarySlipModal({
+  slip,
+  config,
+  onClose,
+  onSaved,
+}: {
+  slip: QuranTeacherSalarySlip;
+  config?: QuranSalaryConfiguration | null;
+  onClose: () => void;
+  onSaved: (slip: QuranTeacherSalarySlip) => void;
+}) {
+  const snapshot: any = slip.calculated_snapshot || {};
+  const calculationInputs = snapshot.calculation_inputs || {};
+  const [behaviorGood, setBehaviorGood] = useState(Boolean(slip.behavior_good));
+  const [status, setStatus] = useState<"draft" | "processed">(slip.status);
+  const [note, setNote] = useState(slip.admin_note || "");
+  const [overrides, setOverrides] = useState<Record<string, string>>(() => {
+    const allowed = new Set([
+      "tier_basis_class_count", "standard_class_count", "standard_rate",
+      "three_day_class_count", "three_day_rate",
+      "english_class_count", "english_rate", "lesson_filled_count", "lesson_rate",
+      "night_class_count", "night_rate", "reference_student_count", "reference_rate",
+      "achievement_points",
+    ]);
+    return Object.fromEntries(
+      Object.entries(slip.override_values || {})
+        .filter(([key]) => allowed.has(key))
+        .map(([key, value]) => [key, String(value ?? "")])
+    );
+  });
+  const [bonuses, setBonuses] = useState<Array<{ reason: string; amount: string }>>((slip.other_bonuses || []).map((item) => ({ reason: item.reason, amount: String(item.amount) })));
+  const initialDeductions = slip.deductions || {};
+  const [deductions, setDeductions] = useState<Record<string, string>>({
+    food: String(initialDeductions.food || ""),
+    drop_leave: String(initialDeductions.drop_leave || ""),
+    fine: String(initialDeductions.fine || ""),
+    imam_hadya: String(initialDeductions.imam_hadya || ""),
+    advance: String(initialDeductions.advance || ""),
+  });
+  const [manualDeductions, setManualDeductions] = useState<Array<{ reason: string; amount: string }>>((initialDeductions.manual || []).map((item) => ({ reason: item.reason, amount: String(item.amount) })));
+  const [halfRows, setHalfRows] = useState<Array<{ student_id: number; student_name: string; amount: string }>>((snapshot.half_class_rows || []).map((item: any) => ({
+    student_id: Number(item.student_id),
+    student_name: String(item.student_name || "Student"),
+    amount: String((slip.half_class_overrides || []).find((row) => Number(row.student_id) === Number(item.student_id))?.amount ?? item.amount ?? 0),
+  })));
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [achievementOpen, setAchievementOpen] = useState(false);
+
+  const standardCount = overrideOrAutomatic(overrides, "standard_class_count", calculationInputs.standard_class_count?.automatic);
+  const standardRate = overrideOrAutomatic(overrides, "standard_rate", calculationInputs.standard_rate?.automatic);
+  const threeDayCount = overrideOrAutomatic(overrides, "three_day_class_count", calculationInputs.three_day_class_count?.automatic);
+  const threeDayRate = overrideOrAutomatic(overrides, "three_day_rate", calculationInputs.three_day_rate?.automatic);
+  const englishCount = overrideOrAutomatic(overrides, "english_class_count", calculationInputs.english_class_count?.automatic);
+  const englishRate = overrideOrAutomatic(overrides, "english_rate", calculationInputs.english_rate?.automatic);
+  const lessonCount = overrideOrAutomatic(overrides, "lesson_filled_count", calculationInputs.lesson_filled_count?.automatic);
+  const lessonRate = overrideOrAutomatic(overrides, "lesson_rate", calculationInputs.lesson_rate?.automatic);
+  const nightCount = overrideOrAutomatic(overrides, "night_class_count", calculationInputs.night_class_count?.automatic);
+  const nightRate = overrideOrAutomatic(overrides, "night_rate", calculationInputs.night_rate?.automatic);
+  const referenceCount = overrideOrAutomatic(overrides, "reference_student_count", calculationInputs.reference_student_count?.automatic);
+  const referenceRate = overrideOrAutomatic(overrides, "reference_rate", calculationInputs.reference_rate?.automatic);
+  const points = Math.max(0, Math.min(10, overrideOrAutomatic(overrides, "achievement_points", calculationInputs.achievement_points?.automatic)));
+
+  const save = async () => {
+    setSaving(true);
+    setMessage("");
+    try {
+      const cleanedOverrides: Record<string, number> = {};
+      Object.entries(overrides).forEach(([key, value]) => {
+        if (value.trim() !== "") cleanedOverrides[key] = Number(value || 0);
+      });
+      if (Object.keys(cleanedOverrides).length > 0 && !note.trim()) {
+        throw new Error("An administrator note/reason is required whenever a calculation is overridden.");
+      }
+      const manual = manualDeductions.filter((item) => item.reason.trim() && Number(item.amount || 0) > 0);
+      if (manualDeductions.some((item) => Number(item.amount || 0) > 0 && !item.reason.trim())) throw new Error("A reason is mandatory for every manual cutting.");
+      const saved = await updateQuranSalarySlip(slip.id, {
+        behavior_good: behaviorGood,
+        status,
+        admin_note: note,
+        override_values: cleanedOverrides,
+        other_bonuses: bonuses.filter((item) => item.reason.trim() && Number(item.amount || 0) !== 0).map((item) => ({ reason: item.reason.trim(), amount: Number(item.amount || 0) })),
+        deductions: {
+          food: Number(deductions.food || 0),
+          drop_leave: Number(deductions.drop_leave || 0),
+          fine: Number(deductions.fine || 0),
+          imam_hadya: Number(deductions.imam_hadya || 0),
+          advance: Number(deductions.advance || 0),
+          manual: manual.map((item) => ({ reason: item.reason.trim(), amount: Number(item.amount || 0) })),
+        },
+        half_class_overrides: halfRows.map((item) => ({ student_id: item.student_id, amount: Number(item.amount || 0) })),
+      });
+      onSaved(saved);
+      onClose();
+    } catch (error: any) {
+      setMessage(error?.message || "Could not save salary slip.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+      <div className="flex max-h-[94vh] w-full flex-col overflow-hidden rounded-t-[30px] border border-white/70 bg-slate-50 shadow-2xl sm:max-w-6xl sm:rounded-[32px]">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 bg-white/95 p-5 backdrop-blur-xl sm:p-6">
+          <div>
+            <div className="text-xs font-black uppercase tracking-[0.16em] text-indigo-600">Monthly salary slip</div>
+            <h3 className="mt-1 text-xl font-black text-slate-950 sm:text-2xl">{slip.teacher_name}</h3>
+            <p className="mt-1 text-sm font-semibold text-slate-500">{monthLabel(slip.month, slip.year)} · @{slip.teacher_username}</p>
+          </div>
+          <button type="button" onClick={onClose} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500"><X size={20} /></button>
+        </div>
+
+        <div className="salary-slip-scroll min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 [scrollbar-gutter:stable]">
+          <div className="space-y-5">
+            {message && <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">{message}</div>}
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <Metric label="Running classes" value={snapshot.running_classes ?? snapshot.final_active_classes ?? 0} />
+              <Metric label="Gross salary" value={money(slip.gross_total)} accent="cyan" />
+              <Metric label="Total cuttings" value={money(slip.deduction_total)} accent="rose" />
+              <Metric label="Net salary" value={money(slip.final_total)} accent="emerald" />
+            </div>
+
+            <section className="rounded-[26px] border border-indigo-200 bg-indigo-50/40 p-4 sm:p-5">
+              <div className="flex items-start gap-3">
+                <Calculator size={20} className="mt-0.5 shrink-0 text-indigo-600" />
+                <div>
+                  <h4 className="font-black text-slate-950">Editable salary calculators</h4>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Each card shows the exact formula. Open a card to change its count, rate, or manual amount. Blank fields continue using database values.</p>
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <CalculatorCard id="tier-basis" title="Salary tier selection" subtitle="Only final Running classes are used to choose the configured salary tier." countLabel="Running classes for tier" countKey="tier_basis_class_count" inputs={calculationInputs} overrides={overrides} setOverrides={setOverrides} tone="indigo" />
+                <CalculatorCard id="standard" title="3+ days classes" subtitle="Base salary for classes scheduled more than three days per week." countLabel="Class count" countKey="standard_class_count" rateLabel="Per-class rate" rateKey="standard_rate" inputs={calculationInputs} overrides={overrides} setOverrides={setOverrides} calculatedAmount={standardCount * standardRate} tone="indigo" />
+                <CalculatorCard id="three-day" title="Up to 3-day classes" subtitle="Base salary for Running classes scheduled one, two, or three days per week." countLabel="Class count" countKey="three_day_class_count" rateLabel="Per-class rate" rateKey="three_day_rate" inputs={calculationInputs} overrides={overrides} setOverrides={setOverrides} calculatedAmount={threeDayCount * threeDayRate} tone="cyan" />
+                <CalculatorCard id="english" title="English language bonus" subtitle="English class count multiplied by the configured English bonus rate." countLabel="English class count" countKey="english_class_count" rateLabel="Bonus rate" rateKey="english_rate" inputs={calculationInputs} overrides={overrides} setOverrides={setOverrides} calculatedAmount={englishCount * englishRate} tone="cyan" />
+                <CalculatorCard id="lessons" title="Lesson-filled bonus" subtitle="Classes with complete daily lesson logs multiplied by the configured rate." countLabel="Lesson-filled count" countKey="lesson_filled_count" rateLabel="Bonus rate" rateKey="lesson_rate" inputs={calculationInputs} overrides={overrides} setOverrides={setOverrides} calculatedAmount={lessonCount * lessonRate} tone="emerald" />
+                <CalculatorCard id="night" title="Night class bonus" subtitle="Night classes multiplied by the configured night-shift rate." countLabel="Night class count" countKey="night_class_count" rateLabel="Bonus rate" rateKey="night_rate" inputs={calculationInputs} overrides={overrides} setOverrides={setOverrides} calculatedAmount={nightCount * nightRate} tone="amber" />
+                <CalculatorCard id="reference" title="Reference bonus" subtitle="Active reference students multiplied by the configured reference rate." countLabel="Reference student count" countKey="reference_student_count" rateLabel="Bonus rate" rateKey="reference_rate" inputs={calculationInputs} overrides={overrides} setOverrides={setOverrides} calculatedAmount={referenceCount * referenceRate} tone="violet" />
+                <article className="overflow-hidden rounded-[22px] border border-violet-200 bg-violet-50/60 text-violet-700">
+                  <button type="button" onClick={() => setAchievementOpen((value) => !value)} className="flex w-full items-center justify-between gap-4 p-4 text-left">
+                    <div className="min-w-0">
+                      <div className="font-black text-slate-950">Achievement payout</div>
+                      <div className="mt-1 text-xs font-semibold text-slate-500">Achievement points select the configured payout range.</div>
+                      <div className="mt-2 text-lg font-black">{points} points → {money(achievementPayoutFor(points, config))}</div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {overrides.achievement_points?.trim() ? <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-black uppercase text-amber-700">Manual</span> : <span className="rounded-full bg-white/80 px-2.5 py-1 text-[10px] font-black uppercase text-slate-500">Automatic</span>}
+                      <ChevronDown size={18} className={`transition ${achievementOpen ? "rotate-180" : ""}`} />
+                    </div>
+                  </button>
+                  {achievementOpen && <div className="border-t border-violet-200 bg-white/80 p-4">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-black text-slate-700">Manual points</span>
+                        <button type="button" onClick={() => setOverrides((previous) => ({ ...previous, achievement_points: "" }))} className="text-[10px] font-black text-indigo-600">Use automatic</button>
+                      </div>
+                      <div className="mt-1 text-[11px] font-bold text-slate-400">Automatic: {calculationInputs.achievement_points?.automatic || 0}/10</div>
+                      <input type="number" min="0" max="10" step="1" value={overrides.achievement_points ?? ""} onChange={(event) => setOverrides((previous) => ({ ...previous, achievement_points: event.target.value }))} placeholder="Automatic" className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-black outline-none focus:border-indigo-300" />
+                    </div>
+                    <div className="mt-3 rounded-2xl bg-slate-950 p-3 text-white"><div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Current calculator result</div><div className="mt-1 text-xl font-black">{points} points → {money(achievementPayoutFor(points, config))}</div></div>
+                  </div>}
+                </article>
+              </div>
+            </section>
+
+            <section className="rounded-[26px] border border-rose-200 bg-rose-50/50 p-4 sm:p-5">
+              <h4 className="font-black text-rose-950">Fines, cuttings and deductions</h4>
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {[["food", "Food Cutting"], ["drop_leave", "Drop & Leave Cutting"], ["fine", "Fine Cutting"], ["imam_hadya", "Imam Hadya"], ["advance", "Advance Cutting"]].map(([key, label]) => <label key={key} className="text-xs font-black text-rose-900">{label}<NumberInput value={deductions[key]} step="0.01" onChange={(value) => setDeductions((prev) => ({ ...prev, [key]: value }))} /></label>)}
+              </div>
+              <div className="mt-4 space-y-2">
+                {manualDeductions.map((item, index) => <div key={index} className="grid grid-cols-1 gap-2 rounded-2xl border border-rose-200 bg-white p-3 sm:grid-cols-[1fr_180px_44px]"><input value={item.reason} onChange={(e) => setManualDeductions((rows) => rows.map((row, i) => i === index ? { ...row, reason: e.target.value } : row))} placeholder="Mandatory deduction reason" className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none" /><NumberInput value={item.amount} step="0.01" onChange={(value) => setManualDeductions((rows) => rows.map((row, i) => i === index ? { ...row, amount: value } : row))} /><button type="button" onClick={() => setManualDeductions((rows) => rows.filter((_, i) => i !== index))} className="flex h-11 items-center justify-center rounded-xl border border-rose-200 text-rose-600"><Trash2 size={17} /></button></div>)}
+                <button type="button" onClick={() => setManualDeductions((rows) => [...rows, { reason: "", amount: "" }])} className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-black text-rose-700"><Plus size={15} /> Add manual cutting</button>
+              </div>
+            </section>
+
+            {halfRows.length > 0 && <section className="rounded-[26px] border border-amber-200 bg-amber-50/60 p-4 sm:p-5"><h4 className="font-black text-amber-950">Auto-detected half-month classes: {halfRows.length}</h4><p className="mt-1 text-xs font-semibold text-amber-700">The count is automatic. Enter each salary amount manually.</p><div className="mt-4 space-y-2">{halfRows.map((item, index) => <div key={item.student_id} className="grid grid-cols-1 gap-2 rounded-2xl border border-amber-200 bg-white p-3 sm:grid-cols-[1fr_180px] sm:items-center"><div className="font-black text-slate-900">{item.student_name}</div><NumberInput value={item.amount} step="0.01" onChange={(value) => setHalfRows((rows) => rows.map((row, i) => i === index ? { ...row, amount: value } : row))} /></div>)}</div></section>}
+
+            <section className="rounded-[26px] border border-slate-200 bg-white p-4 sm:p-5"><div className="flex items-center justify-between gap-3"><h4 className="font-black text-slate-950">Other bonuses</h4><button type="button" onClick={() => setBonuses((rows) => [...rows, { reason: "", amount: "" }])} className="inline-flex items-center gap-1 rounded-xl border border-indigo-200 px-3 py-2 text-xs font-black text-indigo-700"><Plus size={14} /> Add</button></div><div className="mt-3 space-y-2">{bonuses.map((item, index) => <div key={index} className="grid grid-cols-1 gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_180px_44px]"><input value={item.reason} onChange={(e) => setBonuses((rows) => rows.map((row, i) => i === index ? { ...row, reason: e.target.value } : row))} placeholder="Bonus reason" className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold" /><NumberInput value={item.amount} step="0.01" onChange={(value) => setBonuses((rows) => rows.map((row, i) => i === index ? { ...row, amount: value } : row))} /><button type="button" onClick={() => setBonuses((rows) => rows.filter((_, i) => i !== index))} className="flex h-11 items-center justify-center rounded-xl border border-rose-200 text-rose-600"><Trash2 size={17} /></button></div>)}</div></section>
+
+            <section className="rounded-[26px] border border-slate-200 bg-white p-4 sm:p-5">
+              <label className="flex items-center justify-between gap-4 rounded-2xl bg-emerald-50 p-4"><div><div className="font-black text-emerald-950">Good behavior point</div><div className="text-xs font-semibold text-emerald-700">Adds one achievement point when approved.</div></div><input type="checkbox" checked={behaviorGood} onChange={(e) => setBehaviorGood(e.target.checked)} className="h-5 w-5 accent-emerald-600" /></label>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"><label className="text-xs font-black text-slate-600">Slip status<select value={status} onChange={(e) => setStatus(e.target.value as any)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-black"><option value="draft">Draft</option><option value="processed">Processed</option></select></label><label className="text-xs font-black text-slate-600">Administrator note / override reason<textarea value={note} onChange={(e) => setNote(e.target.value)} className="mt-1 min-h-[90px] w-full rounded-2xl border border-slate-200 p-3 text-sm font-semibold" placeholder="Required when any automatic calculation is overridden." /></label></div>
+            </section>
+
+            <div className="sticky bottom-0 -mx-4 flex flex-col-reverse gap-2 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur-xl sm:-mx-6 sm:flex-row sm:justify-end sm:px-6"><button type="button" onClick={onClose} className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-600">Cancel</button><button type="button" onClick={() => void save()} disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-black text-white disabled:opacity-60">{saving ? <Loader2 className="animate-spin" size={17} /> : <Save size={17} />} Save Salary Slip</button></div>
+          </div>
+        </div>
+      </div>
+      <style>{`.salary-slip-scroll{scrollbar-width:thin;scrollbar-color:#6366f1 transparent}.salary-slip-scroll::-webkit-scrollbar{width:8px}.salary-slip-scroll::-webkit-scrollbar-track{background:transparent;margin:12px 0}.salary-slip-scroll::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#6366f1,#06b6d4);border:2px solid #f8fafc;border-radius:999px}`}</style>
+    </div>
+  );
+}
+
+async function createTeacherSalaryPdf(slip: QuranTeacherSalarySlip, audit: QuranSalaryAuditResponse) {
+  const { default: jsPDF } = await import("jspdf");
+  const autoTable = (await import("jspdf-autotable")).default;
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const snapshot: any = slip.calculated_snapshot || {};
+  const inputs: any = snapshot.calculation_inputs || {};
+
+  const loadLogo = async () => {
+    for (const source of ["/tuition-logo.png", "/ivs-logo.png"]) {
+      try {
+        const response = await fetch(source, { cache: "force-cache" });
+        if (!response.ok) continue;
+        const blob = await response.blob();
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(blob);
+        });
+        if (dataUrl) return dataUrl;
+      } catch {
+        // Try the next official-logo path.
+      }
+    }
+    return "";
+  };
+
+  const logoData = await loadLogo();
+  const tableEnd = () => Number((doc as any).lastAutoTable?.finalY || 0);
+
+  const drawInstitutionHeader = (pageNumber: number, totalPages: number) => {
+    doc.setFillColor(248, 250, 252);
+    doc.rect(0, 0, pageWidth, 36, "F");
+    doc.setFillColor(15, 23, 42);
+    doc.roundedRect(8, 7, pageWidth - 16, 25, 6, 6, "F");
+
+    let textX = 15;
+    if (logoData) {
+      doc.setFillColor(255, 255, 255);
+      doc.roundedRect(12, 10, 18, 18, 4, 4, "F");
+      try {
+        doc.addImage(logoData, 14, 12, 14, 14, undefined, "FAST");
+        textX = 35;
+      } catch {
+        textX = 15;
+      }
+    }
+
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(165, 180, 252);
+    doc.setFontSize(7.5);
+    doc.text("IQRA VIRTUAL SCHOOL", textX, 14.5);
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(12.5);
+    doc.text("Quran Department · Monthly Teacher Salary Statement", textX, 21.5);
+    doc.setTextColor(203, 213, 225);
+    doc.setFontSize(7.3);
+    doc.text(monthLabel(slip.month, slip.year), textX, 27);
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(14);
+    doc.text(slip.teacher_name, pageWidth - 15, 18.5, { align: "right" });
+    doc.setTextColor(203, 213, 225);
+    doc.setFontSize(7.2);
+    doc.text(`Teacher Salary Statement · Page ${pageNumber} of ${totalPages}`, pageWidth - 15, 25.5, { align: "right" });
+  };
+
+  const drawSummaryCard = (
+    x: number,
+    y: number,
+    w: number,
+    label: string,
+    value: string,
+    fill: [number, number, number],
+    border: [number, number, number],
+    accent: [number, number, number]
+  ) => {
+    doc.setFillColor(...fill);
+    doc.setDrawColor(...border);
+    doc.roundedRect(x, y, w, 16, 4, 4, "FD");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7);
+    doc.setTextColor(...accent);
+    doc.text(label.toUpperCase(), x + 4, y + 5);
+    doc.setFontSize(14);
+    doc.setTextColor(15, 23, 42);
+    doc.text(value, x + 4, y + 12);
+  };
+
+  doc.setFillColor(248, 250, 252);
+  doc.rect(0, 0, pageWidth, pageHeight, "F");
+
+  const gap = 3;
+  const cardWidth = (pageWidth - 16 - gap * 3) / 4;
+  const cardY = 38;
+  drawSummaryCard(8, cardY, cardWidth, "Gross Salary", money(slip.gross_total), [236, 254, 255], [165, 243, 252], [8, 145, 178]);
+  drawSummaryCard(8 + cardWidth + gap, cardY, cardWidth, "Total Cuttings", money(slip.deduction_total), [255, 241, 242], [254, 205, 211], [225, 29, 72]);
+  drawSummaryCard(8 + (cardWidth + gap) * 2, cardY, cardWidth, "Net Salary", money(slip.final_total), [236, 253, 245], [167, 243, 208], [5, 150, 105]);
+  drawSummaryCard(8 + (cardWidth + gap) * 3, cardY, cardWidth, "Achievement Points", `${snapshot.achievement_points || 0}/10`, [255, 251, 235], [253, 230, 138], [217, 119, 6]);
+
+  const formulaRows = [
+    ["3+ Day Class Salary", `${Number(inputs.standard_class_count?.effective || 0)} × ${money(inputs.standard_rate?.effective || 0)}`, money(snapshot.standard_salary || 0)],
+    ["1–3 Day Class Salary", `${Number(inputs.three_day_class_count?.effective || 0)} × ${money(inputs.three_day_rate?.effective || 0)}`, money(snapshot.three_day_salary || 0)],
+    ["Half-Month Class Salary", `${snapshot.half_classes || 0} class(es)`, money(snapshot.half_class_salary || 0)],
+    ["English Language Bonus", `${Number(inputs.english_class_count?.effective || 0)} × ${money(inputs.english_rate?.effective || 0)}`, money(snapshot.final_components?.english_bonus || 0)],
+    ["Night Classes Bonus", `${Number(inputs.night_class_count?.effective || 0)} × ${money(inputs.night_rate?.effective || 0)}`, money(snapshot.final_components?.night_bonus || 0)],
+    ["Lesson Completion Bonus", `${snapshot.lesson_logged_student_count || 0}/${snapshot.lesson_required_student_count || 0} students`, money(snapshot.final_components?.lesson_bonus || 0)],
+    ["Reference Bonus", `${Number(inputs.reference_student_count?.effective || 0)} × ${money(inputs.reference_rate?.effective || 0)}`, money(snapshot.final_components?.reference_bonus || 0)],
+    ["Achievement Payout", `${Number(inputs.achievement_points?.effective || 0)} points`, money(snapshot.final_components?.achievement_bonus || 0)],
+  ];
+
+  autoTable(doc, {
+    startY: 58,
+    head: [["Salary Calculation", "Formula", "Amount"]],
+    body: formulaRows,
+    theme: "grid",
+    margin: { left: 8, top: 38 },
+    tableWidth: 104,
+    styles: { fontSize: 6.3, cellPadding: 1.15, textColor: [30, 41, 59], valign: "middle" },
+    headStyles: { fillColor: [79, 70, 229], textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+  });
+  const formulaEnd = tableEnd();
+
+  const classRows = [
+    ["Overall Monthly Classes", String(snapshot.overall_classes || 0)],
+    ["Running Classes", String(snapshot.running_classes ?? snapshot.final_active_classes ?? 0)],
+    ["Transferred Out", String(snapshot.class_status_breakdown?.transferred_out || 0)],
+    ["Classes On Leave", String(snapshot.class_status_breakdown?.on_leave || 0)],
+    ["Old Student Dropped", String(snapshot.class_status_breakdown?.old_dropped || 0)],
+    ["Trial Student Dropped", String(snapshot.class_status_breakdown?.trial_dropped || 0)],
+    ["Old Dropped (Other)", String(snapshot.class_status_breakdown?.old_dropped_other || 0)],
+    ["Not Counted Classes", String(snapshot.class_status_breakdown?.not_counted || 0)],
+  ];
+  autoTable(doc, {
+    startY: 58,
+    head: [["Monthly Class Reconciliation", "Count"]],
+    body: classRows,
+    theme: "grid",
+    margin: { left: 116, top: 38 },
+    tableWidth: 76,
+    styles: { fontSize: 6.3, cellPadding: 1.15, textColor: [30, 41, 59], valign: "middle" },
+    headStyles: { fillColor: [5, 150, 105], textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [240, 253, 250] },
+  });
+  const classEnd = tableEnd();
+
+  const deductionRows: any[][] = [
+    ["Food Cutting", money(slip.deductions?.food || 0)],
+    ["Drop & Leave Cutting", money(slip.deductions?.drop_leave || 0)],
+    ["Fine Cutting", money(slip.deductions?.fine || 0)],
+    ["Imam Hadya", money(slip.deductions?.imam_hadya || 0)],
+    ["Advance Cutting", money(slip.deductions?.advance || 0)],
+    ...((slip.deductions?.manual || []).map((row: any) => [row.reason || "Manual Cutting", money(row.amount)])),
+  ];
+  autoTable(doc, {
+    startY: 58,
+    head: [["Cuttings / Deductions", "Amount"]],
+    body: deductionRows.length ? deductionRows : [["No cuttings", money(0)]],
+    theme: "grid",
+    margin: { left: 196, right: 8, top: 38 },
+    tableWidth: pageWidth - 204,
+    styles: { fontSize: 6.3, cellPadding: 1.15, textColor: [30, 41, 59], valign: "middle" },
+    headStyles: { fillColor: [225, 29, 72], textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [255, 241, 242] },
+  });
+  const deductionsEnd = tableEnd();
+
+  const rosterY = Math.max(formulaEnd, classEnd, deductionsEnd) + 6;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text("Student Class & Attendance Summary", 8, rosterY - 2);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(6.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text("Attendance columns show total Present, Absent, and Leave classes for the selected month.", 8, rosterY + 2);
+
+  const studentRows = audit.rows.map((row, index) => [
+    String(index + 1),
+    row.student_name,
+    row.student_type_label,
+    row.class_status_label,
+    row.class_days.join(", ") || "—",
+    row.time_slots.map(formatTime12).join(", ") || "—",
+    String(row.attendance_summary.present),
+    String(row.attendance_summary.absent),
+    String(row.attendance_summary.leave),
+  ]);
+
+  autoTable(doc, {
+    startY: rosterY + 5,
+    head: [["S.No.", "Student", "Student Type", "Class Status", "Class Days", "Class Time", "Present Class Total", "Absent Class Total", "Leave Class Total"]],
+    body: studentRows,
+    theme: "grid",
+    margin: { left: 8, right: 8, top: 38, bottom: 24 },
+    styles: { fontSize: audit.rows.length > 20 ? 4.7 : 5.6, cellPadding: 0.9, overflow: "linebreak", textColor: [30, 41, 59], valign: "middle" },
+    headStyles: { fillColor: [15, 23, 42], textColor: 255, fontStyle: "bold", fontSize: 5.2, valign: "middle" },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { cellWidth: 10, halign: "center" },
+      1: { cellWidth: 32 },
+      2: { cellWidth: 27 },
+      3: { cellWidth: 25 },
+      4: { cellWidth: 35 },
+      5: { cellWidth: 25 },
+      6: { cellWidth: 28, halign: "center" },
+      7: { cellWidth: 28, halign: "center" },
+      8: { cellWidth: 28, halign: "center" },
+    },
+    didParseCell: (hook: any) => {
+      if (hook.section === "head" && [0, 6, 7, 8].includes(hook.column.index)) {
+        hook.cell.styles.halign = "center";
+      }
+    },
+  });
+
+  const totalPages = doc.getNumberOfPages();
+  for (let pageNumber = 1; pageNumber <= totalPages; pageNumber += 1) {
+    doc.setPage(pageNumber);
+    drawInstitutionHeader(pageNumber, totalPages);
+
+    doc.setDrawColor(203, 213, 225);
+    doc.line(8, pageHeight - 9, pageWidth - 8, pageHeight - 9);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(6.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text("Iqra Virtual School · Quran Department", 8, pageHeight - 5);
+    doc.text(`Page ${pageNumber} of ${totalPages}`, pageWidth - 8, pageHeight - 5, { align: "right" });
+  }
+
+  doc.setPage(totalPages);
+  const signatureY = pageHeight - 15;
+  doc.setDrawColor(148, 163, 184);
+  doc.line(24, signatureY, 92, signatureY);
+  doc.line(pageWidth - 92, signatureY, pageWidth - 24, signatureY);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(71, 85, 105);
+  doc.text("Approved by Manager", 58, signatureY + 5, { align: "center" });
+  doc.text("Approved by Director", pageWidth - 58, signatureY + 5, { align: "center" });
+
+  const safeName = slip.teacher_name.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "") || "teacher";
+  doc.save(`${safeName}_${slip.year}_${String(slip.month).padStart(2, "0")}_salary.pdf`);
+}
+
+export default function TeacherSalaryManagement() {
+  const today = useMemo(() => new Date(), []);
+  const [month, setMonth] = useState(today.getMonth() + 1);
+  const [year, setYear] = useState(today.getFullYear());
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(12);
+  const [data, setData] = useState<QuranSalaryDashboardResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [view, setView] = useState<"dashboard" | "settings">("dashboard");
+  const [selectedSlip, setSelectedSlip] = useState<QuranTeacherSalarySlip | null>(null);
+  const [proof, setProof] = useState<{ teacherId: number; metric: string } | null>(null);
+  const [pdfBusyId, setPdfBusyId] = useState<number | null>(null);
+  const [expandedTeacherId, setExpandedTeacherId] = useState<number | null>(null);
+  const requestId = useRef(0);
+
+  const load = useCallback(async () => {
+    const currentRequest = ++requestId.current;
+    setLoading(true); setMessage("");
+    try {
+      const response = await getQuranSalaryDashboard(month, year, page, pageSize);
+      if (currentRequest !== requestId.current) return;
+      if (Number(response.month) !== month || Number(response.year) !== year) throw new Error("The server returned a different salary month. Please refresh and try again.");
+      setData(response);
+    } catch (error: any) {
+      if (currentRequest === requestId.current) setMessage(error?.message || "Could not load teacher salaries.");
+    } finally {
+      if (currentRequest === requestId.current) setLoading(false);
+    }
+  }, [month, year, page, pageSize]);
+
+  useEffect(() => { void load(); }, [load]);
+  useAcademyWS((event) => { const name = String((event as any)?.event || ""); if (name.includes("salary") || name.includes("attendance") || name.includes("account")) void load(); });
+
+  const years = useMemo(() => Array.from({ length: 10 }, (_, index) => today.getFullYear() - 6 + index), [today]);
+  const teacherRows = data?.teachers || [];
+  const settings = data?.configuration || null;
+
+  useEffect(() => {
+    if (teacherRows.length === 0) {
+      setExpandedTeacherId(null);
+      return;
+    }
+    setExpandedTeacherId((current) => (current && teacherRows.some((row) => row.id === current) ? current : teacherRows[0].id));
+  }, [teacherRows]);
+  const openProof = (teacherId: number, metric: string) => setProof({ teacherId, metric });
+
+  const updateSlipInState = (saved: QuranTeacherSalarySlip) => {
+    setData((previous) => previous ? { ...previous, teachers: previous.teachers.map((item) => item.id === saved.id ? saved : item) } : previous);
+  };
+
+  const downloadSalaryPdf = async (slip: QuranTeacherSalarySlip) => {
+    if ((slip.pdf_download_count || 0) > 0) {
+      const again = window.confirm(`This salary PDF was already downloaded ${slip.pdf_download_count} time${slip.pdf_download_count === 1 ? "" : "s"}. Download it again?`);
+      if (!again) return;
+    }
+    setPdfBusyId(slip.id);
+    setMessage("");
+    try {
+      const audit = await getQuranSalaryAudit({
+        teacher_id: slip.teacher_id,
+        metric: "source_records",
+        month: slip.month,
+        year: slip.year,
+      });
+      await createTeacherSalaryPdf(slip, audit);
+      const saved = await markQuranSalaryPdfDownload(slip.id);
+      updateSlipInState(saved);
+    } catch (error: any) {
+      setMessage(error?.message || "Could not generate the teacher salary PDF.");
+    } finally {
+      setPdfBusyId(null);
+    }
+  };
+
+  const handleProofClick = (event: React.MouseEvent, teacherId: number) => {
+    const target = (event.target as HTMLElement).closest<HTMLElement>("[data-proof-metric]");
+    if (target?.dataset.proofMetric) openProof(teacherId, target.dataset.proofMetric);
+  };
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-[30px] border border-slate-200/80 bg-white/90 p-5 shadow-[0_18px_55px_rgba(15,23,42,0.08)] sm:p-6">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex items-start gap-3"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-indigo-100 bg-indigo-50 text-indigo-600 shadow-sm"><CircleDollarSign size={24} /></div><div><h2 className="text-xl font-black text-slate-950 sm:text-2xl">Teacher Salary Management</h2><p className="mt-1 text-sm font-semibold text-slate-500">Transparent formulas, editable inputs, highlighted proofs, bonuses, deductions and full audit trails.</p></div></div>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <select value={month} onChange={(e) => { setPage(1); setSelectedSlip(null); setMonth(Number(e.target.value)); }} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black outline-none">{Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={index + 1}>{new Date(2026, index, 1).toLocaleDateString(undefined, { month: "long" })}</option>)}</select>
+            <select value={year} onChange={(e) => { setPage(1); setSelectedSlip(null); setYear(Number(e.target.value)); }} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black outline-none">{years.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+            <button type="button" onClick={() => void load()} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700"><RefreshCw size={17} className={loading ? "animate-spin" : ""} /> Refresh</button>
+          </div>
+        </div>
+        <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4"><Metric label="Teachers" value={data?.summary.teachers || 0} /><Metric label="This page" value={data?.summary.page_teachers || 0} accent="slate" /><Metric label="Processed" value={data?.summary.processed || 0} accent="emerald" /><Metric label="Page net payout" value={money(data?.summary.page_payout || 0)} accent="cyan" /></div>
+        <div className="mt-5 inline-flex max-w-full overflow-x-auto rounded-2xl border border-slate-200 bg-slate-50 p-1"><button type="button" onClick={() => setView("dashboard")} className={`whitespace-nowrap rounded-xl px-4 py-2 text-sm font-black ${view === "dashboard" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"}`}><Calculator className="mr-1.5 inline" size={16} />Salary Dashboard</button><button type="button" onClick={() => setView("settings")} className={`whitespace-nowrap rounded-xl px-4 py-2 text-sm font-black ${view === "settings" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"}`}><Settings2 className="mr-1.5 inline" size={16} />Configuration</button></div>
+      </section>
+
+      {message && <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">{message}</div>}
+      {view === "settings" && settings ? <SettingsPanel config={settings} onSaved={(config) => setData((prev) => prev ? { ...prev, configuration: config } : prev)} /> : loading && !data ? <div className="flex min-h-[360px] items-center justify-center rounded-[30px] border border-slate-200 bg-white text-sm font-bold text-slate-500"><Loader2 className="mr-2 animate-spin" size={18} /> Loading {monthLabel(month, year)} salaries...</div> : (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {loading && <div className="col-span-full rounded-2xl border border-indigo-200 bg-indigo-50 p-3 text-center text-xs font-black text-indigo-700">Refreshing {monthLabel(month, year)}...</div>}
+          {teacherRows.map((slip) => {
+            const snapshot: any = slip.calculated_snapshot || {};
+            const type = snapshot.student_type_breakdown || {};
+            const statuses = snapshot.class_status_breakdown || {};
+            const isOpen = expandedTeacherId === slip.id;
+            return (
+              <article key={slip.id} className={`overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-[0_16px_34px_rgba(15,23,42,0.05)] ${isOpen ? "col-span-full" : ""}`}>
+                <div className={`bg-gradient-to-r from-white via-white to-slate-50/70 ${isOpen ? "border-b border-slate-200/80 p-3.5 sm:p-4" : "p-2.5"}`}>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setExpandedTeacherId(isOpen ? null : slip.id)}
+                      className={`w-full min-w-0 rounded-[18px] border text-left transition hover:border-indigo-200 hover:bg-indigo-50/40 ${isOpen ? "border-indigo-100 bg-indigo-50/30 px-3 py-3" : "border-slate-200 bg-white px-3 py-2.5"}`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-indigo-100 bg-indigo-50 text-indigo-600">
+                          <GraduationCap size={20} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <h3 className="break-words text-lg font-black text-slate-950">{slip.teacher_name}</h3>
+                              <p className="mt-1 break-words text-xs font-bold text-slate-500">@{slip.teacher_username} · {monthLabel(slip.month, slip.year)} · {slip.status === "processed" ? "Processed" : "Draft"}</p>
+                            </div>
+                            <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition ${isOpen ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-500"}`}>
+                              <ChevronDown size={18} className={`transition ${isOpen ? "rotate-180" : ""}`} />
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+
+                  </div>
+                </div>
+
+                {isOpen && (
+                  <div className="mx-auto max-w-[1540px] bg-slate-50/40 p-3.5 sm:p-4">
+                    <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
+                      <div className="rounded-2xl border border-cyan-100 bg-cyan-50 px-3 py-2.5 text-cyan-800"><div className="text-[10px] font-black uppercase tracking-[0.12em]">Gross salary</div><div className="mt-1 text-lg font-black">{money(slip.gross_total)}</div></div>
+                      <div className="rounded-2xl border border-rose-100 bg-rose-50 px-3 py-2.5 text-rose-800"><div className="text-[10px] font-black uppercase tracking-[0.12em]">Total cuttings</div><div className="mt-1 text-lg font-black">{money(slip.deduction_total)}</div></div>
+                      <button type="button" onClick={() => setSelectedSlip(slip)} className="inline-flex min-h-[58px] items-center justify-center gap-2 rounded-2xl bg-slate-950 px-3 py-2.5 text-xs font-black text-white"><Edit3 size={17} /> Net {money(slip.final_total)}</button>
+                      <button type="button" onClick={() => void downloadSalaryPdf(slip)} disabled={pdfBusyId === slip.id} className={`inline-flex min-h-[58px] items-center justify-center gap-2 rounded-2xl border px-3 py-2.5 text-xs font-black transition disabled:opacity-60 ${(slip.pdf_download_count || 0) > 0 ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-indigo-200 bg-indigo-50 text-indigo-700"}`} title={(slip.pdf_download_count || 0) > 0 ? `Already downloaded ${slip.pdf_download_count} time(s). You can download again after confirmation.` : "Generate teacher salary PDF"}>
+                        {pdfBusyId === slip.id ? <Loader2 size={17} className="animate-spin" /> : (slip.pdf_download_count || 0) > 0 ? <FileCheck2 size={17} /> : <FileDown size={17} />}
+                        {(slip.pdf_download_count || 0) > 0 ? "PDF Generated" : "Generate PDF"}
+                      </button>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <div className="text-[11px] font-black text-slate-950">Monthly salary class reconciliation</div>
+                        <div className="mt-0.5 text-[9px] font-semibold text-slate-500">Every proof opens only the matching source records, and the related detail is highlighted inside the proof.</div>
+                      </div>
+
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 gap-2.5 md:grid-cols-3">
+                      <SalaryKpi label="Overall monthly classes" value={snapshot.overall_classes || type.grand_total || 0} helper="Old, transferred in, trials and returned from leave" icon={<CalendarDays size={18} />} tone="indigo" />
+                      <SalaryKpi label="Deducted class outcomes" value={snapshot.excluded_classes || 0} helper="Transferred out, leave, dropped and not counted" icon={<MinusCircle size={18} />} tone="rose" />
+                      <SalaryKpi label="Salary-running classes" value={snapshot.running_classes ?? snapshot.final_active_classes ?? 0} helper="Only these classes receive the base salary" icon={<TrendingUp size={18} />} tone="emerald" />
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 items-stretch gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_340px]" onClick={(event) => handleProofClick(event, slip.teacher_id)}>
+                      <BreakdownTable
+                        title="Student Type Breakdown"
+                        subtitle="How each class entered this teacher’s monthly total"
+                        icon={<UsersRound size={15} />}
+                        accent="indigo"
+                        grandTotal={type.grand_total || 0}
+                        rows={[
+                          { label: "Old Students", value: type.old_students || 0, metric: "old_students" },
+                          { label: "New Trial Students", value: type.new_trials || 0, metric: "new_trials" },
+                          { label: "Transferred from another teacher", value: type.transferred_from_teacher || 0, metric: "transferred_from_teacher" },
+                          { label: "Students returned from leave", value: type.returns_from_leave || 0, metric: "returns_from_leave" },
+                        ]}
+                      />
+                      <BreakdownTable
+                        title="Class Status Breakdown"
+                        subtitle="Which classes receive salary and which are deducted"
+                        icon={<Award size={15} />}
+                        accent="emerald"
+                        grandTotal={statuses.grand_total || 0}
+                        rows={[
+                          { label: "Running Classes", value: statuses.running || 0, metric: "running" },
+                          { label: "Transferred to another teacher", value: statuses.transferred_out || type.transferred_to_other_teachers || 0, metric: "transferred_to_other_teachers" },
+                          { label: "Classes On Leave", value: statuses.on_leave || 0, metric: "on_leave" },
+                          { label: "Old Student Dropped", value: statuses.old_dropped || 0, metric: "old_dropped" },
+                          { label: "Trial Student Dropped", value: statuses.trial_dropped || 0, metric: "trial_dropped" },
+                          { label: "Old Dropped (Other)", value: statuses.old_dropped_other || 0, metric: "old_dropped_other" },
+                          { label: "Not Counted Classes", value: statuses.not_counted || 0, metric: "not_counted" },
+                        ]}
+                      />
+
+                      <section className="flex h-full min-w-0 flex-col rounded-[20px] border border-slate-200 bg-white p-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-100 bg-amber-50 text-amber-600"><CircleDollarSign size={16} /></div>
+                          <div>
+                            <div className="text-sm font-black text-slate-950">Salary & Performance Proofs</div>
+                            <div className="text-[9px] font-bold text-slate-400">Clean proof shortcuts with highlighted matching details</div>
+                          </div>
+                        </div>
+                        <div className="mt-3 grid flex-1 auto-rows-fr grid-cols-2 gap-2">
+                          <Metric label="Half-month class salary" value={snapshot.half_classes || 0} icon={<CalendarDays size={14} />} accent="amber" onClick={() => openProof(slip.teacher_id, "half_classes")} hint="View half-month proof" />
+                          <Metric label="3+ day class salary" value={snapshot.standard_classes || 0} icon={<BarChart3 size={14} />} accent="cyan" onClick={() => openProof(slip.teacher_id, "standard_classes")} hint="View class proof" />
+                          <Metric label="1–3 day class salary" value={snapshot.three_day_classes || 0} icon={<Clock3 size={14} />} accent="slate" onClick={() => openProof(slip.teacher_id, "three_day_classes")} hint="View class proof" />
+                          <Metric label="English language bonus" value={snapshot.english_class_count || 0} icon={<Languages size={14} />} accent="cyan" onClick={() => openProof(slip.teacher_id, "english_classes")} hint="View bonus proof" />
+                          <Metric label="Night classes bonus" value={snapshot.night_class_count || 0} icon={<Moon size={14} />} accent="amber" onClick={() => openProof(slip.teacher_id, "night_classes")} hint="View bonus proof" />
+                          <Metric
+                            label="Lesson completion bonus"
+                            value={`${snapshot.lesson_logged_student_count || 0}/${snapshot.lesson_required_student_count || 0}`}
+                            icon={<BookOpenCheck size={14} />}
+                            accent="emerald"
+                            onClick={() => openProof(slip.teacher_id, "lesson_filled")}
+                            hint="View lesson reconciliation"
+                            progress={snapshot.lesson_progress_percent || 0}
+                            helper={snapshot.lesson_bonus_eligible ? "All Present days match lesson dates · bonus eligible" : `${snapshot.lesson_logged_present_day_count || 0}/${snapshot.lesson_present_day_count || 0} Present days matched`}
+                          />
+                          <Metric label="Monthly attendance proof" value={`${snapshot.attendance_rate || 0}%`} icon={<BarChart3 size={14} />} accent="emerald" onClick={() => openProof(slip.teacher_id, "attendance")} hint="View attendance proof" />
+                          <Metric label="Achievement points proof" value={`${snapshot.achievement_points || 0}/10`} icon={<Award size={14} />} accent="violet" onClick={() => openProof(slip.teacher_id, "achievement_points")} hint="View awarded points" />
+                        </div>
+                        <button type="button" onClick={() => openProof(slip.teacher_id, "source_records")} className="mt-3 inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-[10px] font-black text-white transition hover:bg-slate-900"><Database size={13} /> Full Student Source Records</button>
+                      </section>
+                    </div>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+          {teacherRows.length === 0 && !loading && <div className="col-span-full rounded-[30px] border border-slate-200 bg-white p-12 text-center text-sm font-bold text-slate-500">No Quran teachers found for {monthLabel(month, year)}.</div>}
+          {data && data.pagination.total_pages > 1 && <div className="col-span-full flex flex-col gap-3 rounded-[24px] border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between"><div className="text-sm font-bold text-slate-500">Page {data.pagination.page} of {data.pagination.total_pages} · {data.pagination.total_items} teachers</div><div className="flex gap-2"><button type="button" disabled={!data.pagination.has_previous || loading} onClick={() => setPage((value) => Math.max(1, value - 1))} className="inline-flex items-center gap-1 rounded-xl border border-slate-200 px-4 py-2 text-sm font-black disabled:opacity-40"><ChevronLeft size={16} /> Previous</button><button type="button" disabled={!data.pagination.has_next || loading} onClick={() => setPage((value) => value + 1)} className="inline-flex items-center gap-1 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-black text-white disabled:opacity-40">Next <ChevronRight size={16} /></button></div></div>}
+        </div>
+      )}
+
+      {selectedSlip && <SalarySlipModal slip={selectedSlip} config={settings} onClose={() => setSelectedSlip(null)} onSaved={updateSlipInState} />}
+      {proof && <QuranSalaryProofModal teacherId={proof.teacherId} metric={proof.metric} month={month} year={year} onClose={() => setProof(null)} />}
+    </div>
+  );
+}

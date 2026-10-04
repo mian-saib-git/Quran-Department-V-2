@@ -1,0 +1,16 @@
+{
+  "update": "tuition_teacher_portal_v51",
+  "applied_at": "2026-07-31T16:01:42.823162",
+  "backup_root": "C:\\Users\\iqrav\\Downloads\\quran ---1 (Role Based)\\_update_backups\\tuition_teacher_portal_v51_20260731_160142_553227",
+  "changed_files": [
+    "App.tsx",
+    "services\\tuitionApiService.ts",
+    "backend\\tuition\\views.py",
+    "backend\\tuition\\urls.py",
+    "components\\tuition\\TuitionTeacherPortal.tsx"
+  ],
+  "database_migration_required": false,
+  "quran_student_portal_unchanged": true,
+  "quran_teacher_portal_unchanged": true,
+  "tuition_student_portal_unchanged": true
+}

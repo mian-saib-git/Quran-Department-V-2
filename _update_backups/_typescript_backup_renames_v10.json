@@ -1,0 +1,806 @@
+[
+  {
+    "original": "_update_backups\\before_adaptive_skeleton_fix_20260720-150034\\components\\tuition\\TuitionAccountsEnrollment.tsx",
+    "stored_as": "_update_backups\\before_adaptive_skeleton_fix_20260720-150034\\components\\tuition\\TuitionAccountsEnrollment.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_adaptive_skeleton_fix_20260720-150034\\components\\ui\\SkeletonLoaders.tsx",
+    "stored_as": "_update_backups\\before_adaptive_skeleton_fix_20260720-150034\\components\\ui\\SkeletonLoaders.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_coordinator_tab_access_v3_20260723-001148\\components\\tuition\\TuitionAccountsEnrollment.tsx",
+    "stored_as": "_update_backups\\before_coordinator_tab_access_v3_20260723-001148\\components\\tuition\\TuitionAccountsEnrollment.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_coordinator_tab_access_v3_20260723-001148\\components\\tuition\\TuitionCoordinatorPortal.tsx",
+    "stored_as": "_update_backups\\before_coordinator_tab_access_v3_20260723-001148\\components\\tuition\\TuitionCoordinatorPortal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_coordinator_tab_access_v3_20260723-001148\\components\\tuition\\TuitionManagersPanel.tsx",
+    "stored_as": "_update_backups\\before_coordinator_tab_access_v3_20260723-001148\\components\\tuition\\TuitionManagersPanel.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\tuition\\TuitionAccountsEnrollment.tsx",
+    "stored_as": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\tuition\\TuitionAccountsEnrollment.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\tuition\\TuitionAttendance.tsx",
+    "stored_as": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\tuition\\TuitionAttendance.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\tuition\\TuitionCoordinatorPortal.tsx",
+    "stored_as": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\tuition\\TuitionCoordinatorPortal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\tuition\\TuitionCsvImportModal.tsx",
+    "stored_as": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\tuition\\TuitionCsvImportModal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\tuition\\TuitionReports.tsx",
+    "stored_as": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\tuition\\TuitionReports.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\tuition\\TuitionScheduling.tsx",
+    "stored_as": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\tuition\\TuitionScheduling.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\tuition\\TuitionAccountsEnrollment.tsx",
+    "stored_as": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\tuition\\TuitionAccountsEnrollment.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\tuition\\TuitionManagersPanel.tsx",
+    "stored_as": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\tuition\\TuitionManagersPanel.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_maintenance_notices_analytics_20260715_232926\\components\\platform\\PlatformAdminTools.tsx",
+    "stored_as": "_update_backups\\before_ivs_maintenance_notices_analytics_20260715_232926\\components\\platform\\PlatformAdminTools.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_desktop_stability_20260716_035136\\components\\platform\\PlatformAnalyticsOverview.tsx",
+    "stored_as": "_update_backups\\before_main_admin_desktop_stability_20260716_035136\\components\\platform\\PlatformAnalyticsOverview.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_desktop_stability_20260716_035136\\components\\platform\\PlatformCommunicationsPanel.tsx",
+    "stored_as": "_update_backups\\before_main_admin_desktop_stability_20260716_035136\\components\\platform\\PlatformCommunicationsPanel.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_full_responsive_20260716_024241\\components\\platform\\PlatformAdminTools.tsx",
+    "stored_as": "_update_backups\\before_main_admin_full_responsive_20260716_024241\\components\\platform\\PlatformAdminTools.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_full_responsive_20260716_024241\\components\\platform\\PlatformAnalyticsOverview.tsx",
+    "stored_as": "_update_backups\\before_main_admin_full_responsive_20260716_024241\\components\\platform\\PlatformAnalyticsOverview.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_full_responsive_20260716_024241\\components\\platform\\PlatformCommunicationsPanel.tsx",
+    "stored_as": "_update_backups\\before_main_admin_full_responsive_20260716_024241\\components\\platform\\PlatformCommunicationsPanel.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_full_responsive_20260716_024333\\components\\platform\\PlatformAdminTools.tsx",
+    "stored_as": "_update_backups\\before_main_admin_full_responsive_20260716_024333\\components\\platform\\PlatformAdminTools.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_full_responsive_20260716_024333\\components\\platform\\PlatformAnalyticsOverview.tsx",
+    "stored_as": "_update_backups\\before_main_admin_full_responsive_20260716_024333\\components\\platform\\PlatformAnalyticsOverview.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_full_responsive_20260716_024333\\components\\platform\\PlatformCommunicationsPanel.tsx",
+    "stored_as": "_update_backups\\before_main_admin_full_responsive_20260716_024333\\components\\platform\\PlatformCommunicationsPanel.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_mobile_four_area_fix_20260716_032833\\components\\platform\\PlatformAdminTools.tsx",
+    "stored_as": "_update_backups\\before_main_admin_mobile_four_area_fix_20260716_032833\\components\\platform\\PlatformAdminTools.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_mobile_responsive_fix_20260716_025511\\components\\platform\\PlatformAnalyticsOverview.tsx",
+    "stored_as": "_update_backups\\before_main_admin_mobile_responsive_fix_20260716_025511\\components\\platform\\PlatformAnalyticsOverview.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_mobile_sidebar_gauge_repair_20260716_030349\\components\\platform\\PlatformAnalyticsOverview.tsx",
+    "stored_as": "_update_backups\\before_main_admin_mobile_sidebar_gauge_repair_20260716_030349\\components\\platform\\PlatformAnalyticsOverview.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_portal_filters_mobile_fit_20260716_033815\\components\\platform\\PlatformAdminTools.tsx",
+    "stored_as": "_update_backups\\before_main_admin_portal_filters_mobile_fit_20260716_033815\\components\\platform\\PlatformAdminTools.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_sidebar_scrollbar_overview_polish_20260716_015709\\components\\platform\\PlatformAnalyticsOverview.tsx",
+    "stored_as": "_update_backups\\before_main_admin_sidebar_scrollbar_overview_polish_20260716_015709\\components\\platform\\PlatformAnalyticsOverview.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_tuition_reports_cleanup_20260721-234537\\components\\tuition\\TuitionReports.tsx",
+    "stored_as": "_update_backups\\before_quran_tuition_reports_cleanup_20260721-234537\\components\\tuition\\TuitionReports.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_reports_teacherwise_runtime_ui_hotfix_20260722-122541\\components\\tuition\\TuitionReports.tsx",
+    "stored_as": "_update_backups\\before_reports_teacherwise_runtime_ui_hotfix_20260722-122541\\components\\tuition\\TuitionReports.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\tuition\\TuitionAccountsEnrollment.tsx",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\tuition\\TuitionAccountsEnrollment.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\tuition\\TuitionLiveScheduleCard.tsx",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\tuition\\TuitionLiveScheduleCard.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\tuition\\TuitionManagersPanel.tsx",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\tuition\\TuitionManagersPanel.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_tuition_reports_import_comma_hotfix_20260721-235848\\components\\tuition\\TuitionReports.tsx",
+    "stored_as": "_update_backups\\before_tuition_reports_import_comma_hotfix_20260721-235848\\components\\tuition\\TuitionReports.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_tuition_teacher_availability_enrollment_fix_20260716_151443\\components\\tuition\\TuitionAccountsEnrollment.tsx",
+    "stored_as": "_update_backups\\before_tuition_teacher_availability_enrollment_fix_20260716_151443\\components\\tuition\\TuitionAccountsEnrollment.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_accounts_compact_scheduling_icon_20260720-180546\\components\\CoordinatorAccounts.tsx",
+    "stored_as": "_update_backups\\before_accounts_compact_scheduling_icon_20260720-180546\\components\\CoordinatorAccounts.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_accounts_compact_scheduling_icon_v2_20260720-180952\\components\\CoordinatorAccounts.tsx",
+    "stored_as": "_update_backups\\before_accounts_compact_scheduling_icon_v2_20260720-180952\\components\\CoordinatorAccounts.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_adaptive_skeleton_fix_20260720-150034\\components\\CoordinatorAccounts.tsx",
+    "stored_as": "_update_backups\\before_adaptive_skeleton_fix_20260720-150034\\components\\CoordinatorAccounts.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_adaptive_skeleton_fix_20260720-150034\\components\\CoordinatorLessons.tsx",
+    "stored_as": "_update_backups\\before_adaptive_skeleton_fix_20260720-150034\\components\\CoordinatorLessons.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_adaptive_skeleton_fix_20260720-150034\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_adaptive_skeleton_fix_20260720-150034\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_adaptive_skeleton_fix_20260720-150034\\components\\TeacherSalarySelfService.tsx",
+    "stored_as": "_update_backups\\before_adaptive_skeleton_fix_20260720-150034\\components\\TeacherSalarySelfService.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_coordinator_tab_access_v3_20260723-001148\\components\\CoordinatorAccounts.tsx",
+    "stored_as": "_update_backups\\before_coordinator_tab_access_v3_20260723-001148\\components\\CoordinatorAccounts.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_coordinator_tab_access_v3_20260723-001148\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_coordinator_tab_access_v3_20260723-001148\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\DepartmentSettings.tsx",
+    "stored_as": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\components\\DepartmentSettings.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\services\\tuitionApiService.ts",
+    "stored_as": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\services\\tuitionApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\CoordinatorAccounts.tsx",
+    "stored_as": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\CoordinatorAccounts.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\CoordinatorLessons.tsx",
+    "stored_as": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\CoordinatorLessons.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\DepartmentSettings.tsx",
+    "stored_as": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\DepartmentSettings.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\MonthlyLessonPlans.tsx",
+    "stored_as": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\MonthlyLessonPlans.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\QuranSalaryProofModal.tsx",
+    "stored_as": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\QuranSalaryProofModal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\StudentPortal.tsx",
+    "stored_as": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\StudentPortal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\TeacherPortal.tsx",
+    "stored_as": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\TeacherPortal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\TeacherSalarySelfService.tsx",
+    "stored_as": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\components\\TeacherSalarySelfService.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_maintenance_notices_analytics_20260715_232926\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_ivs_maintenance_notices_analytics_20260715_232926\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_maintenance_notices_analytics_20260715_232926\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_ivs_maintenance_notices_analytics_20260715_232926\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_platform_administration_tools_20260715_221428\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_ivs_platform_administration_tools_20260715_221428\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_platform_administration_tools_20260715_221428\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_ivs_platform_administration_tools_20260715_221428\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_actions_heading_alignment_20260715_173527\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_actions_heading_alignment_20260715_173527\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_backend_frontend_phase1_20260715_185913\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_backend_frontend_phase1_20260715_185913\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_backend_frontend_phase1_20260715_185913\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_main_admin_backend_frontend_phase1_20260715_185913\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_dark_selected_tab_official_logo_20260716_040344\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_dark_selected_tab_official_logo_20260716_040344\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_desktop_stability_20260716_035136\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_desktop_stability_20260716_035136\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_feature_rollback_20260714_120715\\components\\DepartmentSettings.tsx",
+    "stored_as": "_update_backups\\before_main_admin_feature_rollback_20260714_120715\\components\\DepartmentSettings.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_feature_rollback_20260714_120715\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_main_admin_feature_rollback_20260714_120715\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_feature_rollback_20260714_120715\\services\\featureAccess.ts",
+    "stored_as": "_update_backups\\before_main_admin_feature_rollback_20260714_120715\\services\\featureAccess.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_feature_toggle_fix_v2_20260714_123455\\components\\DepartmentSettings.tsx",
+    "stored_as": "_update_backups\\before_main_admin_feature_toggle_fix_v2_20260714_123455\\components\\DepartmentSettings.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_feature_toggle_fix_v2_20260714_123455\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_main_admin_feature_toggle_fix_v2_20260714_123455\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_feature_toggle_fix_v2_20260714_123455\\services\\featureAccess.ts",
+    "stored_as": "_update_backups\\before_main_admin_feature_toggle_fix_v2_20260714_123455\\services\\featureAccess.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_feature_toggle_fix_v3_20260714_130029\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_main_admin_feature_toggle_fix_v3_20260714_130029\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_feature_toggle_fix_v3_20260714_130029\\services\\featureAccess.ts",
+    "stored_as": "_update_backups\\before_main_admin_feature_toggle_fix_v3_20260714_130029\\services\\featureAccess.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_frontend_polish_phase3_20260714_160552\\components\\DepartmentSettings.tsx",
+    "stored_as": "_update_backups\\before_main_admin_frontend_polish_phase3_20260714_160552\\components\\DepartmentSettings.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_frontend_polish_phase3_20260714_160552\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_frontend_polish_phase3_20260714_160552\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_frontend_polish_phase4_20260714_171526\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_frontend_polish_phase4_20260714_171526\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_frontend_polish_phase5_20260714_175021\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_frontend_polish_phase5_20260714_175021\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_full_responsive_20260716_024241\\components\\DepartmentSettings.tsx",
+    "stored_as": "_update_backups\\before_main_admin_full_responsive_20260716_024241\\components\\DepartmentSettings.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_full_responsive_20260716_024241\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_full_responsive_20260716_024241\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_full_responsive_20260716_024333\\components\\DepartmentSettings.tsx",
+    "stored_as": "_update_backups\\before_main_admin_full_responsive_20260716_024333\\components\\DepartmentSettings.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_full_responsive_20260716_024333\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_full_responsive_20260716_024333\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_institution_alignment_20260715_161232\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_institution_alignment_20260715_161232\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_institution_directory_exact_structure_20260715_164433\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_institution_directory_exact_structure_20260715_164433\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_institution_drilldown_20260714_152444\\components\\DepartmentSettings.tsx",
+    "stored_as": "_update_backups\\before_main_admin_institution_drilldown_20260714_152444\\components\\DepartmentSettings.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_institution_drilldown_20260714_152444\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_institution_drilldown_20260714_152444\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_institution_layout_recovery_20260715_170652\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_institution_layout_recovery_20260715_170652\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_institution_layout_rollback_20260715_172120\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_institution_layout_rollback_20260715_172120\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_institution_reference_alignment_20260715_165602\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_institution_reference_alignment_20260715_165602\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_institution_transition_animation_20260715_174941\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_institution_transition_animation_20260715_174941\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_mobile_four_area_fix_20260716_032833\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_mobile_four_area_fix_20260716_032833\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_mobile_responsive_fix_20260716_025511\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_mobile_responsive_fix_20260716_025511\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_mobile_sidebar_gauge_repair_20260716_030349\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_mobile_sidebar_gauge_repair_20260716_030349\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_open_departments_position_20260715_153023\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_open_departments_position_20260715_153023\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_sidebar_edge_hover_fix_20260716_021850\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_sidebar_edge_hover_fix_20260716_021850\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_sidebar_frontend_phase1_20260714_150734\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_sidebar_frontend_phase1_20260714_150734\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_sidebar_scrollbar_overview_polish_20260716_015709\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_sidebar_scrollbar_overview_polish_20260716_015709\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_simple_department_transition_20260715_175653\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_main_admin_simple_department_transition_20260715_175653\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_compact_live_cards_20260720-172819\\components\\ClassCard.tsx",
+    "stored_as": "_update_backups\\before_quran_compact_live_cards_20260720-172819\\components\\ClassCard.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_department_management_salary_20260716_220909\\components\\CoordinatorAccounts.tsx",
+    "stored_as": "_update_backups\\before_quran_department_management_salary_20260716_220909\\components\\CoordinatorAccounts.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_department_management_salary_20260716_220909\\components\\DepartmentSettings.tsx",
+    "stored_as": "_update_backups\\before_quran_department_management_salary_20260716_220909\\components\\DepartmentSettings.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_department_management_salary_20260716_220909\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_quran_department_management_salary_20260716_220909\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_live_cards_compact_sidebar_fix_20260720-173749\\components\\ClassCard.tsx",
+    "stored_as": "_update_backups\\before_quran_live_cards_compact_sidebar_fix_20260720-173749\\components\\ClassCard.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_live_card_tuition_ui_20260720-171236\\components\\ClassCard.tsx",
+    "stored_as": "_update_backups\\before_quran_live_card_tuition_ui_20260720-171236\\components\\ClassCard.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_reports_syntax_hotfix_20260722-003125\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\before_quran_reports_syntax_hotfix_20260722-003125\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_alignment_proofs_fix_20260718_154451\\components\\QuranSalaryProofModal.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_alignment_proofs_fix_20260718_154451\\components\\QuranSalaryProofModal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_alignment_proofs_fix_20260718_154451\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_alignment_proofs_fix_20260718_154451\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_alignment_proofs_fix_20260718_154451\\components\\TeacherSalarySelfService.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_alignment_proofs_fix_20260718_154451\\components\\TeacherSalarySelfService.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_calculation_audit_ui_20260717_163021\\components\\CoordinatorAccounts.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_calculation_audit_ui_20260717_163021\\components\\CoordinatorAccounts.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_calculation_audit_ui_20260717_163021\\components\\QuranSalaryProofModal.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_calculation_audit_ui_20260717_163021\\components\\QuranSalaryProofModal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_calculation_audit_ui_20260717_163021\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_calculation_audit_ui_20260717_163021\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_calculation_audit_ui_20260717_163021\\components\\TeacherSalarySelfService.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_calculation_audit_ui_20260717_163021\\components\\TeacherSalarySelfService.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_calculation_audit_ui_20260717_163021\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_quran_salary_calculation_audit_ui_20260717_163021\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_classic_layout_pdf_table_20260718_143347\\components\\QuranSalaryProofModal.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_classic_layout_pdf_table_20260718_143347\\components\\QuranSalaryProofModal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_classic_layout_pdf_table_20260718_143347\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_classic_layout_pdf_table_20260718_143347\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_classic_layout_pdf_table_20260718_143347\\components\\TeacherSalarySelfService.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_classic_layout_pdf_table_20260718_143347\\components\\TeacherSalarySelfService.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_compact_present_lessons_20260718_003621\\components\\QuranSalaryProofModal.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_compact_present_lessons_20260718_003621\\components\\QuranSalaryProofModal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_compact_present_lessons_20260718_003621\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_compact_present_lessons_20260718_003621\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_compact_present_lessons_20260718_003621\\components\\TeacherSalarySelfService.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_compact_present_lessons_20260718_003621\\components\\TeacherSalarySelfService.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_compact_present_lessons_20260718_003621\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_quran_salary_compact_present_lessons_20260718_003621\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_focused_proofs_pdf_20260717_185542\\components\\QuranSalaryProofModal.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_focused_proofs_pdf_20260717_185542\\components\\QuranSalaryProofModal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_focused_proofs_pdf_20260717_185542\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_focused_proofs_pdf_20260717_185542\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_focused_proofs_pdf_20260717_185542\\components\\TeacherSalarySelfService.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_focused_proofs_pdf_20260717_185542\\components\\TeacherSalarySelfService.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_focused_proofs_pdf_20260717_185542\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_quran_salary_focused_proofs_pdf_20260717_185542\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_historical_audit_deductions_20260717_142026\\components\\CoordinatorAccounts.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_historical_audit_deductions_20260717_142026\\components\\CoordinatorAccounts.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_historical_audit_deductions_20260717_142026\\components\\TeacherPortal.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_historical_audit_deductions_20260717_142026\\components\\TeacherPortal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_historical_audit_deductions_20260717_142026\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_historical_audit_deductions_20260717_142026\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_historical_audit_deductions_20260717_142026\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_quran_salary_historical_audit_deductions_20260717_142026\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_pdf_dashboard_elegant_20260718_132808\\components\\QuranSalaryProofModal.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_pdf_dashboard_elegant_20260718_132808\\components\\QuranSalaryProofModal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_pdf_dashboard_elegant_20260718_132808\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_pdf_dashboard_elegant_20260718_132808\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_pdf_dashboard_elegant_20260718_132808\\components\\TeacherSalarySelfService.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_pdf_dashboard_elegant_20260718_132808\\components\\TeacherSalarySelfService.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_pdf_selfservice_ui_fix_20260718_130101\\components\\QuranSalaryProofModal.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_pdf_selfservice_ui_fix_20260718_130101\\components\\QuranSalaryProofModal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_pdf_selfservice_ui_fix_20260718_130101\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_pdf_selfservice_ui_fix_20260718_130101\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_pdf_selfservice_ui_fix_20260718_130101\\components\\TeacherSalarySelfService.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_pdf_selfservice_ui_fix_20260718_130101\\components\\TeacherSalarySelfService.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_premium_lessons_fix_20260718_000123\\components\\QuranSalaryProofModal.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_premium_lessons_fix_20260718_000123\\components\\QuranSalaryProofModal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_premium_lessons_fix_20260718_000123\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_premium_lessons_fix_20260718_000123\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_premium_lessons_fix_20260718_000123\\components\\TeacherSalarySelfService.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_premium_lessons_fix_20260718_000123\\components\\TeacherSalarySelfService.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_premium_lessons_fix_20260718_000123\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_quran_salary_premium_lessons_fix_20260718_000123\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_proof_equal_height_fix_20260718_161026\\components\\QuranSalaryProofModal.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_proof_equal_height_fix_20260718_161026\\components\\QuranSalaryProofModal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_proof_equal_height_fix_20260718_161026\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_proof_equal_height_fix_20260718_161026\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_proof_equal_height_fix_20260718_161026\\components\\TeacherSalarySelfService.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_proof_equal_height_fix_20260718_161026\\components\\TeacherSalarySelfService.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_running_transfer_referral_20260717_225005\\components\\CoordinatorAccounts.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_running_transfer_referral_20260717_225005\\components\\CoordinatorAccounts.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_running_transfer_referral_20260717_225005\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_running_transfer_referral_20260717_225005\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_running_transfer_referral_20260717_225005\\components\\TeacherSalarySelfService.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_running_transfer_referral_20260717_225005\\components\\TeacherSalarySelfService.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_running_transfer_referral_20260717_225005\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_quran_salary_running_transfer_referral_20260717_225005\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_tuition_reports_cleanup_20260721-234537\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\before_quran_tuition_reports_cleanup_20260721-234537\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_reports_jsx_build_hotfix_20260721-235508\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\before_reports_jsx_build_hotfix_20260721-235508\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_reports_search_status_export_20260721-231949\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\before_reports_search_status_export_20260721-231949\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_reports_teacherwise_runtime_ui_hotfix_20260722-122541\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\before_reports_teacherwise_runtime_ui_hotfix_20260722-122541\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\CoordinatorAccounts.tsx",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\CoordinatorAccounts.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\CoordinatorLessons.tsx",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\CoordinatorLessons.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\DepartmentSettings.tsx",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\DepartmentSettings.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\MonthlyLessonPlans.tsx",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\MonthlyLessonPlans.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\PlatformAdmin.tsx",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\PlatformAdmin.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\SkeletonLoader.tsx",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\SkeletonLoader.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\StudentPortal.tsx",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\StudentPortal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\TeacherPortal.tsx",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\components\\TeacherPortal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\hooks\\useAcademyWS.ts",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\hooks\\useAcademyWS.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_salary_configuration_ui_redesign_20260722-145931\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_salary_configuration_ui_redesign_20260722-145931\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_teacher_salary_ui_proof_pdf_update_20260718_120136\\components\\QuranSalaryProofModal.tsx",
+    "stored_as": "_update_backups\\before_teacher_salary_ui_proof_pdf_update_20260718_120136\\components\\QuranSalaryProofModal.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_teacher_salary_ui_proof_pdf_update_20260718_120136\\components\\TeacherSalaryManagement.tsx",
+    "stored_as": "_update_backups\\before_teacher_salary_ui_proof_pdf_update_20260718_120136\\components\\TeacherSalaryManagement.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_teacher_salary_ui_proof_pdf_update_20260718_120136\\components\\TeacherSalarySelfService.tsx",
+    "stored_as": "_update_backups\\before_teacher_salary_ui_proof_pdf_update_20260718_120136\\components\\TeacherSalarySelfService.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\main_admin_feature_access_20260714_114149\\components\\DepartmentSettings.tsx",
+    "stored_as": "_update_backups\\main_admin_feature_access_20260714_114149\\components\\DepartmentSettings.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\main_admin_feature_access_20260714_114149\\services\\djangoApiService.ts",
+    "stored_as": "_update_backups\\main_admin_feature_access_20260714_114149\\services\\djangoApiService.ts.backup"
+  },
+  {
+    "original": "_update_backups\\main_admin_feature_access_20260714_114149\\services\\featureAccess.ts",
+    "stored_as": "_update_backups\\main_admin_feature_access_20260714_114149\\services\\featureAccess.ts.backup"
+  },
+  {
+    "original": "_update_backups\\reports_dropdown_theme_v9_20260723_175059_828443\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\reports_dropdown_theme_v9_20260723_175059_828443\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\reports_filter_build_fix_v2_20260723_150249\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\reports_filter_build_fix_v2_20260723_150249\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\reports_filter_collapsible_v6_20260723_170458\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\reports_filter_collapsible_v6_20260723_170458\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\reports_filter_compact_v5_20260723_163735\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\reports_filter_compact_v5_20260723_163735\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\reports_filter_theme_v8_20260723_173010_288045\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\reports_filter_theme_v8_20260723_173010_288045\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\reports_filter_ui_redesign_v3_20260723_155724\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\reports_filter_ui_redesign_v3_20260723_155724\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\reports_multi_time_filters_20260723_143616\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\reports_multi_time_filters_20260723_143616\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\reports_refine_exact_v7_20260723_171404\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\reports_refine_exact_v7_20260723_171404\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\reports_ui_rebuild_v4_20260723_162105\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\reports_ui_rebuild_v4_20260723_162105\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\vscode_50_problems_fix_20260723_131539\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\vscode_50_problems_fix_20260723_131539\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\vscode_50_problems_fix_v2_20260723_132424\\components\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\vscode_50_problems_fix_v2_20260723_132424\\components\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_accounts_compact_scheduling_icon_20260720-180546\\App.tsx",
+    "stored_as": "_update_backups\\before_accounts_compact_scheduling_icon_20260720-180546\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_accounts_compact_scheduling_icon_v2_20260720-180952\\App.tsx",
+    "stored_as": "_update_backups\\before_accounts_compact_scheduling_icon_v2_20260720-180952\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_attendance_date_filter_fix_20260721-171958\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\before_attendance_date_filter_fix_20260721-171958\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_coordinator_tab_access_v3_20260723-001148\\App.tsx",
+    "stored_as": "_update_backups\\before_coordinator_tab_access_v3_20260723-001148\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\App.tsx",
+    "stored_as": "_update_backups\\before_department_permissions_scope_and_lock_states_20260715_204114\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\App.tsx",
+    "stored_as": "_update_backups\\before_ivs_global_skeleton_loader_20260720_135534\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_ivs_maintenance_notices_analytics_20260715_232926\\App.tsx",
+    "stored_as": "_update_backups\\before_ivs_maintenance_notices_analytics_20260715_232926\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_backend_frontend_phase1_20260715_185913\\App.tsx",
+    "stored_as": "_update_backups\\before_main_admin_backend_frontend_phase1_20260715_185913\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_feature_rollback_20260714_120715\\App.tsx",
+    "stored_as": "_update_backups\\before_main_admin_feature_rollback_20260714_120715\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_feature_toggle_fix_v2_20260714_123455\\App.tsx",
+    "stored_as": "_update_backups\\before_main_admin_feature_toggle_fix_v2_20260714_123455\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_feature_toggle_fix_v3_20260714_130029\\App.tsx",
+    "stored_as": "_update_backups\\before_main_admin_feature_toggle_fix_v3_20260714_130029\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_main_admin_sidebar_frontend_phase1_20260714_150734\\App.tsx",
+    "stored_as": "_update_backups\\before_main_admin_sidebar_frontend_phase1_20260714_150734\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_department_management_salary_20260716_220909\\App.tsx",
+    "stored_as": "_update_backups\\before_quran_department_management_salary_20260716_220909\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_department_management_salary_20260716_220909\\types.ts",
+    "stored_as": "_update_backups\\before_quran_department_management_salary_20260716_220909\\types.ts.backup"
+  },
+  {
+    "original": "_update_backups\\before_quran_salary_historical_audit_deductions_20260717_142026\\App.tsx",
+    "stored_as": "_update_backups\\before_quran_salary_historical_audit_deductions_20260717_142026\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\App.tsx",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\index.tsx",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\index.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\tailwind.config.js",
+    "stored_as": "_update_backups\\before_safe_global_skeleton_loader_recovery_20260718-181049\\tailwind.config.js.backup"
+  },
+  {
+    "original": "_update_backups\\before_teacherwise_card_ui_20260722-002442\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\before_teacherwise_card_ui_20260722-002442\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_teacherwise_card_ui_20260722-002442\\TuitionReports.tsx",
+    "stored_as": "_update_backups\\before_teacherwise_card_ui_20260722-002442\\TuitionReports.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_teacherwise_card_ui_20260722-002447\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\before_teacherwise_card_ui_20260722-002447\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_teacherwise_card_ui_20260722-002447\\TuitionReports.tsx",
+    "stored_as": "_update_backups\\before_teacherwise_card_ui_20260722-002447\\TuitionReports.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_teacherwise_card_ui_v2_20260722-002846\\ReportsTab.tsx",
+    "stored_as": "_update_backups\\before_teacherwise_card_ui_v2_20260722-002846\\ReportsTab.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_teacherwise_card_ui_v2_20260722-002846\\TuitionReports.tsx",
+    "stored_as": "_update_backups\\before_teacherwise_card_ui_v2_20260722-002846\\TuitionReports.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\before_tuition_focus_dashboard_popup_fix_20260715_210046\\App.tsx",
+    "stored_as": "_update_backups\\before_tuition_focus_dashboard_popup_fix_20260715_210046\\App.tsx.backup"
+  },
+  {
+    "original": "_update_backups\\main_admin_feature_access_20260714_114149\\App.tsx",
+    "stored_as": "_update_backups\\main_admin_feature_access_20260714_114149\\App.tsx.backup"
+  }
+]

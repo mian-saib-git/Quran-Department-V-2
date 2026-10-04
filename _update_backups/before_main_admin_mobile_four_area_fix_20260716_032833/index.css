@@ -1,0 +1,3374 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  Global UI theme for the app.
+  Tailwind is loaded via CDN in index.html.
+  We keep reusable “UI styles + animations here.
+*/
+
+html, body, #root { height: 100%; }
+
+body {
+  font-family: "Plus Jakarta Sans", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+input, select, textarea { font-size: 16px; }
+
+/* ===============
+   Animated backdrop
+   =============== */
+
+/*
+  V5 UI Theme (Professional React Dashboard)
+  -----------------------------------------
+  The app uses Tailwind utility classes, but we keep the "design system" here.
+  This version is intentionally more "product dashboard" and less "effect-heavy":
+  crisp surfaces, consistent spacing, subtle motion.
+*/
+
+:root {
+  --bg: #f3f6fb;
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-strong: rgba(255, 255, 255, 0.98);
+  --border: rgba(15, 23, 42, 0.10);
+  --border-strong: rgba(15, 23, 42, 0.14);
+  --text: #0f172a;
+  --muted: rgba(15, 23, 42, 0.62);
+  --shadow: 0 18px 55px rgba(2, 6, 23, 0.10);
+  --shadow-soft: 0 10px 28px rgba(2, 6, 23, 0.08);
+  --shadow-card: 0 10px 24px rgba(2, 6, 23, 0.08);
+
+  --primary: #2563eb;     /* blue-600 */
+  --primary-2: #4f46e5;   /* indigo-600 */
+  --success: #16a34a;
+  --danger: #ef4444;
+}
+
+body {
+  background:
+    radial-gradient(1100px 700px at 10% 0%, rgba(37, 99, 235, 0.14), transparent 62%),
+    radial-gradient(900px 600px at 95% 8%, rgba(79, 70, 229, 0.12), transparent 58%),
+    radial-gradient(900px 600px at 45% 100%, rgba(22, 163, 74, 0.08), transparent 60%),
+    linear-gradient(180deg, #eef3ff 0%, var(--bg) 55%, #ffffff 100%);
+  background-attachment: fixed;
+  overflow-x: hidden;
+  color: var(--text);
+}
+
+/* light noise overlay (subtle) */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.04;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(2, 6, 23, 0.9) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+/* ===============
+   Reusable UI classes
+   =============== */
+
+.ui-glass {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-soft);
+}
+
+.ui-glass-strong {
+  background: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+}
+
+.ui-card {
+  border-radius: 24px;
+}
+
+.ui-card-hover {
+  transition: transform 180ms ease, box-shadow 220ms ease, border-color 220ms ease;
+}
+
+.ui-card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 18px 55px rgba(2, 6, 23, 0.14);
+}
+
+.ui-gradient-border {
+  position: relative;
+}
+
+.ui-btn {
+  transition: transform 160ms ease, box-shadow 200ms ease, filter 200ms ease;
+  will-change: transform;
+}
+
+.ui-btn:hover {
+  transform: translateY(-1px);
+}
+
+.ui-btn:active {
+  transform: translateY(0);
+}
+
+.ui-btn-primary {
+  color: white;
+  background: linear-gradient(135deg, var(--primary), var(--primary-2));
+  box-shadow: 0 12px 30px rgba(37, 99, 235, 0.22);
+}
+
+.ui-btn-primary:hover {
+  filter: brightness(1.02) saturate(1.05);
+  box-shadow: 0 14px 34px rgba(37, 99, 235, 0.22);
+}
+
+.ui-btn-danger {
+  color: white;
+  background: linear-gradient(135deg, #ef4444, #f97316);
+  box-shadow: 0 12px 28px rgba(239, 68, 68, 0.18);
+}
+
+.ui-pill {
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  box-shadow: 0 6px 16px rgba(2, 6, 23, 0.06);
+}
+
+/* small entrance animations */
+.anim-fade-up {
+  animation: fadeUp 420ms ease both;
+}
+
+.anim-pop {
+  animation: pop 240ms ease both;
+}
+
+.anim-slide-in-left {
+  animation: slideInLeft 360ms ease both;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pop {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* nicer scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: rgba(2, 6, 23, 0.04); }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.70), rgba(79, 70, 229, 0.70));
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.78), rgba(14, 165, 233, 0.78));
+}
+
+
+/* ===============
+   Extra polish: glow + shine + animated gradients
+   =============== */
+
+.ui-title-gradient {
+  background: linear-gradient(135deg, var(--primary), var(--primary-2), #0ea5e9);
+  background-size: 220% 220%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: gradientShift 12s ease infinite;
+}
+
+@keyframes gradientShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.ui-glow {
+  box-shadow:
+    0 18px 70px rgba(37, 99, 235, 0.12),
+    0 12px 40px rgba(79, 70, 229, 0.08);
+}
+
+.ui-shine {
+  position: relative;
+  overflow: hidden;
+}
+
+.ui-shine::after {
+  content: "";
+  position: absolute;
+  top: -40%;
+  left: -60%;
+  width: 60%;
+  height: 180%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45), transparent);
+  transform: rotate(18deg);
+  opacity: 0;
+  transition: opacity 220ms ease;
+  pointer-events: none;
+}
+
+.ui-shine:hover::after {
+  opacity: 1;
+  animation: shineSweep 900ms ease;
+}
+
+@keyframes shineSweep {
+  from { transform: translateX(-30%) rotate(18deg); }
+  to   { transform: translateX(220%) rotate(18deg); }
+}
+
+.ui-soft-ring {
+  box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.10), var(--shadow-soft);
+}
+
+.ui-press {
+  transition: transform 140ms ease, box-shadow 180ms ease;
+}
+.ui-press:active { transform: scale(0.985); }
+
+@media (prefers-reduced-motion: reduce) {
+  body::before, body::after, .ui-title-gradient { animation: none !important; }
+  .ui-card-hover:hover { transform: none !important; }
+  .ui-btn:hover, .ui-btn:active { transform: none !important; }
+  .anim-fade-up, .anim-pop, .anim-slide-in-left { animation: none !important; }
+}
+
+
+/* ===============
+   V5: Professional dashboard shell
+   =============== */
+
+.ui-shell { position: relative; }
+
+.ui-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+/* Sidebar becomes a clean product-style panel */
+.ui-sidebar {
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(15, 23, 42, 0.10) !important;
+  box-shadow: 0 18px 60px rgba(2, 6, 23, 0.08);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.ui-sidebar h1 { color: var(--text); }
+.ui-sidebar p { color: var(--muted); }
+
+/* Navigation button (React dashboard feel) */
+.ui-nav-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.03);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  color: rgba(15, 23, 42, 0.86);
+  transition: transform 160ms ease, box-shadow 200ms ease, background 200ms ease, border-color 200ms ease;
+  position: relative;
+}
+
+.ui-nav-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(37, 99, 235, 0.06);
+  border-color: rgba(37, 99, 235, 0.16);
+  box-shadow: 0 14px 34px rgba(2, 6, 23, 0.10);
+}
+
+.ui-nav-btn.is-active {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.14), rgba(79, 70, 229, 0.10));
+  border-color: rgba(37, 99, 235, 0.26);
+  box-shadow: 0 16px 38px rgba(37, 99, 235, 0.12);
+}
+
+.ui-nav-btn.is-active::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 9px;
+  bottom: 9px;
+  width: 4px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--primary), var(--primary-2));
+}
+
+.ui-nav-btn.is-active svg { color: var(--primary); }
+
+.ui-nav-logout {
+  background: rgba(239, 68, 68, 0.06);
+  border: 1px solid rgba(239, 68, 68, 0.14);
+  color: rgba(15, 23, 42, 0.86);
+}
+
+.ui-nav-logout:hover {
+  background: rgba(239, 68, 68, 0.10);
+  border-color: rgba(239, 68, 68, 0.22);
+}
+
+.ui-icon-btn {
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  transition: transform 160ms ease, box-shadow 200ms ease, background 200ms ease;
+}
+
+.ui-icon-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(37, 99, 235, 0.06);
+  box-shadow: 0 12px 30px rgba(2, 6, 23, 0.10);
+}
+
+.ui-avatar {
+  position: relative;
+}
+
+.ui-avatar::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.50), rgba(79, 70, 229, 0.42));
+  filter: blur(10px);
+  opacity: 0.28;
+  z-index: -1;
+}
+
+/* Subtle motion (professional) */
+@keyframes floaty {
+  0% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+  100% { transform: translateY(0); }
+}
+.animate-floaty { animation: floaty 4.6s ease-in-out infinite; }
+@media (min-width: 768px) {
+  aside.group {
+    will-change: width;
+  }
+}
+/* PERFORMANCE TUNING: reduce expensive blur/shadows */
+.ui-glass,
+.ui-glass-strong {
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
+}
+
+.ui-glass-strong {
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+}
+
+.ui-card {
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08) !important;
+}
+
+/* smoother animations (less heavy) */
+* {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+
+/* ============================================================
+   DARK THEME FOUNDATION
+   Works when App.tsx adds class "dark" on <html>
+   ============================================================ */
+
+html.dark {
+  --bg: #070b14;
+  --surface: rgba(15, 23, 42, 0.88);
+  --surface-strong: rgba(15, 23, 42, 0.96);
+  --border: rgba(148, 163, 184, 0.18);
+  --border-strong: rgba(148, 163, 184, 0.26);
+  --text: #f8fafc;
+  --muted: rgba(226, 232, 240, 0.66);
+  --shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  --shadow-soft: 0 16px 44px rgba(0, 0, 0, 0.32);
+  --shadow-card: 0 14px 34px rgba(0, 0, 0, 0.30);
+
+  --primary: #60a5fa;
+  --primary-2: #818cf8;
+  --success: #34d399;
+  --danger: #fb7185;
+}
+
+html.dark body {
+  color: var(--text);
+  background:
+    radial-gradient(900px 520px at 8% 0%, rgba(59, 130, 246, 0.18), transparent 62%),
+    radial-gradient(850px 560px at 90% 8%, rgba(129, 140, 248, 0.16), transparent 60%),
+    radial-gradient(900px 620px at 42% 100%, rgba(20, 184, 166, 0.10), transparent 62%),
+    linear-gradient(180deg, #050816 0%, #08111f 48%, #060914 100%);
+  background-attachment: fixed;
+}
+
+html.dark body::before {
+  opacity: 0.075;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.55) 1px, transparent 1px);
+}
+
+/* Main reusable cards */
+html.dark .ui-glass {
+  background: rgba(15, 23, 42, 0.78) !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  box-shadow:
+    0 18px 55px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+html.dark .ui-glass-strong {
+  background: rgba(15, 23, 42, 0.92) !important;
+  border-color: rgba(148, 163, 184, 0.24) !important;
+  box-shadow:
+    0 26px 80px rgba(0, 0, 0, 0.46),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+html.dark .ui-card {
+  box-shadow:
+    0 18px 55px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+}
+
+html.dark .ui-card-hover:hover {
+  box-shadow:
+    0 26px 76px rgba(0, 0, 0, 0.48),
+    0 0 0 1px rgba(129, 140, 248, 0.16) !important;
+}
+
+/* Pills and buttons */
+html.dark .ui-pill {
+  background: rgba(15, 23, 42, 0.88) !important;
+  border-color: rgba(148, 163, 184, 0.20) !important;
+  color: #e2e8f0 !important;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.28) !important;
+}
+
+html.dark .ui-btn-primary {
+  background: linear-gradient(135deg, #4f46e5, #2563eb, #0ea5e9) !important;
+  box-shadow:
+    0 18px 42px rgba(37, 99, 235, 0.28),
+    0 0 0 1px rgba(147, 197, 253, 0.18) !important;
+}
+
+/* Sidebar */
+html.dark .ui-sidebar {
+  background: rgba(15, 23, 42, 0.86) !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+html.dark .ui-sidebar h1,
+html.dark .ui-sidebar p {
+  color: #e2e8f0 !important;
+}
+
+html.dark .ui-nav-btn {
+  background: rgba(30, 41, 59, 0.62) !important;
+  border-color: rgba(148, 163, 184, 0.14) !important;
+  color: #dbeafe !important;
+}
+
+html.dark .ui-nav-btn:hover {
+  background: rgba(37, 99, 235, 0.16) !important;
+  border-color: rgba(96, 165, 250, 0.28) !important;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.34) !important;
+}
+
+html.dark .ui-nav-btn.is-active {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.32), rgba(79, 70, 229, 0.24)) !important;
+  border-color: rgba(147, 197, 253, 0.36) !important;
+  color: #ffffff !important;
+}
+
+html.dark .ui-nav-btn.is-active svg {
+  color: #bfdbfe !important;
+}
+
+html.dark .ui-nav-logout {
+  background: rgba(244, 63, 94, 0.12) !important;
+  border-color: rgba(251, 113, 133, 0.22) !important;
+  color: #fecdd3 !important;
+}
+
+/* Inputs */
+html.dark input,
+html.dark select,
+html.dark textarea {
+  color: #f8fafc;
+  background-color: rgba(15, 23, 42, 0.82);
+  border-color: rgba(148, 163, 184, 0.24);
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: rgba(203, 213, 225, 0.48);
+}
+
+html.dark input:focus,
+html.dark select:focus,
+html.dark textarea:focus {
+  border-color: rgba(96, 165, 250, 0.65);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.18);
+}
+
+/* Tailwind classes that are heavily used in your app */
+html.dark .bg-white,
+html.dark .bg-white\/70,
+html.dark .bg-white\/75,
+html.dark .bg-white\/80,
+html.dark .bg-white\/85,
+html.dark .bg-white\/90,
+html.dark .bg-white\/95 {
+  background-color: rgba(15, 23, 42, 0.86) !important;
+}
+
+html.dark .bg-slate-50,
+html.dark .bg-slate-50\/70,
+html.dark .bg-slate-50\/80,
+html.dark .bg-slate-100,
+html.dark .bg-slate-100\/70 {
+  background-color: rgba(30, 41, 59, 0.62) !important;
+}
+
+html.dark .text-slate-950,
+html.dark .text-slate-900,
+html.dark .text-slate-800,
+html.dark .text-slate-700 {
+  color: #f8fafc !important;
+}
+
+html.dark .text-slate-600,
+html.dark .text-slate-500,
+html.dark .text-slate-400 {
+  color: rgba(226, 232, 240, 0.68) !important;
+}
+
+html.dark .border-slate-100,
+html.dark .border-slate-200,
+html.dark .border-slate-200\/70,
+html.dark .border-slate-200\/80,
+html.dark .border-white,
+html.dark .border-white\/50,
+html.dark .border-white\/70,
+html.dark .border-white\/80,
+html.dark .border-white\/90 {
+  border-color: rgba(148, 163, 184, 0.18) !important;
+}
+
+html.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(148, 163, 184, 0.13) !important;
+}
+
+/* Table rows/cards */
+html.dark thead,
+html.dark .bg-gradient-to-r.from-slate-50,
+html.dark .bg-gradient-to-r.from-slate-50.to-white {
+  background: rgba(15, 23, 42, 0.94) !important;
+}
+
+html.dark tr:hover {
+  background-color: rgba(37, 99, 235, 0.10) !important;
+}
+
+/* Status badges keep readable */
+html.dark .bg-emerald-50 {
+  background-color: rgba(16, 185, 129, 0.13) !important;
+}
+
+html.dark .text-emerald-700,
+html.dark .text-emerald-600 {
+  color: #6ee7b7 !important;
+}
+
+html.dark .border-emerald-100 {
+  border-color: rgba(52, 211, 153, 0.26) !important;
+}
+
+html.dark .bg-rose-50 {
+  background-color: rgba(244, 63, 94, 0.13) !important;
+}
+
+html.dark .text-rose-700,
+html.dark .text-rose-600 {
+  color: #fda4af !important;
+}
+
+html.dark .border-rose-100,
+html.dark .border-rose-200 {
+  border-color: rgba(251, 113, 133, 0.24) !important;
+}
+
+html.dark .bg-indigo-50 {
+  background-color: rgba(79, 70, 229, 0.16) !important;
+}
+
+html.dark .text-indigo-700,
+html.dark .text-indigo-600 {
+  color: #c7d2fe !important;
+}
+
+html.dark .border-indigo-100,
+html.dark .border-indigo-200 {
+  border-color: rgba(129, 140, 248, 0.30) !important;
+}
+
+/* Modal backdrop and modal polish */
+html.dark .backdrop-blur-md {
+  background-color: rgba(0, 0, 0, 0.62) !important;
+}
+
+html.dark .ui-glow {
+  box-shadow:
+    0 24px 90px rgba(0, 0, 0, 0.48),
+    0 0 0 1px rgba(129, 140, 248, 0.10) !important;
+}
+
+/* Dark theme scrollbar */
+html.dark ::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.65);
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(96, 165, 250, 0.72), rgba(129, 140, 248, 0.72));
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(147, 197, 253, 0.88), rgba(165, 180, 252, 0.88));
+}
+
+/* Better dark animation tone */
+html.dark .ui-title-gradient {
+  background: linear-gradient(135deg, #93c5fd, #c4b5fd, #67e8f9);
+  background-size: 220% 220%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent !important;
+}
+
+/* Remove overly bright shine in dark mode */
+html.dark .ui-shine::after {
+  background: linear-gradient(90deg, transparent, rgba(147, 197, 253, 0.16), transparent);
+}
+
+/* ================================
+   Dark Theme Final Polish
+   ================================ */
+
+.dark body {
+  background:
+    radial-gradient(900px 600px at 12% 0%, rgba(79, 70, 229, 0.20), transparent 60%),
+    radial-gradient(800px 520px at 90% 8%, rgba(14, 165, 233, 0.14), transparent 58%),
+    radial-gradient(900px 600px at 50% 100%, rgba(16, 185, 129, 0.08), transparent 60%),
+    linear-gradient(180deg, #020617 0%, #07111f 55%, #020617 100%);
+  color: #e5edf8;
+}
+
+.dark body::before {
+  opacity: 0.08;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(148, 163, 184, 0.55) 1px, transparent 1px);
+}
+
+.dark .ui-glass,
+.dark .ui-glass-strong,
+.dark .ui-card {
+  background: rgba(15, 23, 42, 0.82) !important;
+  border-color: rgba(148, 163, 184, 0.18) !important;
+  box-shadow:
+    0 22px 60px rgba(0, 0, 0, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+.dark .ui-card-hover:hover {
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.48),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07) !important;
+}
+
+.dark .ui-pill {
+  background: rgba(15, 23, 42, 0.88);
+  border-color: rgba(148, 163, 184, 0.20);
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.30),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Fix hard white neumorphic shadows in dark mode */
+.dark aside,
+.dark header > div,
+.dark [class*="shadow-[-"],
+.dark [class*="shadow-[0_"],
+.dark [class*="shadow-sm"],
+.dark [class*="shadow-md"],
+.dark [class*="shadow-xl"] {
+  box-shadow:
+    0 18px 45px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Dark readable surfaces */
+.dark .bg-white,
+.dark .bg-white\/55,
+.dark .bg-white\/60,
+.dark .bg-white\/68,
+.dark .bg-white\/70,
+.dark .bg-white\/72,
+.dark .bg-white\/75,
+.dark .bg-white\/80,
+.dark .bg-white\/82,
+.dark .bg-white\/85,
+.dark .bg-white\/90,
+.dark .bg-white\/95 {
+  background-color: rgba(15, 23, 42, 0.84) !important;
+}
+
+.dark .bg-slate-50,
+.dark .bg-slate-50\/45,
+.dark .bg-slate-50\/70,
+.dark .bg-slate-50\/80 {
+  background-color: rgba(30, 41, 59, 0.55) !important;
+}
+
+.dark .text-slate-950,
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-slate-700 {
+  color: #f8fafc !important;
+}
+
+.dark .text-slate-600,
+.dark .text-slate-500,
+.dark .text-slate-400 {
+  color: #94a3b8 !important;
+}
+
+.dark .border-slate-100,
+.dark .border-slate-200,
+.dark .border-slate-200\/55,
+.dark .border-slate-200\/70,
+.dark .border-slate-200\/75,
+.dark .border-slate-200\/80 {
+  border-color: rgba(148, 163, 184, 0.18) !important;
+}
+
+.dark input,
+.dark select,
+.dark textarea {
+  background: rgba(2, 6, 23, 0.72) !important;
+  color: #f8fafc !important;
+  border-color: rgba(148, 163, 184, 0.24) !important;
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #64748b !important;
+}
+
+.dark table thead,
+.dark th {
+  background: rgba(15, 23, 42, 0.92) !important;
+}
+
+.dark td,
+.dark th {
+  border-color: rgba(148, 163, 184, 0.14) !important;
+}
+
+/* Scrollbar in dark mode */
+.dark ::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.75), rgba(14, 165, 233, 0.70));
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(129, 140, 248, 0.90), rgba(56, 189, 248, 0.85));
+}
+
+/* Keep success / danger badges readable */
+.dark .bg-emerald-50 {
+  background-color: rgba(6, 78, 59, 0.32) !important;
+}
+
+.dark .text-emerald-700,
+.dark .text-emerald-600 {
+  color: #6ee7b7 !important;
+}
+
+.dark .border-emerald-100 {
+  border-color: rgba(110, 231, 183, 0.22) !important;
+}
+
+.dark .bg-rose-50 {
+  background-color: rgba(127, 29, 29, 0.32) !important;
+}
+
+.dark .text-rose-700,
+.dark .text-rose-600 {
+  color: #fda4af !important;
+}
+
+.dark .border-rose-100,
+.dark .border-rose-200\/70 {
+  border-color: rgba(253, 164, 175, 0.22) !important;
+}
+
+.dark .bg-indigo-50 {
+  background-color: rgba(67, 56, 202, 0.24) !important;
+}
+
+.dark .text-indigo-700,
+.dark .text-indigo-600 {
+  color: #c7d2fe !important;
+}
+
+.dark .border-indigo-100,
+.dark .border-indigo-200 {
+  border-color: rgba(199, 210, 254, 0.22) !important;
+}
+
+/* =========================================================
+   Safe Student Portal mobile recovery
+   ========================================================= */
+@media (max-width: 1023px) {
+  .sp-root {
+    background: linear-gradient(180deg, #f8fbff 0%, #eef4fb 100%) !important;
+  }
+
+  .sp-root main {
+    background: transparent !important;
+    min-width: 0 !important;
+  }
+
+  .sp-root .sp-page-scroll {
+    background: transparent !important;
+    min-height: 0 !important;
+    padding-bottom: 90px !important;
+  }
+
+  .sp-mobile-drawer {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    z-index: 50 !important;
+    width: min(86vw, 320px) !important;
+    height: 100dvh !important;
+    transform: translateX(-110%) !important;
+    transition: transform .25s ease !important;
+    display: flex !important;
+    overflow-y: auto !important;
+    border-radius: 0 28px 28px 0 !important;
+    padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .sp-mobile-drawer.open {
+    transform: translateX(0) !important;
+  }
+
+  .sp-mobile-drawer > div:last-child {
+    margin-top: auto !important;
+    padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .sp-topbar {
+    background: rgba(255,255,255,.88) !important;
+    backdrop-filter: blur(18px) !important;
+    border-bottom: 1px solid rgba(226,232,240,.8) !important;
+  }
+}
+
+
+/* =========================================================
+   Coordinator/Superadmin sidebar polish
+   ========================================================= */
+aside[class*="fixed"][class*="inset-y-0"] {
+  overflow: hidden !important;
+}
+
+aside[class*="fixed"][class*="inset-y-0"] nav {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+aside[class*="fixed"][class*="inset-y-0"] nav::-webkit-scrollbar {
+  display: none !important;
+}
+
+@media (max-width: 767px) {
+  aside[class*="fixed"][class*="inset-y-0"] {
+    height: calc(100dvh - 24px) !important;
+    max-height: calc(100dvh - 24px) !important;
+    overflow: hidden !important;
+  }
+
+  aside[class*="fixed"][class*="inset-y-0"]:not(.main-admin-sidebar) > div {
+    height: 100% !important;
+    min-height: 0 !important;
+  }
+
+  aside[class*="fixed"][class*="inset-y-0"] nav {
+    overflow-y: auto !important;
+    min-height: 0 !important;
+  }
+}
+
+
+/* =========================================================
+   Coordinator/Superadmin mobile topbar polish
+   ========================================================= */
+@media (max-width: 767px) {
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+  }
+
+  header .rounded-3xl,
+  header .rounded-2xl {
+    border-radius: 18px !important;
+  }
+
+  header h2 {
+    font-size: 16px !important;
+    line-height: 1.15 !important;
+  }
+
+  header .text-xs {
+    font-size: 10.5px !important;
+  }
+
+  header button {
+    flex-shrink: 0 !important;
+  }
+}
+
+
+/* Dashboard should show only Attendance Needed. Up Next is moved to Live Classes tab. */
+.admin-dashboard-attendance-grid > section:nth-child(2) {
+  display: none !important;
+}
+
+
+/* Live Classes tab is read-only. Show live/upnext cards, hide attendance action panels there only. */
+.live-classes-tab [class*="Attendance"],
+.live-classes-tab button[class*="Present"],
+.live-classes-tab button[class*="Absent"],
+.live-classes-tab button[class*="Leave"] {
+  pointer-events: none;
+}
+
+/* Hide common attendance panels inside read-only live tab cards */
+.live-classes-tab article div:has(> h4),
+.live-classes-tab .teacher-attendance,
+.live-classes-tab .student-attendance {
+  display: none !important;
+}
+
+
+/* Dashboard Attendance Needed cards: 3 columns on large screens */
+@media (min-width: 1280px) {
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 16px !important;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1279px) {
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 16px !important;
+  }
+}
+
+
+/* Live Classes tab: equal card sizes and visible student names */
+.live-classes-tab article {
+  min-height: 235px !important;
+  height: 100% !important;
+}
+
+.live-classes-tab .space-y-4 > article,
+.live-classes-tab .space-y-4 > .rounded-\[28px\] {
+  min-height: 235px !important;
+}
+
+.live-classes-tab .live-card-student-name,
+.live-classes-tab h4 {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  color: #0f172a !important;
+  max-width: 100% !important;
+}
+
+/* Make all read-only live/upnext cards align better */
+.live-classes-tab article header {
+  min-height: 88px !important;
+}
+
+.live-classes-tab article > div:last-child {
+  margin-top: auto !important;
+}
+
+@media (min-width: 1280px) {
+  .live-classes-tab section .space-y-4 {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 16px !important;
+  }
+}
+
+
+/* =========================================================
+   Live Classes tab cleanup: restore hidden title rows
+   ========================================================= */
+
+/* Old rule was hiding the div that contains student name + badge */
+.live-classes-tab article div:has(> h4) {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  flex-wrap: wrap !important;
+}
+
+/* Make sure names are always visible */
+.live-classes-tab article h4,
+.live-classes-tab .live-card-student-name {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  color: #0f172a !important;
+  font-weight: 900 !important;
+}
+
+/* Equal card sizing for live/upnext cards */
+.live-classes-tab article {
+  min-height: 220px !important;
+  height: auto !important;
+}
+
+/* Keep the status box compact */
+.live-classes-tab article > div:last-child {
+  margin-top: 18px !important;
+}
+
+.live-classes-tab article .rounded-2xl.border.border-slate-100.bg-slate-50\/80 {
+  min-height: 86px !important;
+}
+
+
+/* Attendance Needed dashboard cards: equal height */
+@media (min-width: 1280px) {
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 {
+    align-items: stretch !important;
+  }
+
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 > * {
+    height: 100% !important;
+    min-height: 520px !important;
+  }
+
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 > * > * {
+    height: 100% !important;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1279px) {
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 > * {
+    height: 100% !important;
+    min-height: 520px !important;
+  }
+}
+
+
+/* =========================================================
+   Daily Classes / Attendance Needed: safe 3-column layout
+   No forced huge heights
+   ========================================================= */
+
+@media (min-width: 1280px) {
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 16px !important;
+    align-items: start !important;
+  }
+
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 > * {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+  }
+
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 > * > * {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1279px) {
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 16px !important;
+    align-items: start !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
+    align-items: start !important;
+  }
+}
+
+
+/* =========================================================
+   Final reset: Daily Classes / Attendance Needed card layout
+   Keep 3 columns, remove all forced stretching/uneven heights
+   ========================================================= */
+
+.admin-dashboard-attendance-grid > section:first-child > div.space-y-4 {
+  align-items: start !important;
+  grid-auto-rows: auto !important;
+}
+
+.admin-dashboard-attendance-grid > section:first-child > div.space-y-4 > *,
+.admin-dashboard-attendance-grid > section:first-child > div.space-y-4 > * > * {
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  align-self: start !important;
+}
+
+/* Undo old flex-column equal-height rule that caused blank vertical space */
+.admin-dashboard-attendance-grid > section:first-child > div.space-y-4 > * > * {
+  display: block !important;
+}
+
+/* Keep the dashboard card grid only, without stretching cards */
+@media (min-width: 1280px) {
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 16px !important;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1279px) {
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 16px !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
+  }
+}
+
+/* Make sure attendance panels/buttons stay visible and normal */
+.admin-dashboard-attendance-grid button {
+  display: inline-flex !important;
+  pointer-events: auto !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+
+/* Small visual alignment fix: move first Attendance Needed card slightly down */
+@media (min-width: 1280px) {
+  .admin-dashboard-attendance-grid > section:first-child > div.space-y-4 > *:first-child {
+    margin-top: 18px !important;
+  }
+}
+
+
+/* =========================================================
+   Live Classes tab: mobile friendly scrolling and layout
+   ========================================================= */
+
+@media (max-width: 767px) {
+  /* Whole live classes page */
+  .live-classes-tab {
+    padding-bottom: 90px !important;
+    overflow-x: hidden !important;
+  }
+
+  /* Top intro card */
+  .live-classes-tab > div:first-child {
+    border-radius: 24px !important;
+    padding: 16px !important;
+    margin: 0 2px !important;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.07) !important;
+  }
+
+  .live-classes-tab > div:first-child h3 {
+    font-size: 18px !important;
+    line-height: 1.25 !important;
+  }
+
+  .live-classes-tab > div:first-child p {
+    font-size: 12px !important;
+    line-height: 1.45 !important;
+  }
+
+  .live-classes-tab > div:first-child span {
+    width: fit-content !important;
+    font-size: 12px !important;
+    padding: 7px 12px !important;
+  }
+
+  /* Force Live and Up Next sections to stack cleanly */
+  .live-classes-tab .grid {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 22px !important;
+  }
+
+  .live-classes-tab section {
+    min-width: 0 !important;
+    overflow: visible !important;
+  }
+
+  .live-classes-tab section > div:first-child {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 5 !important;
+    background: rgba(248, 250, 252, 0.92) !important;
+    backdrop-filter: blur(12px) !important;
+    padding: 8px 2px !important;
+    border-radius: 16px !important;
+  }
+
+  .live-classes-tab section h3 {
+    font-size: 15px !important;
+    line-height: 1.2 !important;
+  }
+
+  .live-classes-tab section > div:first-child span {
+    font-size: 11px !important;
+    padding: 5px 10px !important;
+  }
+
+  /* Card list spacing */
+  .live-classes-tab section .space-y-4 {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
+  }
+
+  /* Cards */
+  .live-classes-tab article {
+    width: 100% !important;
+    min-height: auto !important;
+    height: auto !important;
+    border-radius: 24px !important;
+    padding: 16px !important;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08) !important;
+    overflow: hidden !important;
+  }
+
+  .live-classes-tab article header {
+    min-height: auto !important;
+    display: flex !important;
+    align-items: flex-start !important;
+    gap: 12px !important;
+  }
+
+  .live-classes-tab article h4 {
+    font-size: 16px !important;
+    line-height: 1.25 !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: unset !important;
+  }
+
+  .live-classes-tab article p {
+    font-size: 13px !important;
+    line-height: 1.4 !important;
+  }
+
+  .live-classes-tab article header > span {
+    font-size: 12px !important;
+    padding: 8px 11px !important;
+    border-radius: 14px !important;
+    white-space: nowrap !important;
+  }
+
+  .live-classes-tab article .rounded-2xl {
+    border-radius: 18px !important;
+  }
+
+  /* Status boxes should not look huge while scrolling */
+  .live-classes-tab article > div:last-child {
+    margin-top: 14px !important;
+    min-height: auto !important;
+  }
+
+  .live-classes-tab article > div:last-child .rounded-2xl {
+    padding: 12px !important;
+    min-height: auto !important;
+  }
+
+  .live-classes-tab article > div:last-child p {
+    font-size: 10px !important;
+  }
+
+  .live-classes-tab article > div:last-child span {
+    font-size: 11px !important;
+    padding: 6px 10px !important;
+  }
+
+  /* Reduce expensive effects on mobile scrolling */
+  .live-classes-tab *,
+  .live-classes-tab article,
+  .live-classes-tab > div:first-child {
+    backdrop-filter: none !important;
+  }
+}
+
+
+
+/* Fast theme switching: prevent laggy full-page transition recalculation */
+html.theme-fast-switch,
+html.theme-fast-switch *,
+html.theme-fast-switch *::before,
+html.theme-fast-switch *::after {
+  transition: none !important;
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  scroll-behavior: auto !important;
+}
+
+
+
+/* Platform Admin separate portal scroll fix */
+.platform-admin-scroll {
+  height: 100vh;
+  overflow-y: auto !important;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+}
+
+.platform-admin-scroll:focus {
+  outline: none;
+}
+
+/* Department sidebar locked feature styling */
+.department-sidebar-nav button[aria-disabled="true"] {
+  opacity: 0.48 !important;
+  filter: grayscale(0.28) saturate(0.7);
+  cursor: pointer;
+}
+
+.department-sidebar-nav button[aria-disabled="true"]:hover {
+  opacity: 0.58 !important;
+}
+
+.department-sidebar-nav .feature-lock-badge {
+  opacity: 1 !important;
+  filter: none !important;
+  z-index: 20;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .department-sidebar-nav button {
+    transition: none !important;
+  }
+}
+
+/* Tuition sidebar: show expanded blocks when the left-edge hover strip sets is-sidebar-open.
+   Without this, the sidebar becomes wide but still shows only collapsed icons. */
+@media (min-width: 768px) {
+  .tuition-sidebar-shell.is-sidebar-open [class~="md:group-hover:hidden"] {
+    display: none !important;
+  }
+
+  .tuition-sidebar-shell.is-sidebar-open [class~="md:group-hover:flex"] {
+    display: flex !important;
+  }
+
+  .tuition-sidebar-shell.is-sidebar-open [class~="md:group-hover:block"] {
+    display: block !important;
+  }
+}
+
+/* Tuition AI Assistant robot avatar */
+.tuition-ai-robot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: tuitionBotFloat 2.8s ease-in-out infinite;
+}
+
+.tuition-ai-robot-sm {
+  width: 44px;
+  height: 44px;
+}
+
+.tuition-ai-robot-lg {
+  width: 52px;
+  height: 52px;
+}
+
+.tuition-ai-robot::before,
+.tuition-ai-robot::after {
+  content: "";
+  position: absolute;
+  width: 9px;
+  height: 16px;
+  top: 26px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #e2e8f0, #cbd5e1);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.9);
+}
+
+.tuition-ai-robot::before {
+  left: 5px;
+  transform: rotate(14deg);
+}
+
+.tuition-ai-robot::after {
+  right: 5px;
+  transform: rotate(-14deg);
+}
+
+.tuition-ai-robot-head {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  right: 7px;
+  height: 25px;
+  border-radius: 15px;
+  background: linear-gradient(180deg, #1e293b, #0f172a);
+  border: 1px solid rgba(148,163,184,.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.12),
+    0 8px 18px rgba(15,23,42,.20);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  z-index: 2;
+}
+
+.tuition-ai-robot-eye {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #67e8f9;
+  box-shadow: 0 0 8px rgba(103,232,249,.85);
+  animation: tuitionBotBlink 3.6s ease-in-out infinite;
+}
+
+.tuition-ai-robot-body {
+  position: absolute;
+  bottom: 4px;
+  width: 28px;
+  height: 24px;
+  border-radius: 14px 14px 16px 16px;
+  background: linear-gradient(180deg, #ffffff, #e2e8f0);
+  border: 1px solid rgba(148,163,184,.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.95),
+    0 8px 18px rgba(15,23,42,.12);
+}
+
+@keyframes tuitionBotFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+@keyframes tuitionBotBlink {
+  0%, 92%, 100% { transform: scaleY(1); opacity: 1; }
+  95% { transform: scaleY(.22); opacity: .75; }
+}
+/* Tuition premium timetable form polish */
+.tuition-country-photo {
+  display: inline-block;
+  object-fit: cover;
+  object-position: center;
+  background: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+}
+.tuition-timeslot-panel input[type="checkbox"] {
+  border-radius: 0.35rem;
+}
+.tuition-timeslot-panel label:hover {
+  transform: translateY(-1px);
+}
+
+/* TUITION_QURAN_EXACT_CLEANUP_START */
+/* Tuition Accounts exact Quran-style cleanup */
+.tuition-timeslot-panel {
+  max-width: 100%;
+}
+
+.tuition-timeslot-panel label {
+  min-height: 58px !important;
+  padding: 10px 12px !important;
+  align-items: center !important;
+}
+
+.tuition-timeslot-panel label > span {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+  width: 100% !important;
+}
+
+.tuition-timeslot-panel label > span > span:first-child {
+  font-size: 14px !important;
+  line-height: 18px !important;
+  white-space: normal !important;
+}
+
+.tuition-timeslot-panel label > span > span:last-child {
+  margin-top: 0 !important;
+  font-size: 12px !important;
+  line-height: 16px !important;
+  text-align: right !important;
+  white-space: nowrap !important;
+}
+
+.tuition-timeslot-panel input[type="checkbox"] {
+  flex: 0 0 auto !important;
+}
+
+@media (min-width: 1024px) {
+  .tuition-timeslot-panel .grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+  }
+}
+/* TUITION_QURAN_EXACT_CLEANUP_END */
+
+/* === IVS NIGHT MODE CLARITY POLISH START === */
+/* Premium dark mode clarity patch: only CSS, no data/logic changes. */
+html.dark,
+html.dark body,
+.dark,
+.dark body {
+  color-scheme: dark;
+}
+
+html.dark {
+  --ivs-dark-bg: #050817;
+  --ivs-dark-bg-2: #08111f;
+  --ivs-dark-panel: rgba(13, 22, 39, 0.92);
+  --ivs-dark-panel-soft: rgba(15, 25, 45, 0.78);
+  --ivs-dark-panel-strong: rgba(8, 14, 28, 0.96);
+  --ivs-dark-border: rgba(148, 163, 184, 0.24);
+  --ivs-dark-border-soft: rgba(148, 163, 184, 0.15);
+  --ivs-dark-text: #f8fafc;
+  --ivs-dark-muted: #b6c2d4;
+  --ivs-dark-faint: #8391a7;
+  --ivs-dark-blue: #4f7cff;
+  --ivs-dark-indigo: #6657ff;
+  --ivs-dark-cyan: #38bdf8;
+  --ivs-dark-green: #34d399;
+  --ivs-dark-shadow: 0 22px 70px rgba(0, 0, 0, 0.48);
+  --ivs-dark-inner: inset 0 1px 0 rgba(255, 255, 255, 0.065);
+}
+
+html.dark body {
+  background:
+    radial-gradient(820px 520px at 8% -8%, rgba(79, 124, 255, 0.20), transparent 58%),
+    radial-gradient(760px 520px at 92% 0%, rgba(14, 165, 233, 0.12), transparent 58%),
+    radial-gradient(900px 620px at 50% 105%, rgba(20, 184, 166, 0.07), transparent 62%),
+    linear-gradient(180deg, #030712 0%, #07111f 48%, #030712 100%) !important;
+  color: var(--ivs-dark-text) !important;
+  background-attachment: fixed !important;
+}
+
+html.dark body::before {
+  opacity: 0.045 !important;
+  background-image: radial-gradient(circle at 1px 1px, rgba(148, 163, 184, 0.55) 1px, transparent 1px) !important;
+}
+
+/* Main app frames */
+html.dark main,
+html.dark .min-h-screen {
+  background-color: transparent !important;
+}
+
+html.dark header > div,
+html.dark aside,
+html.dark .ui-glass,
+html.dark .ui-glass-strong,
+html.dark .ui-card,
+html.dark .ui-pill,
+html.dark .rounded-\[28px\],
+html.dark .rounded-\[30px\],
+html.dark .rounded-\[32px\],
+html.dark .rounded-\[36px\],
+html.dark .rounded-3xl {
+  border-color: var(--ivs-dark-border-soft) !important;
+  box-shadow: var(--ivs-dark-shadow), var(--ivs-dark-inner) !important;
+}
+
+html.dark .ui-glass,
+html.dark .ui-card,
+html.dark .bg-white,
+html.dark .bg-white\/50,
+html.dark .bg-white\/55,
+html.dark .bg-white\/60,
+html.dark .bg-white\/65,
+html.dark .bg-white\/70,
+html.dark .bg-white\/75,
+html.dark .bg-white\/80,
+html.dark .bg-white\/85,
+html.dark .bg-white\/90,
+html.dark .bg-white\/95 {
+  background: linear-gradient(180deg, rgba(15, 25, 45, 0.91), rgba(9, 16, 31, 0.91)) !important;
+}
+
+html.dark .ui-glass-strong,
+html.dark .bg-slate-50,
+html.dark .bg-slate-50\/45,
+html.dark .bg-slate-50\/50,
+html.dark .bg-slate-50\/60,
+html.dark .bg-slate-50\/70,
+html.dark .bg-slate-50\/75,
+html.dark .bg-slate-50\/80,
+html.dark .bg-slate-100,
+html.dark .bg-slate-100\/70,
+html.dark .bg-slate-100\/80 {
+  background: linear-gradient(180deg, rgba(19, 31, 54, 0.80), rgba(12, 20, 37, 0.80)) !important;
+}
+
+/* Tailwind gradient cards: make dark mode less foggy and more readable */
+html.dark [class*="from-white"],
+html.dark [class*="from-slate-50"],
+html.dark [class*="from-blue-50"],
+html.dark [class*="from-indigo-50"],
+html.dark [class*="from-sky-50"] {
+  --tw-gradient-from: rgba(15, 25, 45, 0.94) var(--tw-gradient-from-position) !important;
+  --tw-gradient-to: rgba(15, 25, 45, 0) var(--tw-gradient-to-position) !important;
+  --tw-gradient-stops: var(--tw-gradient-from), rgba(11, 18, 34, 0.92) var(--tw-gradient-via-position), rgba(8, 14, 28, 0.92) var(--tw-gradient-to-position) !important;
+}
+
+html.dark [class*="to-white"],
+html.dark [class*="to-slate-50"],
+html.dark [class*="to-blue-50"],
+html.dark [class*="to-indigo-50"],
+html.dark [class*="to-sky-50"] {
+  --tw-gradient-to: rgba(8, 14, 28, 0.92) var(--tw-gradient-to-position) !important;
+}
+
+/* Text readability */
+html.dark .text-slate-950,
+html.dark .text-slate-900,
+html.dark .text-slate-800,
+html.dark .text-slate-700,
+html.dark h1,
+html.dark h2,
+html.dark h3,
+html.dark h4 {
+  color: #f8fafc !important;
+}
+
+html.dark .text-slate-600,
+html.dark .text-slate-500,
+html.dark .text-slate-400,
+html.dark p {
+  color: var(--ivs-dark-muted) !important;
+}
+
+html.dark .text-slate-300,
+html.dark .text-slate-200 {
+  color: #dbe6f5 !important;
+}
+
+/* Borders/dividers */
+html.dark .border-slate-50,
+html.dark .border-slate-100,
+html.dark .border-slate-200,
+html.dark .border-slate-200\/40,
+html.dark .border-slate-200\/50,
+html.dark .border-slate-200\/55,
+html.dark .border-slate-200\/60,
+html.dark .border-slate-200\/70,
+html.dark .border-slate-200\/75,
+html.dark .border-slate-200\/80,
+html.dark .border-white,
+html.dark .border-white\/30,
+html.dark .border-white\/40,
+html.dark .border-white\/50,
+html.dark .border-white\/60,
+html.dark .border-white\/70,
+html.dark .border-white\/80,
+html.dark .border-white\/90 {
+  border-color: var(--ivs-dark-border) !important;
+}
+
+html.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]),
+html.dark .divide-slate-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(148, 163, 184, 0.14) !important;
+}
+
+/* Inputs/selects */
+html.dark input:not([type="checkbox"]):not([type="radio"]),
+html.dark select,
+html.dark textarea {
+  background: rgba(3, 7, 18, 0.70) !important;
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  color: #f8fafc !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045) !important;
+}
+
+html.dark option {
+  background: #0f172a !important;
+  color: #f8fafc !important;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: rgba(184, 196, 216, 0.58) !important;
+}
+
+html.dark input:focus,
+html.dark select:focus,
+html.dark textarea:focus {
+  border-color: rgba(96, 165, 250, 0.78) !important;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Tables */
+html.dark table,
+html.dark thead,
+html.dark tbody,
+html.dark th,
+html.dark td {
+  border-color: rgba(148, 163, 184, 0.14) !important;
+}
+
+html.dark thead,
+html.dark th,
+html.dark .bg-gradient-to-r.from-slate-50 {
+  background: rgba(9, 16, 31, 0.96) !important;
+}
+
+html.dark tbody tr,
+html.dark tr {
+  background-color: rgba(10, 18, 34, 0.20) !important;
+}
+
+html.dark tbody tr:hover,
+html.dark tr:hover {
+  background-color: rgba(37, 99, 235, 0.12) !important;
+}
+
+/* Buttons */
+html.dark button.bg-white,
+html.dark button.bg-white\/70,
+html.dark button.bg-white\/80,
+html.dark button.bg-slate-50,
+html.dark button.bg-slate-100 {
+  background: rgba(12, 20, 37, 0.90) !important;
+  border-color: rgba(148, 163, 184, 0.25) !important;
+  color: #eaf2ff !important;
+}
+
+html.dark .ui-btn-primary,
+html.dark .bg-blue-600,
+html.dark .bg-indigo-600 {
+  background: linear-gradient(135deg, #4f46e5 0%, #2563eb 48%, #0ea5e9 100%) !important;
+  color: #ffffff !important;
+  box-shadow: 0 18px 42px rgba(37, 99, 235, 0.30), inset 0 1px 0 rgba(255,255,255,0.16) !important;
+}
+
+html.dark button:hover {
+  filter: brightness(1.07);
+}
+
+/* Status colors: keep professional and readable */
+html.dark .bg-emerald-50,
+html.dark .bg-emerald-100,
+html.dark .bg-green-50 {
+  background: rgba(6, 95, 70, 0.32) !important;
+  border-color: rgba(52, 211, 153, 0.30) !important;
+}
+html.dark .text-emerald-700,
+html.dark .text-emerald-600,
+html.dark .text-green-700 {
+  color: #6ee7b7 !important;
+}
+html.dark .bg-rose-50,
+html.dark .bg-red-50 {
+  background: rgba(127, 29, 29, 0.30) !important;
+  border-color: rgba(251, 113, 133, 0.30) !important;
+}
+html.dark .text-rose-700,
+html.dark .text-rose-600,
+html.dark .text-red-700 {
+  color: #fda4af !important;
+}
+html.dark .bg-amber-50,
+html.dark .bg-yellow-50,
+html.dark .bg-orange-50 {
+  background: rgba(146, 64, 14, 0.25) !important;
+  border-color: rgba(251, 191, 36, 0.28) !important;
+}
+html.dark .text-amber-700,
+html.dark .text-yellow-700,
+html.dark .text-orange-700 {
+  color: #fbbf24 !important;
+}
+html.dark .bg-indigo-50,
+html.dark .bg-blue-50,
+html.dark .bg-sky-50 {
+  background: rgba(37, 99, 235, 0.16) !important;
+  border-color: rgba(96, 165, 250, 0.26) !important;
+}
+html.dark .text-indigo-700,
+html.dark .text-blue-700,
+html.dark .text-sky-700 {
+  color: #bfdbfe !important;
+}
+
+/* AI assistant and modals */
+html.dark [role="dialog"] > div {
+  background: linear-gradient(180deg, rgba(9, 18, 36, 0.98), rgba(5, 10, 24, 0.98)) !important;
+  border-color: rgba(96, 165, 250, 0.24) !important;
+  box-shadow: 0 32px 110px rgba(0,0,0,0.62), inset 0 1px 0 rgba(255,255,255,0.075) !important;
+}
+html.dark [role="dialog"] .bg-sky-50\/85,
+html.dark [role="dialog"] .bg-white\/75,
+html.dark [role="dialog"] form.bg-white {
+  background: rgba(8, 16, 32, 0.92) !important;
+  border-color: rgba(96, 165, 250, 0.18) !important;
+}
+html.dark [role="dialog"] .bg-blue-50\/70 {
+  background: rgba(37, 99, 235, 0.16) !important;
+}
+
+/* Reports/dashboard stat cards: crisper in dark mode */
+html.dark .shadow-\[0_24px_70px_rgba\(15\,23\,42\,0\.08\)\],
+html.dark [class*="shadow-[0_24px_70px"] {
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.44), inset 0 1px 0 rgba(255,255,255,0.055) !important;
+}
+
+/* Scrollbars */
+html.dark ::-webkit-scrollbar-track {
+  background: rgba(3, 7, 18, 0.70) !important;
+}
+html.dark ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(96,165,250,0.70), rgba(99,102,241,0.75)) !important;
+  border-radius: 999px !important;
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(147,197,253,0.88), rgba(129,140,248,0.88)) !important;
+}
+
+@media (max-width: 768px) {
+  html.dark .rounded-\[28px\],
+  html.dark .rounded-\[30px\],
+  html.dark .rounded-\[32px\],
+  html.dark .rounded-3xl {
+    box-shadow: 0 14px 42px rgba(0,0,0,0.40), inset 0 1px 0 rgba(255,255,255,0.055) !important;
+  }
+}
+/* === IVS NIGHT MODE CLARITY POLISH END === */
+
+/* IVS TUITION MOBILE RESPONSIVE REBUILD V3 START */
+/* Everything in this block is active only while TuitionCoordinatorPortal is mounted. */
+body.tuition-portal-responsive-mode {
+  overflow-x: hidden !important;
+  min-width: 0 !important;
+}
+
+body.tuition-portal-responsive-mode *,
+body.tuition-portal-responsive-mode *::before,
+body.tuition-portal-responsive-mode *::after {
+  box-sizing: border-box;
+}
+
+body.tuition-portal-responsive-mode .tuition-portal-root,
+body.tuition-portal-responsive-mode .tuition-portal-main,
+body.tuition-portal-responsive-mode .tuition-portal-content {
+  min-width: 0;
+  max-width: 100%;
+}
+
+body.tuition-portal-responsive-mode .tuition-accounts-table-scroll,
+body.tuition-portal-responsive-mode .tuition-schedule-desktop-matrix,
+body.tuition-portal-responsive-mode .tuition-schedule-mobile-matrix {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-inline: contain;
+}
+
+/* ---------- Small laptops / tablets ---------- */
+@media (max-width: 1180px) {
+  body.tuition-portal-responsive-mode .tuition-portal-content {
+    padding: 20px 18px 44px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-responsive .tuition-accounts-hero {
+    padding: 22px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-responsive .tuition-accounts-hero .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-table-scroll {
+    overflow-x: auto !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-table {
+    min-width: 860px !important;
+    width: 100% !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-table {
+    min-width: max-content !important;
+    width: max-content !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-time-header,
+  body.tuition-portal-responsive-mode .tuition-schedule-matrix-cell {
+    min-width: 220px !important;
+    width: 220px !important;
+    max-width: 220px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-teacher-row-header {
+    min-width: 210px !important;
+    width: 210px !important;
+    max-width: 210px !important;
+  }
+}
+
+/* ---------- Phones ---------- */
+@media (max-width: 767px) {
+  body.tuition-portal-responsive-mode {
+    font-size: 15px;
+    overflow-x: hidden !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-portal-main {
+    width: 100% !important;
+    height: 100dvh !important;
+    overflow: hidden !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-portal-content {
+    padding: 12px 9px 36px !important;
+  }
+
+  /* ----- Mobile header ----- */
+  body.tuition-portal-responsive-mode .tuition-portal-header {
+    margin: 8px 8px 6px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-portal-header-card {
+    min-height: 104px !important;
+    padding: 10px 12px !important;
+    border-radius: 27px !important;
+    background: rgba(255,255,255,0.96) !important;
+    border: 1px solid rgba(203,213,225,0.76) !important;
+    box-shadow: 0 14px 34px rgba(15,23,42,0.08), inset 0 1px 0 rgba(255,255,255,0.96) !important;
+    backdrop-filter: none !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-portal-header-card > .flex {
+    gap: 8px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-mobile-menu-button,
+  body.tuition-portal-responsive-mode .tuition-mobile-header-action {
+    width: 50px !important;
+    height: 50px !important;
+    min-width: 50px !important;
+    min-height: 50px !important;
+    border-radius: 18px !important;
+    background: #fff !important;
+    border: 1px solid rgba(203,213,225,0.78) !important;
+    color: #334155 !important;
+    box-shadow: 0 10px 24px rgba(15,23,42,0.09) !important;
+  }
+
+  body.tuition-portal-responsive-mode .ivs-tuition-clock-shell {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    flex: 0 1 188px !important;
+    min-width: 0 !important;
+    max-width: 188px !important;
+    padding: 8px 10px !important;
+    border-radius: 23px !important;
+    border: 1px solid rgba(203,213,225,0.72) !important;
+    background: rgba(255,255,255,0.97) !important;
+    box-shadow: 0 12px 28px rgba(15,23,42,0.07), inset 0 1px 0 rgba(255,255,255,0.96) !important;
+  }
+
+  body.tuition-portal-responsive-mode .ivs-tuition-clock-shell > div {
+    width: 100% !important;
+    gap: 9px !important;
+    justify-content: center !important;
+  }
+
+  body.tuition-portal-responsive-mode .ivs-tuition-clock-shell > div > div:first-child {
+    width: 56px !important;
+    height: 56px !important;
+    min-width: 56px !important;
+    border-radius: 999px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-clock-copy,
+  body.tuition-portal-responsive-mode .ivs-tuition-clock-shell > div > div:nth-child(2) {
+    min-width: 76px !important;
+    max-width: 90px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-clock-time,
+  body.tuition-portal-responsive-mode .ivs-tuition-clock-shell > div > div:nth-child(2) > div:first-child {
+    font-size: 16px !important;
+    line-height: 1.05 !important;
+    font-weight: 900 !important;
+    white-space: nowrap !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-clock-day {
+    margin-top: 3px !important;
+    font-size: 12px !important;
+    line-height: 1.05 !important;
+    font-weight: 800 !important;
+    color: #64748b !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-clock-date,
+  body.tuition-portal-responsive-mode .ivs-tuition-clock-shell > div > div:nth-child(2) > div:last-child {
+    margin-top: 2px !important;
+    font-size: 10px !important;
+    line-height: 1.05 !important;
+    font-weight: 700 !important;
+    color: #94a3b8 !important;
+    white-space: nowrap !important;
+  }
+
+  /* ----- Mobile sidebar ----- */
+  body.tuition-portal-responsive-mode .tuition-sidebar-shell {
+    z-index: 80 !important;
+    width: min(304px, calc(100vw - 24px)) !important;
+    max-width: calc(100vw - 24px) !important;
+    height: calc(100dvh - 20px) !important;
+    margin: 10px !important;
+    border-radius: 27px !important;
+    border: 1px solid rgba(203,213,225,0.86) !important;
+    background: rgba(255,255,255,0.985) !important;
+    backdrop-filter: none !important;
+    overflow: hidden !important;
+    box-shadow: 20px 24px 52px rgba(15,23,42,0.20), inset 0 1px 0 rgba(255,255,255,0.98) !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-shell.-translate-x-full {
+    transform: translateX(calc(-100% - 52px)) !important;
+    box-shadow: none !important;
+    pointer-events: none !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-shell.translate-x-0 {
+    transform: translateX(0) !important;
+    pointer-events: auto !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-shell > div {
+    height: 100% !important;
+    min-height: 0 !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-brand-card,
+  body.tuition-portal-responsive-mode .tuition-sidebar-role-card {
+    min-height: 66px !important;
+    padding: 8px 10px !important;
+    border-radius: 19px !important;
+    gap: 10px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-brand-card > div:first-child,
+  body.tuition-portal-responsive-mode .tuition-sidebar-role-card > div:first-child {
+    width: 46px !important;
+    height: 46px !important;
+    min-width: 46px !important;
+    border-radius: 15px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-shell nav {
+    min-height: 0 !important;
+    padding: 8px 10px 4px !important;
+    overflow-y: auto !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-nav-list {
+    gap: 3px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-nav-list > button {
+    min-height: 49px !important;
+    border-radius: 16px !important;
+    text-align: left !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-nav-list > button > div {
+    grid-template-columns: 46px minmax(0, 1fr) !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-nav-list > button > div > div:first-child {
+    padding: 3px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-nav-list > button > div > div:first-child > div {
+    width: 39px !important;
+    height: 39px !important;
+    border-radius: 13px !important;
+    box-shadow: 0 6px 14px rgba(15,23,42,0.07) !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-nav-list > button span {
+    font-size: 13px !important;
+    text-align: left !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-ai-card {
+    min-height: 68px !important;
+    padding: 8px 10px !important;
+    border-radius: 18px !important;
+    box-shadow: 0 8px 20px rgba(15,23,42,0.07) !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-ai-card > div:first-child {
+    width: 48px !important;
+    height: 48px !important;
+    min-width: 48px !important;
+    border-radius: 15px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-sidebar-logout {
+    min-height: 50px !important;
+    border-radius: 16px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-mobile-sidebar-backdrop,
+  body.tuition-portal-responsive-mode button.fixed.inset-0[aria-label="Close menu"] {
+    z-index: 60 !important;
+    background: rgba(15,23,42,0.34) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* ----- Mobile scheduling: TIME rows, TEACHER columns ----- */
+  body.tuition-portal-responsive-mode .tuition-scheduling-responsive {
+    max-width: 100% !important;
+    min-width: 0 !important;
+    gap: 12px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-panel {
+    height: min(72dvh, 720px) !important;
+    min-height: 540px !important;
+    border-radius: 28px !important;
+    overflow: hidden !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-panel-heading {
+    padding: 18px 16px !important;
+    align-items: flex-start !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-panel-heading h3 {
+    font-size: 18px !important;
+    line-height: 1.2 !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-panel-heading p {
+    font-size: 13px !important;
+    line-height: 1.45 !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-matrix {
+    display: none !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-mobile-matrix {
+    display: block !important;
+    min-height: 0 !important;
+    overflow: auto !important;
+    background: #fff !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-mobile-table {
+    width: max-content !important;
+    min-width: max-content !important;
+    table-layout: fixed !important;
+    border-collapse: collapse !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-mobile-time-axis,
+  body.tuition-portal-responsive-mode .tuition-mobile-time-row {
+    width: 158px !important;
+    min-width: 158px !important;
+    max-width: 158px !important;
+    white-space: normal !important;
+    word-break: normal !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-mobile-teacher-column {
+    width: 218px !important;
+    min-width: 218px !important;
+    max-width: 218px !important;
+    white-space: normal !important;
+    word-break: normal !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-mobile-matrix .tuition-schedule-matrix-cell {
+    width: 218px !important;
+    min-width: 218px !important;
+    max-width: 218px !important;
+    padding: 8px !important;
+    vertical-align: middle !important;
+    white-space: normal !important;
+    word-break: normal !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-mobile-matrix .tuition-schedule-matrix-cell > div {
+    min-height: 116px !important;
+    height: auto !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-mobile-matrix .tuition-schedule-matrix-cell button[title="Add schedule"] {
+    opacity: 1 !important;
+    transform: scale(1) !important;
+    width: 44px !important;
+    height: 44px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-mobile-matrix td,
+  body.tuition-portal-responsive-mode .tuition-schedule-mobile-matrix th {
+    overflow-wrap: normal !important;
+    word-break: normal !important;
+  }
+
+  /* ----- Mobile Accounts & Enrollment ----- */
+  body.tuition-portal-responsive-mode .tuition-accounts-responsive {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    gap: 14px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-hero {
+    padding: 18px !important;
+    border-radius: 28px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-hero .grid {
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-hero-actions {
+    width: 100% !important;
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-primary-action {
+    width: 100% !important;
+    min-height: 52px !important;
+    border-radius: 16px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-tabs-panel {
+    padding: 12px !important;
+    border-radius: 24px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-tabs-panel > div {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-tab-list {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 4px !important;
+    width: 100% !important;
+    padding: 5px !important;
+    overflow: hidden !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-tab-list > button {
+    min-width: 0 !important;
+    padding: 10px 7px !important;
+    font-size: 12px !important;
+    justify-content: center !important;
+    white-space: nowrap !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-search-wrap {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-search-wrap input {
+    width: 100% !important;
+    min-height: 50px !important;
+    font-size: 16px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-table-scroll {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-table,
+  body.tuition-portal-responsive-mode .tuition-accounts-responsive table {
+    min-width: 860px !important;
+    width: 860px !important;
+    table-layout: auto !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-table th,
+  body.tuition-portal-responsive-mode .tuition-accounts-table td,
+  body.tuition-portal-responsive-mode .tuition-accounts-responsive table th,
+  body.tuition-portal-responsive-mode .tuition-accounts-responsive table td {
+    white-space: nowrap !important;
+    word-break: normal !important;
+  }
+}
+
+@media (max-width: 390px) {
+  body.tuition-portal-responsive-mode .tuition-portal-header-card {
+    padding: 9px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-mobile-menu-button,
+  body.tuition-portal-responsive-mode .tuition-mobile-header-action {
+    width: 46px !important;
+    height: 46px !important;
+    min-width: 46px !important;
+    min-height: 46px !important;
+  }
+
+  body.tuition-portal-responsive-mode .ivs-tuition-clock-shell {
+    flex-basis: 170px !important;
+    max-width: 170px !important;
+    padding: 7px 8px !important;
+  }
+
+  body.tuition-portal-responsive-mode .ivs-tuition-clock-shell > div > div:first-child {
+    width: 50px !important;
+    height: 50px !important;
+    min-width: 50px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-clock-time,
+  body.tuition-portal-responsive-mode .ivs-tuition-clock-shell > div > div:nth-child(2) > div:first-child {
+    font-size: 14px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-accounts-tab-list > button {
+    font-size: 11px !important;
+    padding-inline: 5px !important;
+  }
+}
+
+@media (min-width: 768px) {
+  body.tuition-portal-responsive-mode .tuition-schedule-mobile-matrix {
+    display: none !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-matrix {
+    display: block !important;
+  }
+}
+/* IVS TUITION MOBILE RESPONSIVE REBUILD V3 END */
+
+/* IVS TUITION SAME-AXIS MOBILE MATRIX FIX START */
+/* Tuition only: mobile keeps the desktop axis — teachers are rows, time slots are columns. */
+@media (max-width: 767px) {
+  body.tuition-portal-responsive-mode .tuition-schedule-mobile-matrix {
+    display: none !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-matrix {
+    display: block !important;
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    width: 100% !important;
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    overscroll-behavior-inline: contain !important;
+    background: #fff !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-table {
+    display: table !important;
+    width: max-content !important;
+    min-width: max-content !important;
+    table-layout: auto !important;
+    border-collapse: collapse !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-table thead {
+    display: table-header-group !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-table tbody {
+    display: table-row-group !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-table tr {
+    display: table-row !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-table th,
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-table td {
+    display: table-cell !important;
+    white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-teacher-row-header {
+    position: sticky !important;
+    left: 0 !important;
+    z-index: 22 !important;
+    width: 178px !important;
+    min-width: 178px !important;
+    max-width: 178px !important;
+    padding: 8px !important;
+    vertical-align: middle !important;
+    background: rgba(255,255,255,0.98) !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-time-header,
+  body.tuition-portal-responsive-mode .tuition-schedule-matrix-cell {
+    width: 190px !important;
+    min-width: 190px !important;
+    max-width: 190px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-time-header {
+    padding: 8px !important;
+    vertical-align: middle !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-matrix-cell {
+    height: 126px !important;
+    padding: 6px !important;
+    vertical-align: middle !important;
+    text-align: center !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-matrix-cell > div,
+  body.tuition-portal-responsive-mode .tuition-schedule-matrix-cell > button {
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
+
+  /* Touch screens have no reliable hover. Keep the light + control visible. */
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-matrix button[title="Open class panel"],
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-matrix button[title="Create schedule"],
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-matrix button[title="Add schedule"] {
+    opacity: 1 !important;
+    transform: scale(1) !important;
+    width: 42px !important;
+    height: 42px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-matrix button[title="Open class panel"] svg,
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-matrix button[title="Create schedule"] svg,
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-matrix button[title="Add schedule"] svg {
+    width: 17px !important;
+    height: 17px !important;
+    stroke-width: 1.8 !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-panel {
+    min-height: 560px !important;
+    height: min(72dvh, 760px) !important;
+  }
+}
+/* IVS TUITION SAME-AXIS MOBILE MATRIX FIX END */
+
+
+
+/* IVS TUITION MOBILE DARK MODE SCHEDULE LAYOUT FIX START */
+/*
+ * This block is intentionally last in index.css.
+ * It repairs only the Tuition portal while its body scope is mounted.
+ */
+@media (max-width: 767px) {
+  /* ---------------------------------------------------------
+     MOBILE NAVBAR
+     --------------------------------------------------------- */
+  html.dark body.tuition-portal-responsive-mode .tuition-portal-header-card,
+  body.dark.tuition-portal-responsive-mode .tuition-portal-header-card {
+    background: linear-gradient(145deg, #111c31 0%, #0a1325 100%) !important;
+    border-color: rgba(148, 163, 184, 0.22) !important;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.07) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-mobile-menu-button,
+  html.dark body.tuition-portal-responsive-mode .tuition-mobile-header-action,
+  body.dark.tuition-portal-responsive-mode .tuition-mobile-menu-button,
+  body.dark.tuition-portal-responsive-mode .tuition-mobile-header-action {
+    background: #111c31 !important;
+    color: #e8eefb !important;
+    border-color: rgba(148, 163, 184, 0.24) !important;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .ivs-tuition-clock-shell,
+  body.dark.tuition-portal-responsive-mode .ivs-tuition-clock-shell {
+    background: linear-gradient(145deg, #121e34 0%, #0a1427 100%) !important;
+    border-color: rgba(148, 163, 184, 0.24) !important;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-clock-time,
+  html.dark body.tuition-portal-responsive-mode .ivs-tuition-clock-shell > div > div:nth-child(2) > div:first-child,
+  body.dark.tuition-portal-responsive-mode .tuition-clock-time,
+  body.dark.tuition-portal-responsive-mode .ivs-tuition-clock-shell > div > div:nth-child(2) > div:first-child {
+    color: #f8fafc !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-clock-day,
+  body.dark.tuition-portal-responsive-mode .tuition-clock-day {
+    color: #cbd5e1 !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-clock-date,
+  html.dark body.tuition-portal-responsive-mode .ivs-tuition-clock-shell > div > div:nth-child(2) > div:last-child,
+  body.dark.tuition-portal-responsive-mode .tuition-clock-date,
+  body.dark.tuition-portal-responsive-mode .ivs-tuition-clock-shell > div > div:nth-child(2) > div:last-child {
+    color: #8fa0ba !important;
+  }
+
+  /* ---------------------------------------------------------
+     MOBILE SIDEBAR — remove the washed-out white glass effect
+     --------------------------------------------------------- */
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell {
+    background: linear-gradient(180deg, #0d172a 0%, #08111f 100%) !important;
+    border-color: rgba(148, 163, 184, 0.22) !important;
+    color: #f8fafc !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: 22px 26px 58px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.065) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell > div,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell > div {
+    background: transparent !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell [class*="bg-white"],
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell [class*="bg-white"] {
+    background: #111c31 !important;
+    border-color: rgba(148, 163, 184, 0.21) !important;
+    box-shadow: 0 9px 22px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.045) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell .bg-slate-950,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell .bg-slate-950 {
+    background: #030712 !important;
+    border-color: rgba(148, 163, 184, 0.18) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-950,
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-900,
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-800,
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-700,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-950,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-900,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-800,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-700 {
+    color: #edf4ff !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-600,
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-500,
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-400,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-600,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-500,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell .text-slate-400 {
+    color: #aebbd0 !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell nav button,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell nav button {
+    color: #cbd5e1 !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell nav button:hover,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell nav button:hover {
+    background: rgba(79, 70, 229, 0.12) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell nav button .text-indigo-700,
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell nav button .text-indigo-600,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell nav button .text-indigo-700,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell nav button .text-indigo-600 {
+    color: #a9c8ff !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-ai-card,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-ai-card {
+    background: linear-gradient(145deg, #121e34 0%, #0b1427 100%) !important;
+    border-color: rgba(148, 163, 184, 0.21) !important;
+    color: #f8fafc !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-logout,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-logout {
+    background: rgba(127, 29, 29, 0.24) !important;
+    border-color: rgba(251, 113, 133, 0.28) !important;
+    color: #fda4af !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell .bg-slate-200\/70,
+  html.dark body.tuition-portal-responsive-mode .tuition-sidebar-shell .bg-slate-200,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell .bg-slate-200\/70,
+  body.dark.tuition-portal-responsive-mode .tuition-sidebar-shell .bg-slate-200 {
+    background: rgba(148, 163, 184, 0.16) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-mobile-sidebar-backdrop,
+  html.dark body.tuition-portal-responsive-mode button.fixed.inset-0[aria-label="Close menu"],
+  body.dark.tuition-portal-responsive-mode .tuition-mobile-sidebar-backdrop,
+  body.dark.tuition-portal-responsive-mode button.fixed.inset-0[aria-label="Close menu"] {
+    background: rgba(2, 6, 23, 0.62) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* ---------------------------------------------------------
+     ACCOUNTS & ENROLLMENT DARK MODE
+     --------------------------------------------------------- */
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive {
+    color: #f8fafc !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-hero,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-tabs-panel,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-table-scroll,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-hero,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-tabs-panel,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-table-scroll {
+    background: linear-gradient(145deg, rgba(17, 28, 49, 0.98), rgba(8, 17, 31, 0.98)) !important;
+    border-color: rgba(148, 163, 184, 0.20) !important;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.045) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-hero .grid > div,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-hero .grid > div {
+    background: #111c31 !important;
+    border-color: rgba(148, 163, 184, 0.20) !important;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive h1,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive h2,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive h3,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-950,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-900,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-800,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-700,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive h1,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive h2,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive h3,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-950,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-900,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-800,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-700 {
+    color: #f8fafc !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-600,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-500,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-400,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-600,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-500,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive .text-slate-400 {
+    color: #aebbd0 !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-tab-list,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-tab-list {
+    background: rgba(8, 17, 31, 0.92) !important;
+    border-color: rgba(148, 163, 184, 0.18) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-tab-list > button,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-tab-list > button {
+    color: #b8c5d8 !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-tab-list > button[class*="bg-white"],
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-tab-list > button[class*="bg-white"] {
+    background: #17233a !important;
+    color: #c8d9ff !important;
+    border-color: rgba(96, 165, 250, 0.28) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-search-wrap input,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive select,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive textarea,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-search-wrap input,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive select,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive textarea {
+    background: rgba(3, 7, 18, 0.72) !important;
+    color: #f8fafc !important;
+    border-color: rgba(148, 163, 184, 0.25) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive table,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive thead,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive tbody,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive tr,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive th,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive td,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive table,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive thead,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive tbody,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive tr,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive th,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive td {
+    background: #0b1426 !important;
+    border-color: rgba(148, 163, 184, 0.14) !important;
+    color: #eaf1fb !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive thead,
+  html.dark body.tuition-portal-responsive-mode .tuition-accounts-responsive th,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive thead,
+  body.dark.tuition-portal-responsive-mode .tuition-accounts-responsive th {
+    background: #101a2e !important;
+    color: #b7c5da !important;
+  }
+
+  /* ---------------------------------------------------------
+     MOBILE SCHEDULE — teachers stay rows; time slots stay columns
+     --------------------------------------------------------- */
+  body.tuition-portal-responsive-mode .tuition-schedule-mobile-matrix {
+    display: none !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-matrix {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-desktop-table,
+  body.tuition-portal-responsive-mode .tuition-schedule-panel table {
+    width: max-content !important;
+    min-width: max-content !important;
+    table-layout: fixed !important;
+  }
+
+  /* Strong fallback selectors are included because old mobile patches may not
+     have all semantic classes on every local copy. */
+  body.tuition-portal-responsive-mode .tuition-schedule-corner-header,
+  body.tuition-portal-responsive-mode .tuition-schedule-teacher-row-header,
+  body.tuition-portal-responsive-mode .tuition-schedule-panel table thead tr > th:first-child,
+  body.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > th:first-child {
+    position: static !important;
+    left: auto !important;
+    z-index: 1 !important;
+    width: 132px !important;
+    min-width: 132px !important;
+    max-width: 132px !important;
+    padding: 6px !important;
+    vertical-align: middle !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-time-header,
+  body.tuition-portal-responsive-mode .tuition-schedule-matrix-cell,
+  body.tuition-portal-responsive-mode .tuition-schedule-panel table thead tr > th:not(:first-child),
+  body.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > td {
+    width: 176px !important;
+    min-width: 176px !important;
+    max-width: 176px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-teacher-card,
+  body.tuition-portal-responsive-mode .tuition-schedule-teacher-row-header > div,
+  body.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > th:first-child > div {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    min-height: 82px !important;
+    padding: 8px !important;
+    border-radius: 18px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-teacher-card > div,
+  body.tuition-portal-responsive-mode .tuition-schedule-teacher-row-header > div > div,
+  body.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > th:first-child > div > div {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 8px !important;
+    min-width: 0 !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-teacher-badge,
+  body.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > th:first-child > div > div > div:first-child {
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    min-height: 36px !important;
+    border-radius: 13px !important;
+    font-size: 11px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-teacher-name,
+  body.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > th:first-child [title] {
+    display: -webkit-box !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: break-word !important;
+    -webkit-box-orient: vertical !important;
+    -webkit-line-clamp: 2 !important;
+    font-size: 12px !important;
+    line-height: 1.18 !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-teacher-username {
+    display: block !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    font-size: 10px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-schedule-matrix-cell,
+  body.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > td {
+    padding: 6px !important;
+    vertical-align: middle !important;
+  }
+
+  /* Dark schedule surfaces. These override older hard-coded white mobile rules. */
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel-heading,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-desktop-matrix,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel table,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel-heading,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-desktop-matrix,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel table {
+    background: #08111f !important;
+    border-color: rgba(148, 163, 184, 0.18) !important;
+    color: #f8fafc !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel-heading h3,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel-heading .text-slate-950,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel-heading .text-slate-900,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel-heading h3,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel-heading .text-slate-950,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel-heading .text-slate-900 {
+    color: #f8fafc !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel-heading p,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel-heading p {
+    color: #aebbd0 !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-corner-header,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-teacher-row-header,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel table thead tr > th,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > th:first-child,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-corner-header,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-teacher-row-header,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel table thead tr > th,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > th:first-child {
+    background: #0d172a !important;
+    border-color: rgba(148, 163, 184, 0.16) !important;
+    color: #eaf1fb !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-teacher-card,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-teacher-row-header > div,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > th:first-child > div,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-teacher-card,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-teacher-row-header > div,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > th:first-child > div {
+    background: linear-gradient(145deg, #15223a 0%, #101a2d 100%) !important;
+    border-color: rgba(148, 163, 184, 0.18) !important;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-teacher-name,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > th:first-child [title],
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-teacher-name,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > th:first-child [title] {
+    color: #f8fafc !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-teacher-username,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-teacher-username {
+    color: #91a1b9 !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-time-header > div,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel table thead tr > th:not(:first-child) > div,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-time-header > div,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel table thead tr > th:not(:first-child) > div {
+    background: #111c31 !important;
+    border-color: rgba(148, 163, 184, 0.18) !important;
+    color: #f8fafc !important;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.035) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel table tbody td,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel table tbody td {
+    background: #08111f !important;
+    border-color: rgba(148, 163, 184, 0.12) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-matrix-cell > div,
+  html.dark body.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > td > div,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-matrix-cell > div,
+  body.dark.tuition-portal-responsive-mode .tuition-schedule-panel table tbody tr > td > div {
+    background: #111c31 !important;
+    border-color: rgba(148, 163, 184, 0.18) !important;
+    color: #f8fafc !important;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.035) !important;
+  }
+
+  /* ---------------------------------------------------------
+     CREATE / EDIT SCHEDULE MODAL
+     --------------------------------------------------------- */
+  body.tuition-portal-responsive-mode .tuition-create-schedule-overlay {
+    align-items: center !important;
+    padding: 6px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-create-schedule-modal {
+    width: calc(100vw - 12px) !important;
+    max-width: 640px !important;
+    max-height: calc(100dvh - 12px) !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    padding: 18px !important;
+    border-radius: 28px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-create-schedule-teacher-card {
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    padding: 16px !important;
+    border-radius: 24px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-create-schedule-teacher-layout {
+    display: grid !important;
+    grid-template-columns: 50px minmax(0, 1fr) !important;
+    grid-template-rows: auto auto !important;
+    align-items: center !important;
+    column-gap: 7px !important;
+    row-gap: 12px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-create-schedule-teacher-avatar {
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+    align-self: center !important;
+    justify-self: center !important;
+    width: 50px !important;
+    min-width: 50px !important;
+    max-width: 50px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-create-schedule-teacher-info {
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    margin-left: -4px !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-create-schedule-teacher-info,
+  body.tuition-portal-responsive-mode .tuition-create-schedule-teacher-info * {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    word-break: normal !important;
+    overflow-wrap: break-word !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-create-schedule-teacher-info .truncate,
+  body.tuition-portal-responsive-mode .tuition-create-schedule-teacher-info [class*="truncate"] {
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: normal !important;
+  }
+
+  body.tuition-portal-responsive-mode .tuition-create-schedule-time-pill {
+    grid-column: 1 / -1 !important;
+    grid-row: 2 !important;
+    justify-self: stretch !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 10px 16px !important;
+    text-align: center !important;
+    white-space: nowrap !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-overlay,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-overlay {
+    background: rgba(2, 6, 23, 0.72) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-modal,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-modal {
+    background: linear-gradient(180deg, #0d172a 0%, #08111f 100%) !important;
+    border-color: rgba(148, 163, 184, 0.22) !important;
+    color: #f8fafc !important;
+    box-shadow: 0 28px 80px rgba(0, 0, 0, 0.56), inset 0 1px 0 rgba(255, 255, 255, 0.055) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-modal h1,
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-modal h2,
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-modal h3,
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-950,
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-900,
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-800,
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-700,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-modal h1,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-modal h2,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-modal h3,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-950,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-900,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-800,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-700 {
+    color: #f8fafc !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-600,
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-500,
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-400,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-600,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-500,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-modal .text-slate-400 {
+    color: #aebbd0 !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-teacher-card,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-teacher-card {
+    background: linear-gradient(145deg, #15223a 0%, #101a2d 100%) !important;
+    border-color: rgba(148, 163, 184, 0.20) !important;
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.045) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-time-pill,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-time-pill {
+    background: #0b1426 !important;
+    border-color: rgba(148, 163, 184, 0.24) !important;
+    color: #eaf1fb !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035) !important;
+  }
+
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-modal select,
+  html.dark body.tuition-portal-responsive-mode .tuition-create-schedule-modal input,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-modal select,
+  body.dark.tuition-portal-responsive-mode .tuition-create-schedule-modal input {
+    background: #0b1426 !important;
+    border-color: rgba(148, 163, 184, 0.25) !important;
+    color: #f8fafc !important;
+  }
+}
+/* IVS TUITION MOBILE DARK MODE SCHEDULE LAYOUT FIX END */
+
+/* IVS TUITION MOBILE SCHEDULE HOVER PLUS ALIGNMENT FIX START */
+@media (max-width: 767px) {
+  /* Move teacher avatar and text slightly left in the schedule modal. */
+  body.tuition-portal-responsive-mode
+    .tuition-create-schedule-teacher-avatar {
+    position: relative !important;
+    transform: translateX(-12px) !important;
+  }
+
+  body.tuition-portal-responsive-mode
+    .tuition-create-schedule-teacher-info {
+    position: relative !important;
+    transform: translateX(-18px) !important;
+    margin-left: -6px !important;
+  }
+
+  /*
+   * Hide plus buttons in empty schedule cells until the user interacts
+   * with the cell. Existing click handlers remain unchanged.
+   */
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-matrix-cell
+    button[title="Open class panel"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-matrix-cell
+    button[title="Create schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-matrix-cell
+    button[title="Add schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-panel
+    table
+    tbody
+    tr
+    > td
+    button[title="Open class panel"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-panel
+    table
+    tbody
+    tr
+    > td
+    button[title="Create schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-panel
+    table
+    tbody
+    tr
+    > td
+    button[title="Add schedule"] {
+    opacity: 0 !important;
+    transform: scale(0.84) !important;
+    pointer-events: none !important;
+    transition:
+      opacity 160ms ease,
+      transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1) !important;
+  }
+
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-matrix-cell:hover
+    button[title="Open class panel"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-matrix-cell:hover
+    button[title="Create schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-matrix-cell:hover
+    button[title="Add schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-matrix-cell:focus-within
+    button[title="Open class panel"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-matrix-cell:focus-within
+    button[title="Create schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-matrix-cell:focus-within
+    button[title="Add schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-matrix-cell:active
+    button[title="Open class panel"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-matrix-cell:active
+    button[title="Create schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-matrix-cell:active
+    button[title="Add schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-panel
+    table
+    tbody
+    tr
+    > td:hover
+    button[title="Open class panel"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-panel
+    table
+    tbody
+    tr
+    > td:hover
+    button[title="Create schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-panel
+    table
+    tbody
+    tr
+    > td:hover
+    button[title="Add schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-panel
+    table
+    tbody
+    tr
+    > td:focus-within
+    button[title="Open class panel"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-panel
+    table
+    tbody
+    tr
+    > td:focus-within
+    button[title="Create schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-panel
+    table
+    tbody
+    tr
+    > td:focus-within
+    button[title="Add schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-panel
+    table
+    tbody
+    tr
+    > td:active
+    button[title="Open class panel"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-panel
+    table
+    tbody
+    tr
+    > td:active
+    button[title="Create schedule"],
+  body.tuition-portal-responsive-mode
+    .tuition-schedule-panel
+    table
+    tbody
+    tr
+    > td:active
+    button[title="Add schedule"] {
+    opacity: 1 !important;
+    transform: scale(1) !important;
+    pointer-events: auto !important;
+  }
+
+  /*
+   * Touch devices do not have a persistent mouse hover. The whole cell
+   * remains clickable through the existing cell handler.
+   */
+  @media (hover: none) {
+    body.tuition-portal-responsive-mode
+      .tuition-schedule-matrix-cell:focus-within
+      button,
+    body.tuition-portal-responsive-mode
+      .tuition-schedule-matrix-cell:active
+      button,
+    body.tuition-portal-responsive-mode
+      .tuition-schedule-panel
+      table
+      tbody
+      tr
+      > td:focus-within
+      button,
+    body.tuition-portal-responsive-mode
+      .tuition-schedule-panel
+      table
+      tbody
+      tr
+      > td:active
+      button {
+      opacity: 1 !important;
+      transform: scale(1) !important;
+      pointer-events: auto !important;
+    }
+  }
+}
+/* IVS TUITION MOBILE SCHEDULE HOVER PLUS ALIGNMENT FIX END */
+
+/* =========================================================
+   Main Admin mobile drawer structure repair
+   The earlier generic sidebar rule forces every direct child
+   to height: 100%, which stretches the brand card over the
+   full drawer. This scoped override restores natural heights.
+   ========================================================= */
+@media (max-width: 767px) {
+  aside.main-admin-sidebar {
+    top: 0 !important;
+    bottom: 0 !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    overflow: hidden !important;
+  }
+
+  aside.main-admin-sidebar[class*="fixed"][class*="inset-y-0"] > div {
+    height: auto !important;
+    min-height: initial !important;
+    max-height: none !important;
+    flex: 0 0 auto !important;
+  }
+
+  aside.main-admin-sidebar > nav {
+    height: auto !important;
+    min-height: 0 !important;
+    flex: 1 1 auto !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+  }
+}

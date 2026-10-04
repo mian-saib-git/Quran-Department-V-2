@@ -1,0 +1,168 @@
+{
+  "source": {
+    "id": 1,
+    "name": "Quran Department",
+    "code": "quran",
+    "department_type": "quran"
+  },
+  "target": {
+    "id": 5,
+    "name": "IVS Qur\u2019an Department",
+    "code": "ivs-quran-department",
+    "department_type": "quran"
+  },
+  "source_features": [
+    {
+      "feature_id": 15,
+      "feature": "Daily Classes Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 16,
+      "feature": "Accounts & Enrollment Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 17,
+      "feature": "Lessons Control Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 18,
+      "feature": "Scheduling Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 19,
+      "feature": "Attendance Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 20,
+      "feature": "Reports Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 54,
+      "feature": "Dropped & Leave Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 55,
+      "feature": "Teacher Salary Management Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 8,
+      "feature": "PDF Reports",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 21,
+      "feature": "CSV Export",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 22,
+      "feature": "Excel Export",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 23,
+      "feature": "Bulk Import",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 24,
+      "feature": "Delete Accounts",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 25,
+      "feature": "Delete Schedule",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 10,
+      "feature": "AI Assistant",
+      "is_enabled": true
+    }
+  ],
+  "target_features": [
+    {
+      "feature_id": 15,
+      "feature": "Daily Classes Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 16,
+      "feature": "Accounts & Enrollment Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 17,
+      "feature": "Lessons Control Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 18,
+      "feature": "Scheduling Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 19,
+      "feature": "Attendance Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 20,
+      "feature": "Reports Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 54,
+      "feature": "Dropped & Leave Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 55,
+      "feature": "Teacher Salary Management Tab",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 8,
+      "feature": "PDF Reports",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 21,
+      "feature": "CSV Export",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 22,
+      "feature": "Excel Export",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 23,
+      "feature": "Bulk Import",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 24,
+      "feature": "Delete Accounts",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 25,
+      "feature": "Delete Schedule",
+      "is_enabled": true
+    },
+    {
+      "feature_id": 10,
+      "feature": "AI Assistant",
+      "is_enabled": true
+    }
+  ]
+}
