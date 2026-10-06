@@ -3,7 +3,6 @@
 // IVS_ATTENDANCE_FRONTEND_RESPONSIVENESS_V16
 import { connectAcademyWS, disconnectAcademyWS, useAcademyWS } from "././hooks/useAcademyWS";
 import React, { useState, useEffect, useMemo, lazy, Suspense, useRef, startTransition, useCallback } from "react";
-import Lottie from "lottie-react";
 import {
   loadSession,
   saveSession,
@@ -52,7 +51,11 @@ import { ClassCard } from "./components/ClassCard";
 // IVS_QURAN_LIVE_CARDS_ULTRA_COMPACT_NO_SHADOW_V20
 // IVS_QURAN_MOBILE_SIDEBAR_SHADOW_FIX_V21
 // IVS_QURAN_MOBILE_SIDEBAR_FULLY_HIDDEN_V22
-import { SchedulingTab } from "./components/SchedulingTab";
+const SchedulingTab = lazy(() =>
+  import("./components/SchedulingTab").then((m) => ({ default: m.SchedulingTab }))
+);
+const Lottie = lazy(() => import("lottie-react"));
+const DashboardTimelineChart = lazy(() => import("./components/DashboardTimelineChart"));
 const AssistantChat = lazy(() =>
   import("./components/AssistantChat").then((m) => ({ default: m.AssistantChat }))
 );
@@ -73,9 +76,12 @@ const TuitionCoordinatorPortal = lazy(() => import("./components/tuition/Tuition
 const TuitionPendingPortal = lazy(() => import("./components/tuition/TuitionPendingPortal"));
 const TuitionStudentPortal = lazy(() => import("./components/tuition/TuitionStudentPortal"));
 const TuitionTeacherPortal = lazy(() => import("./components/tuition/TuitionTeacherPortal"));
-import { TeacherPortal } from "./components/TeacherPortal";
-import { StudentPortal } from "./components/StudentPortal";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
+const TeacherPortal = lazy(() =>
+  import("./components/TeacherPortal").then((m) => ({ default: m.TeacherPortal }))
+);
+const StudentPortal = lazy(() =>
+  import("./components/StudentPortal").then((m) => ({ default: m.StudentPortal }))
+);
 
 
 
@@ -83,10 +89,10 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 
 
 
 import {
-Users, Calendar, BarChart3, LogOut,
-LayoutDashboard, Plus, Trash2, Edit2,
-ChevronRight, Menu, X, CalendarDays, CalendarClock,
-Settings, BookOpen, ShieldCheck, Sun, Moon, LockKeyhole, UserMinus, CircleDollarSign
+  Users, Calendar, BarChart3, LogOut,
+  LayoutDashboard, Plus, Trash2, Edit2,
+  ChevronRight, Menu, X, CalendarDays, CalendarClock,
+  Settings, BookOpen, ShieldCheck, Sun, Moon, LockKeyhole, UserMinus, CircleDollarSign
 } from "lucide-react";
 
 import { Users2 } from "lucide-react";
@@ -126,7 +132,7 @@ const NAV_META: Record<TabId, { label: string; icon: any }> = {
     label: "Scheduling",
     icon: CalendarClock,
   },
-  
+
   attendance: {
     label: "Attendance",
     icon: Calendar,
@@ -341,8 +347,8 @@ function SoftChip({
     tone === "primary"
       ? "bg-indigo-50 text-indigo-700 border-indigo-100"
       : tone === "info"
-      ? "bg-emerald-50 text-emerald-700 border-emerald-100"
-      : "bg-slate-50 text-slate-700 border-slate-200";
+        ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+        : "bg-slate-50 text-slate-700 border-slate-200";
 
   return (
     <span
@@ -408,6 +414,60 @@ function TabLoading() {
   return (
     <div className="min-h-[260px] p-4 sm:p-6">
       <PageSkeleton variant="cards" cards={6} compact label="Loading workspace section" />
+    </div>
+  );
+}
+
+function DepartmentWorkspaceLoading() {
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <div className="flex">
+        <aside className="hidden md:block m-4 h-[calc(100vh-2rem)] w-[76px] shrink-0 rounded-[28px] border border-white/70 bg-white/68 shadow-none">
+          <div className="flex h-full flex-col items-center gap-3 px-3 py-5">
+            <div className="ivs-skeleton h-[52px] w-[52px] rounded-[17px]" />
+            <div className="ivs-skeleton h-[52px] w-[52px] rounded-[17px]" />
+            <div className="my-1 h-px w-10 bg-slate-200/70" />
+            {Array.from({ length: 7 }).map((_, index) => (
+              <div key={index} className="ivs-skeleton h-[52px] w-[52px] rounded-[17px]" />
+            ))}
+            <div className="mt-auto ivs-skeleton h-[52px] w-[52px] rounded-[17px]" />
+          </div>
+        </aside>
+
+        <main className="flex h-screen flex-1 flex-col overflow-hidden relative">
+          <header className="mx-3 mb-1.5 mt-2 md:mx-4 md:mt-3">
+            <div className="rounded-[24px] border border-slate-200/80 bg-white/82 px-4 py-2 shadow-[0_16px_40px_rgba(15,23,42,0.06)] md:px-5">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="ivs-skeleton h-10 w-10 rounded-2xl md:hidden" />
+                  <div className="hidden min-w-0 items-center gap-3 md:flex">
+                    <div className="ivs-skeleton h-10 w-10 shrink-0 rounded-2xl" />
+                    <div className="min-w-0 space-y-2">
+                      <div className="ivs-skeleton h-4 w-36 rounded-full" />
+                      <div className="ivs-skeleton h-3 w-28 rounded-full" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 sm:gap-4">
+                  <div className="ivs-skeleton h-10 w-28 rounded-[24px]" />
+                  <div className="ivs-skeleton h-10 w-10 rounded-2xl" />
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <div className="flex-1 overflow-y-auto p-4 pb-16 md:p-8 md:pb-8">
+            <PageSkeleton
+              variant="dashboard"
+              cards={6}
+              delayMs={0}
+              label="Loading department workspace"
+              className="min-h-[640px]"
+            />
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
@@ -859,183 +919,203 @@ export default function App() {
   ]);
 
 
-const [themeMode, setThemeMode] = useState<"light" | "dark">(() => {
-  try {
-    return localStorage.getItem("ivs_theme_mode") === "dark" ? "dark" : "light";
-  } catch {
-    return "light";
-  }
-});
-
-const applyThemeModeFast = (mode: "light" | "dark") => {
-  const root = document.documentElement;
-
-  // Disable expensive transitions only during theme switch
-  root.classList.add("theme-fast-switch");
-
-  if (mode === "dark") {
-    root.classList.add("dark");
-  } else {
-    root.classList.remove("dark");
-  }
-
-  try {
-    localStorage.setItem("ivs_theme_mode", mode);
-  } catch {
-    // ignore
-  }
-
-  window.setTimeout(() => {
-    root.classList.remove("theme-fast-switch");
-  }, 120);
-};
-
-const toggleTheme = () => {
-  setThemeMode((current) => {
-    const next = current === "dark" ? "light" : "dark";
-    applyThemeModeFast(next);
-    return next;
+  const [themeMode, setThemeMode] = useState<"light" | "dark">(() => {
+    try {
+      return localStorage.getItem("ivs_theme_mode") === "dark" ? "dark" : "light";
+    } catch {
+      return "light";
+    }
   });
-};
 
-const [superAdminSaving, setSuperAdminSaving] = useState(false);
+  const applyThemeModeFast = (mode: "light" | "dark") => {
+    const root = document.documentElement;
 
-const [toast, setToast] = useState("");
+    // Disable expensive transitions only during theme switch
+    root.classList.add("theme-fast-switch");
 
-useEffect(() => {
-  const handleToast = (e: Event) => {
-    const msg = (e as CustomEvent<string>).detail || "Done";
-    setToast(msg);
-    setTimeout(() => setToast(""), 2500);
-  };
-  window.addEventListener("ivs-toast", handleToast);
-  return () => window.removeEventListener("ivs-toast", handleToast);
-}, []);
-const [aiBotAnimation, setAiBotAnimation] = useState<any>(null);
-
-useEffect(() => {
-  fetch("/ai-bot.json")
-    .then((res) => res.json())
-    .then((data) => setAiBotAnimation(data))
-    .catch(() => setAiBotAnimation(null));
-}, []);
-const [superAdminForm, setSuperAdminForm] = useState(() => {
-  const user = (session as any)?.user || {};
-
-  return {
-    username: user.username || "",
-    email: user.email || "",
-    first_name: user.first_name || "",
-    last_name: user.last_name || "",
-    password: "",
-  };
-});
-
-useEffect(() => {
-  const user = (session as any)?.user || {};
-
-  setSuperAdminForm({
-    username: user.username || "",
-    email: user.email || "",
-    first_name: user.first_name || "",
-    last_name: user.last_name || "",
-    password: "",
-  });
-}, [session]);
-
-const saveSuperAdminProfile = async (e: React.FormEvent) => {
-  e.preventDefault();
-
-  if (!session?.user?.id) {
-    alert("Super admin account not found.");
-    return;
-  }
-
-  const username = superAdminForm.username.trim();
-  const email = superAdminForm.email.trim();
-  const firstName = superAdminForm.first_name.trim();
-  const lastName = superAdminForm.last_name.trim();
-  const password = superAdminForm.password.trim();
-
-  if (!username) {
-    alert("Username is required.");
-    return;
-  }
-
-  if (password && password.length < 6) {
-    alert("Password must be at least 6 characters.");
-    return;
-  }
-
-  try {
-    setSuperAdminSaving(true);
-
-    const payload: any = {
-      role: "coordinator",
-      username,
-      email,
-      first_name: firstName,
-      last_name: lastName,
-      is_active: true,
-    };
-
-    if (password) {
-      payload.password = password;
+    if (mode === "dark") {
+      root.classList.add("dark");
+    } else {
+      root.classList.remove("dark");
     }
 
-    const updated: any = await updateMyProfile(payload);
+    try {
+      localStorage.setItem("ivs_theme_mode", mode);
+    } catch {
+      // ignore
+    }
 
-    const nextUser = {
-      ...(session.user as any),
-      username: updated.username || username,
-      email: updated.email || email,
-      first_name: updated.first_name || firstName,
-      last_name: updated.last_name || lastName,
-      full_name:
-        updated.full_name ||
-        `${firstName} ${lastName}`.trim() ||
-        username,
+    window.setTimeout(() => {
+      root.classList.remove("theme-fast-switch");
+    }, 120);
+  };
+
+  const toggleTheme = () => {
+    setThemeMode((current) => {
+      const next = current === "dark" ? "light" : "dark";
+      applyThemeModeFast(next);
+      return next;
+    });
+  };
+
+  const [superAdminSaving, setSuperAdminSaving] = useState(false);
+
+  const [toast, setToast] = useState("");
+
+  useEffect(() => {
+    const handleToast = (e: Event) => {
+      const msg = (e as CustomEvent<string>).detail || "Done";
+      setToast(msg);
+      setTimeout(() => setToast(""), 2500);
     };
+    window.addEventListener("ivs-toast", handleToast);
+    return () => window.removeEventListener("ivs-toast", handleToast);
+  }, []);
+  const [aiBotAnimation, setAiBotAnimation] = useState<any>(null);
+  const [shouldLoadAiAssets, setShouldLoadAiAssets] = useState(false);
 
-    const nextSession = {
-      ...session,
-      user: nextUser,
+  const requestAiAssistantAssets = useCallback(() => {
+    setShouldLoadAiAssets(true);
+  }, []);
+
+  useEffect(() => {
+    if (!shouldLoadAiAssets || aiBotAnimation) return;
+
+    let cancelled = false;
+
+    fetch("/ai-bot.json")
+      .then((res) => {
+        if (!res.ok) throw new Error(`AI animation failed: ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        if (!cancelled) setAiBotAnimation(data);
+      })
+      .catch(() => {
+        if (!cancelled) setAiBotAnimation(null);
+      });
+
+    return () => {
+      cancelled = true;
     };
+  }, [aiBotAnimation, shouldLoadAiAssets]);
+  const [superAdminForm, setSuperAdminForm] = useState(() => {
+    const user = (session as any)?.user || {};
 
-    setSession(nextSession);
-    saveSession(nextSession);
-
-    setSuperAdminForm((prev) => ({
-      ...prev,
+    return {
+      username: user.username || "",
+      email: user.email || "",
+      first_name: user.first_name || "",
+      last_name: user.last_name || "",
       password: "",
-    }));
+    };
+  });
 
-window.dispatchEvent(
-  new CustomEvent("ivs-toast", {
-    detail: "Super admin profile saved",
-  })
-);
-setShowModal(false);
-  } catch (err: any) {
-    window.dispatchEvent(
-  new CustomEvent("ivs-toast", {
-    detail: err?.message || "Could not update super admin profile.",
-  })
-);
-  } finally {
-    setSuperAdminSaving(false);
-  }
-};
+  useEffect(() => {
+    const user = (session as any)?.user || {};
+
+    setSuperAdminForm({
+      username: user.username || "",
+      email: user.email || "",
+      first_name: user.first_name || "",
+      last_name: user.last_name || "",
+      password: "",
+    });
+  }, [session]);
+
+  const saveSuperAdminProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!session?.user?.id) {
+      alert("Super admin account not found.");
+      return;
+    }
+
+    const username = superAdminForm.username.trim();
+    const email = superAdminForm.email.trim();
+    const firstName = superAdminForm.first_name.trim();
+    const lastName = superAdminForm.last_name.trim();
+    const password = superAdminForm.password.trim();
+
+    if (!username) {
+      alert("Username is required.");
+      return;
+    }
+
+    if (password && password.length < 6) {
+      alert("Password must be at least 6 characters.");
+      return;
+    }
+
+    try {
+      setSuperAdminSaving(true);
+
+      const payload: any = {
+        role: "coordinator",
+        username,
+        email,
+        first_name: firstName,
+        last_name: lastName,
+        is_active: true,
+      };
+
+      if (password) {
+        payload.password = password;
+      }
+
+      const updated: any = await updateMyProfile(payload);
+
+      const nextUser = {
+        ...(session.user as any),
+        username: updated.username || username,
+        email: updated.email || email,
+        first_name: updated.first_name || firstName,
+        last_name: updated.last_name || lastName,
+        full_name:
+          updated.full_name ||
+          `${firstName} ${lastName}`.trim() ||
+          username,
+      };
+
+      const nextSession = {
+        ...session,
+        user: nextUser,
+      };
+
+      setSession(nextSession);
+      saveSession(nextSession);
+
+      setSuperAdminForm((prev) => ({
+        ...prev,
+        password: "",
+      }));
+
+      window.dispatchEvent(
+        new CustomEvent("ivs-toast", {
+          detail: "Super admin profile saved",
+        })
+      );
+      setShowModal(false);
+    } catch (err: any) {
+      window.dispatchEvent(
+        new CustomEvent("ivs-toast", {
+          detail: err?.message || "Could not update super admin profile.",
+        })
+      );
+    } finally {
+      setSuperAdminSaving(false);
+    }
+  };
   // ✅ Save session when it changes
-useEffect(() => {
-  try {
-    localStorage.setItem("ivs_theme_mode", themeMode);
-  } catch {
-    // ignore
-  }
+  useEffect(() => {
+    try {
+      localStorage.setItem("ivs_theme_mode", themeMode);
+    } catch {
+      // ignore
+    }
 
-  document.documentElement.classList.toggle("dark", themeMode === "dark");
-}, [themeMode]);
+    document.documentElement.classList.toggle("dark", themeMode === "dark");
+  }, [themeMode]);
 
   // =====================
   // Role helpers
@@ -1164,7 +1244,8 @@ useEffect(() => {
     [featureContextLoaded, isPlatformAdmin, isTabLocked, isTuitionFeatureContext]
   );
   const roleLabel = isPlatformAdmin ? "Platform Admin" : isDepartmentAdmin ? `${quranDepartmentDisplayName} Admin` : "Coordinator";
-  const roleIconSrc = isPlatformAdmin ? "/superadmin-icon.png" : isDepartmentAdmin ? "/superadmin-icon.png" : "/coordinator-icon.png";
+  const RoleSidebarIcon =
+    isPlatformAdmin || isDepartmentAdmin ? ShieldCheck : Users2;
   const sidebarDisplayName = useMemo(() => {
     const current = (session as any)?.user || {};
     const fullName = String(
@@ -1248,48 +1329,48 @@ useEffect(() => {
 
 
   // Login form
-// Login form
-const REMEMBERED_LOGIN_KEY = "ivs_remembered_username";
+  // Login form
+  const REMEMBERED_LOGIN_KEY = "ivs_remembered_username";
 
-const [loginUsername, setLoginUsername] = useState(() => {
-  try {
-    return localStorage.getItem(REMEMBERED_LOGIN_KEY) || "";
-  } catch {
-    return "";
-  }
-});
+  const [loginUsername, setLoginUsername] = useState(() => {
+    try {
+      return localStorage.getItem(REMEMBERED_LOGIN_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
 
-const [loginPassword, setLoginPassword] = useState("");
-const [loginError, setLoginError] = useState("");
-const [loginLoading, setLoginLoading] = useState(false);
-const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
 
-const [rememberLogin, setRememberLogin] = useState(() => {
-  try {
-    return Boolean(localStorage.getItem(REMEMBERED_LOGIN_KEY));
-  } catch {
-    return false;
-  }
-});
-// Settings
-const [settingsTab, setSettingsTab] = useState<"profile" | "login" | "appearance">("profile");
-const [superAdminUsername, setSuperAdminUsername] = useState(() => session?.user?.username || "");
-const [superAdminFirstName, setSuperAdminFirstName] = useState(() => (session?.user as any)?.first_name || "");
-const [superAdminLastName, setSuperAdminLastName] = useState(() => (session?.user as any)?.last_name || "");
-const [superAdminEmail, setSuperAdminEmail] = useState(() => session?.user?.email || "");
-const [superAdminPassword, setSuperAdminPassword] = useState("");
-const [settingsMessage, setSettingsMessage] = useState("");
+  const [rememberLogin, setRememberLogin] = useState(() => {
+    try {
+      return Boolean(localStorage.getItem(REMEMBERED_LOGIN_KEY));
+    } catch {
+      return false;
+    }
+  });
+  // Settings
+  const [settingsTab, setSettingsTab] = useState<"profile" | "login" | "appearance">("profile");
+  const [superAdminUsername, setSuperAdminUsername] = useState(() => session?.user?.username || "");
+  const [superAdminFirstName, setSuperAdminFirstName] = useState(() => (session?.user as any)?.first_name || "");
+  const [superAdminLastName, setSuperAdminLastName] = useState(() => (session?.user as any)?.last_name || "");
+  const [superAdminEmail, setSuperAdminEmail] = useState(() => session?.user?.email || "");
+  const [superAdminPassword, setSuperAdminPassword] = useState("");
+  const [settingsMessage, setSettingsMessage] = useState("");
 
-useEffect(() => {
-  if (!session?.user) return;
+  useEffect(() => {
+    if (!session?.user) return;
 
-  const sessionUser = session.user as any;
+    const sessionUser = session.user as any;
 
-  setSuperAdminUsername(sessionUser.username || "");
-  setSuperAdminFirstName(sessionUser.first_name || "");
-  setSuperAdminLastName(sessionUser.last_name || "");
-  setSuperAdminEmail(sessionUser.email || "");
-}, [session]);
+    setSuperAdminUsername(sessionUser.username || "");
+    setSuperAdminFirstName(sessionUser.first_name || "");
+    setSuperAdminLastName(sessionUser.last_name || "");
+    setSuperAdminEmail(sessionUser.email || "");
+  }, [session]);
 
   // CSV import
   const [csvImportMessage, setCsvImportMessage] = useState<string>("");
@@ -1297,64 +1378,65 @@ useEffect(() => {
   const [csvImportWarnings, setCsvImportWarnings] = useState<string[]>([]);
   const [csvImportPending, setCsvImportPending] = useState<{ teachers: Teacher[]; students: Student[] } | null>(null);
 
-  
+
   const [hydrated, setHydrated] = useState(false);
 
 
 
   // Modals
   const [showModal, setShowModal] = useState(false);
-const [modalMode, setModalMode] = useState<
-  "settings" | "class-details" | "add-student" | "edit-student"
->("settings");
+  const [modalMode, setModalMode] = useState<
+    "settings" | "class-details" | "add-student" | "edit-student"
+  >("settings");
 
 
 
   // Scheduling / Bulk
-const [viewingClass, setViewingClass] = useState<{ teacherId: string; timeSlot: string; students: Student[] } | null>(null);
-const [viewingTeacherId, setViewingTeacherId] = useState<string | null>(null);
-const [editingStudent, setEditingStudent] = useState<Student | null>(null);
-const [studentDaysDraft, setStudentDaysDraft] = useState<string[]>(
-  defaultDaysFromClassType(ClassType.FIVE_DAY)
-);
-// Search + mobile
-const [searchTerm, setSearchTerm] = useState("");
+  const [viewingClass, setViewingClass] = useState<{ teacherId: string; timeSlot: string; students: Student[] } | null>(null);
+  const [viewingTeacherId, setViewingTeacherId] = useState<string | null>(null);
+  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+  const [studentDaysDraft, setStudentDaysDraft] = useState<string[]>(
+    defaultDaysFromClassType(ClassType.FIVE_DAY)
+  );
+  // Search + mobile
+  const [searchTerm, setSearchTerm] = useState("");
   const [searchInput, setSearchInput] = useState("");
   // Debounce search to avoid re-rendering 895 students on every keystroke
   useEffect(() => {
     const t = setTimeout(() => setSearchTerm(searchInput), 200);
     return () => clearTimeout(t);
   }, [searchInput]);
-const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-const [sidebarEdgeHover, setSidebarEdgeHover] = useState(false);
-const [sidebarTextReady, setSidebarTextReady] = useState(false);
-const [insightsOpen, setInsightsOpen] = useState(false);
-const timelineCardRef = useRef<HTMLDivElement | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [sidebarEdgeHover, setSidebarEdgeHover] = useState(false);
+  const [sidebarTextReady, setSidebarTextReady] = useState(false);
+  const [insightsOpen, setInsightsOpen] = useState(false);
+  const timelineCardRef = useRef<HTMLDivElement | null>(null);
 
-const [timelinePopup, setTimelinePopup] = useState<{
-  slot: string;
-  x: number;
-  y: number;
-  pinned: boolean;
-} | null>(null);
-const [assistantOpen, setAssistantOpen] = useState(false);
+  const [timelinePopup, setTimelinePopup] = useState<{
+    slot: string;
+    x: number;
+    y: number;
+    pinned: boolean;
+  } | null>(null);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantHasOpened, setAssistantHasOpened] = useState(false);
 
 
 
-useEffect(() => {
-  const open = sidebarEdgeHover || mobileMenuOpen;
+  useEffect(() => {
+    const open = sidebarEdgeHover || mobileMenuOpen;
 
-  if (!open) {
-    setSidebarTextReady(false);
-    return;
-  }
+    if (!open) {
+      setSidebarTextReady(false);
+      return;
+    }
 
-  const timer = window.setTimeout(() => {
-    setSidebarTextReady(true);
-  }, 210);
+    const timer = window.setTimeout(() => {
+      setSidebarTextReady(true);
+    }, 210);
 
-  return () => window.clearTimeout(timer);
-}, [sidebarEdgeHover, mobileMenuOpen]);
+    return () => window.clearTimeout(timer);
+  }, [sidebarEdgeHover, mobileMenuOpen]);
 
 
 
@@ -1362,239 +1444,264 @@ useEffect(() => {
   // ---------------- Effects ----------------
 
   useEffect(() => {
-  if (!showModal) return;
-  if (modalMode !== "add-student" && modalMode !== "edit-student") return;
+    if (!showModal) return;
+    if (modalMode !== "add-student" && modalMode !== "edit-student") return;
 
-  const baseType = editingStudent?.classType || ClassType.FIVE_DAY;
-  const baseDays =
-    editingStudent?.classDays && editingStudent.classDays.length > 0
-      ? editingStudent.classDays
-      : defaultDaysFromClassType(baseType);
+    const baseType = editingStudent?.classType || ClassType.FIVE_DAY;
+    const baseDays =
+      editingStudent?.classDays && editingStudent.classDays.length > 0
+        ? editingStudent.classDays
+        : defaultDaysFromClassType(baseType);
 
-  setStudentDaysDraft(baseDays);
-}, [showModal, modalMode, editingStudent]);
+    setStudentDaysDraft(baseDays);
+  }, [showModal, modalMode, editingStudent]);
 
-const tabFromHash = (): TabId => {
-  const raw = (window.location.hash || "").replace("#", "").trim();
+  const tabFromHash = (): TabId => {
+    const raw = (window.location.hash || "").replace("#", "").trim();
 
-const validTabs: TabId[] = [
-  "dashboard",
-  "attendance",
-  "reports",
-  "scheduling",
-  "accounts",
-  "lessons",
-  "dropped-leave",
-  "teacher-salary",
-  "platform-admin",
-];
+    const validTabs: TabId[] = [
+      "dashboard",
+      "attendance",
+      "reports",
+      "scheduling",
+      "accounts",
+      "lessons",
+      "dropped-leave",
+      "teacher-salary",
+      "platform-admin",
+    ];
 
-  return validTabs.includes(raw as TabId) ? (raw as TabId) : "dashboard";
-};
-
-const navigateToTab = (tab: TabId) => {
-  setActiveTab(tab);
-
-  const nextHash = `#${tab}`;
-
-  if (window.location.hash !== nextHash) {
-    window.history.replaceState(null, "", nextHash);
-  }
-};
-
-// IVS_LIVE_CLASS_ACCOUNT_LINKS_V14
-const openDashboardAccountEditor = (
-  role: "teacher" | "student",
-  profileId: string,
-) => {
-  if (!hasFeature("tab_accounts_enrollment")) {
-    showFeatureLocked(
-      "Accounts & Enrollment",
-      `${quranDepartmentDisplayName} Accounts & Enrollment is currently disabled.`,
-    );
-    return;
-  }
-
-  setDashboardAccountEditTarget({
-    role,
-    profileId: String(profileId),
-    requestId: Date.now(),
-  });
-  navigateToTab("accounts");
-};
-
-useEffect(() => {
-  setActiveTab(tabFromHash());
-
-  const apply = () => {
-    setActiveTab(tabFromHash());
+    return validTabs.includes(raw as TabId) ? (raw as TabId) : "dashboard";
   };
 
-  window.addEventListener("popstate", apply);
-  window.addEventListener("hashchange", apply);
+  const navigateToTab = (tab: TabId) => {
+    setActiveTab(tab);
 
-  return () => {
-    window.removeEventListener("popstate", apply);
-    window.removeEventListener("hashchange", apply);
-  };
-}, []);
+    const nextHash = `#${tab}`;
 
-useEffect(() => {
-  if (
-    isPlatformAdmin ||
-    isTuitionFeatureContext ||
-    !featureContextLoaded ||
-    coordinatorNavItems.length === 0
-  ) {
-    return;
-  }
-
-  if (!coordinatorNavItems.includes(activeTab)) {
-    navigateToTab(coordinatorNavItems[0]);
-  }
-}, [
-  activeTab,
-  coordinatorNavItems,
-  featureContextLoaded,
-  isPlatformAdmin,
-  isTuitionFeatureContext,
-]);
-
-useEffect(() => {
-  // Direct URL protection applies only to the Quran workspace. Tuition has its
-  // own feature keys and locked-tab handling inside TuitionCoordinatorPortal.
-  if (!featureContextLoaded || isPlatformAdmin || isTuitionFeatureContext) return;
-
-  if (isTabHiddenByDepartmentAdmin(activeTab)) {
-    const fallback = firstEnabledCoordinatorTab;
-    if (fallback && fallback !== activeTab) navigateToTab(fallback);
-    return;
-  }
-
-  const featureKey = tabFeatureKey[activeTab];
-  if (!featureKey || hasFeature(featureKey)) return;
-
-  showFeatureLocked(
-    NAV_META[activeTab]?.label || "This section",
-    `${NAV_META[activeTab]?.label || "This section"} is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
-  );
-
-  const fallback = firstEnabledCoordinatorTab;
-
-  if (fallback && fallback !== activeTab) {
-    navigateToTab(fallback);
-  }
-}, [
-  activeTab,
-  coordinatorNavItems,
-  featureContextLoaded,
-  firstEnabledCoordinatorTab,
-  hasFeature,
-  isPlatformAdmin,
-  isTabHiddenByDepartmentAdmin,
-  isTuitionFeatureContext,
-]);
-
-useEffect(() => {
-  if (!session) return;
-
-  const timer = window.setTimeout(() => {
-    void import("./components/SchedulingTab");
-  }, 800);
-
-  return () => window.clearTimeout(timer);
-}, [session]);
-
-
- useEffect(() => {
-  let mounted = true;
-
-  const patchState = (loaded: AppState): AppState => {
-    const teacherIds = new Set(loaded.teachers.map((t) => t.id));
-
-    const teacherIdByName = new Map(
-      loaded.teachers.map((t) => [t.name.trim().toLowerCase(), t.id] as const)
-    );
-
-    return {
-      ...loaded,
-      teachers: loaded.teachers.map((t) => ({
-        ...t,
-        loginPin: (t as any).loginPin || "",
-      })),
-      students: loaded.students.map((s) => {
-        let fixedTeacherId = s.teacherId;
-
-        if (!teacherIds.has(fixedTeacherId)) {
-          const guess = teacherIdByName.get(String(fixedTeacherId || "").trim().toLowerCase());
-          if (guess) fixedTeacherId = guess;
-        }
-
-        return {
-          ...s,
-          teacherId: fixedTeacherId,
-          loginId: (s as any).loginId || "",
-          classDays: Array.isArray(s.classDays) ? s.classDays : [],
-          timeSlot: s.timeSlot || "",
-          durationMinutes: Number((s as any).durationMinutes || (s as any).duration_minutes || 30),
-        };
-      }),
-      attendance: Array.isArray(loaded.attendance) ? loaded.attendance : [],
-    };
-  };
-
-  const loadInitialState = async () => {
-    try {
-      if (!session) {
-        setHydrated(true);
-        return;
-      }
-
-      setHydrated(false);
-
-      const loaded = await loadState();
-
-      if (!mounted) return;
-
-      setAppState(loaded);
-      setHydrated(true);
-    } catch (err) {
-      console.error("Failed to load state:", err);
-      if (mounted) setHydrated(true);
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState(null, "", nextHash);
     }
   };
 
-  const handleStateUpdated = (event: Event) => {
-    const customEvent = event as CustomEvent<AppState>;
+  // IVS_LIVE_CLASS_ACCOUNT_LINKS_V14
+  const openDashboardAccountEditor = (
+    role: "teacher" | "student",
+    profileId: string,
+  ) => {
+    if (!hasFeature("tab_accounts_enrollment")) {
+      showFeatureLocked(
+        "Accounts & Enrollment",
+        `${quranDepartmentDisplayName} Accounts & Enrollment is currently disabled.`,
+      );
+      return;
+    }
 
-    if (!customEvent.detail) return;
-
-    setAppState(customEvent.detail);
-    setHydrated(true);
+    setDashboardAccountEditTarget({
+      role,
+      profileId: String(profileId),
+      requestId: Date.now(),
+    });
+    navigateToTab("accounts");
   };
 
-  void loadInitialState();
+  useEffect(() => {
+    setActiveTab(tabFromHash());
 
-  window.addEventListener("ivs-state-updated", handleStateUpdated);
+    const apply = () => {
+      setActiveTab(tabFromHash());
+    };
 
-  return () => {
-    mounted = false;
-    window.removeEventListener("ivs-state-updated", handleStateUpdated);
-  };
-}, [session]);
+    window.addEventListener("popstate", apply);
+    window.addEventListener("hashchange", apply);
+
+    return () => {
+      window.removeEventListener("popstate", apply);
+      window.removeEventListener("hashchange", apply);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      isPlatformAdmin ||
+      isTuitionFeatureContext ||
+      !featureContextLoaded ||
+      coordinatorNavItems.length === 0
+    ) {
+      return;
+    }
+
+    if (!coordinatorNavItems.includes(activeTab)) {
+      navigateToTab(coordinatorNavItems[0]);
+    }
+  }, [
+    activeTab,
+    coordinatorNavItems,
+    featureContextLoaded,
+    isPlatformAdmin,
+    isTuitionFeatureContext,
+  ]);
+
+  useEffect(() => {
+    // Direct URL protection applies only to the Quran workspace. Tuition has its
+    // own feature keys and locked-tab handling inside TuitionCoordinatorPortal.
+    if (!featureContextLoaded || isPlatformAdmin || isTuitionFeatureContext) return;
+
+    if (isTabHiddenByDepartmentAdmin(activeTab)) {
+      const fallback = firstEnabledCoordinatorTab;
+      if (fallback && fallback !== activeTab) navigateToTab(fallback);
+      return;
+    }
+
+    const featureKey = tabFeatureKey[activeTab];
+    if (!featureKey || hasFeature(featureKey)) return;
+
+    showFeatureLocked(
+      NAV_META[activeTab]?.label || "This section",
+      `${NAV_META[activeTab]?.label || "This section"} is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
+    );
+
+    const fallback = firstEnabledCoordinatorTab;
+
+    if (fallback && fallback !== activeTab) {
+      navigateToTab(fallback);
+    }
+  }, [
+    activeTab,
+    coordinatorNavItems,
+    featureContextLoaded,
+    firstEnabledCoordinatorTab,
+    hasFeature,
+    isPlatformAdmin,
+    isTabHiddenByDepartmentAdmin,
+    isTuitionFeatureContext,
+  ]);
 
 
-useEffect(() => {
-  if (!hydrated) return;
+  useEffect(() => {
+    let mounted = true;
 
-  const timer = window.setTimeout(() => {
-    void saveState(appState);
-  }, 1500);
+    const patchState = (loaded: AppState): AppState => {
+      const teacherIds = new Set(loaded.teachers.map((t) => t.id));
 
-  return () => window.clearTimeout(timer);
-  // Attendance is persisted directly through its dedicated API. Avoid serializing
-  // the entire application state after every attendance click.
-}, [appState.teachers, appState.students, hydrated]);
+      const teacherIdByName = new Map(
+        loaded.teachers.map((t) => [t.name.trim().toLowerCase(), t.id] as const)
+      );
+
+      return {
+        ...loaded,
+        teachers: loaded.teachers.map((t) => ({
+          ...t,
+          loginPin: (t as any).loginPin || "",
+        })),
+        students: loaded.students.map((s) => {
+          let fixedTeacherId = s.teacherId;
+
+          if (!teacherIds.has(fixedTeacherId)) {
+            const guess = teacherIdByName.get(String(fixedTeacherId || "").trim().toLowerCase());
+            if (guess) fixedTeacherId = guess;
+          }
+
+          return {
+            ...s,
+            teacherId: fixedTeacherId,
+            loginId: (s as any).loginId || "",
+            classDays: Array.isArray(s.classDays) ? s.classDays : [],
+            timeSlot: s.timeSlot || "",
+            durationMinutes: Number((s as any).durationMinutes || (s as any).duration_minutes || 30),
+          };
+        }),
+        attendance: Array.isArray(loaded.attendance) ? loaded.attendance : [],
+      };
+    };
+
+    const loadInitialState = async () => {
+      try {
+        if (!session) {
+          setHydrated(true);
+          return;
+        }
+
+        setHydrated(false);
+
+        // Load the lightweight state only for the Quran management Dashboard.
+        // Direct links to other tabs and tuition/role portals keep the full state path.
+        const requestedTab = tabFromHash();
+        const sessionDepartmentType = String(
+          (session as any)?.user?.department?.department_type ||
+          (session as any)?.department?.department_type ||
+          ""
+        ).toLowerCase();
+        const sessionRole = String(
+          (session as any)?.role ||
+          (session as any)?.user?.role ||
+          ""
+        ).toLowerCase();
+
+        const isDashboardRole =
+          sessionRole === "coordinator" ||
+          sessionRole === "department_admin" ||
+          sessionRole === "institution_admin";
+
+        const isDashboardRequest =
+          requestedTab === "dashboard" &&
+          isDashboardRole &&
+          sessionDepartmentType !== "tuition";
+
+        const loaded = await loadState(isDashboardRequest);
+
+        if (!mounted) return;
+
+        setAppState(loaded);
+        setHydrated(true);
+      } catch (err) {
+        console.error("Failed to load state:", err);
+        if (mounted) setHydrated(true);
+      }
+    };
+
+    const handleStateUpdated = (event: Event) => {
+      const customEvent = event as CustomEvent<AppState>;
+
+      if (!customEvent.detail) return;
+
+      setAppState(customEvent.detail);
+      setHydrated(true);
+    };
+
+    void loadInitialState();
+
+    window.addEventListener("ivs-state-updated", handleStateUpdated);
+
+    return () => {
+      mounted = false;
+      window.removeEventListener("ivs-state-updated", handleStateUpdated);
+    };
+  }, [session]);
+
+  // Fetch full state when leaving dashboard
+  useEffect(() => {
+    if (activeTab !== "dashboard" && appState.isPartial) {
+      loadState(false)
+        .then(loaded => {
+          setAppState(loaded);
+        })
+        .catch(console.error);
+    }
+  }, [activeTab, appState.isPartial]);
+
+
+  useEffect(() => {
+    if (!hydrated || appState.isPartial) return;
+
+    const timer = window.setTimeout(() => {
+      void saveState(appState);
+    }, 1500);
+
+    return () => window.clearTimeout(timer);
+    // Attendance is persisted directly through its dedicated API. Avoid serializing
+    // the entire application state after every attendance click.
+  }, [appState.teachers, appState.students, appState.isPartial, hydrated]);
 
 
 
@@ -1659,126 +1766,166 @@ useEffect(() => {
     [viewStudents, currentSlot, currentDayName]
   );
 
+  const teacherById = useMemo(() => {
+    const map = new Map<string, Teacher>();
+    for (const t of viewTeachers) map.set(t.id, t);
+    return map;
+  }, [viewTeachers]);
+
+  const studentAttendanceToday = useMemo(() => {
+    const map = new Map<string, AttendanceRecord>();
+    for (const a of viewAtt) {
+      if (a.date === todayStr && a.entityType === EntityType.STUDENT) {
+        map.set(a.entityId, a);
+      }
+    }
+    return map;
+  }, [viewAtt, todayStr]);
+
+  const teacherAttendanceToday = useMemo(() => {
+    const map = new Map<string, AttendanceRecord>();
+    for (const a of viewAtt) {
+      if (a.date !== todayStr || a.entityType !== EntityType.TEACHER) continue;
+
+      const normalizedClassKey = String(a.classKey || "").trim().slice(0, 5);
+      if (normalizedClassKey) {
+        map.set(`${a.entityId}_${normalizedClassKey}`, a);
+      } else {
+        // Only a genuine legacy empty-class record may be used as fallback.
+        map.set(`${a.entityId}_`, a);
+      }
+    }
+    return map;
+  }, [viewAtt, todayStr]);
+
+  const getTeacherAttendance = (teacherId: string, timeSlot: string) => {
+    const normalizedTimeSlot = String(timeSlot || "").trim().slice(0, 5);
+    return (
+      teacherAttendanceToday.get(`${teacherId}_${normalizedTimeSlot}`) ||
+      teacherAttendanceToday.get(`${teacherId}_`)
+    );
+  };
+
   const handleUpdateSuperAdminProfile = async (e: React.FormEvent) => {
-  e.preventDefault();
+    e.preventDefault();
 
-  if (!session?.user?.id) {
-    setSettingsMessage("Session user was not found. Please log in again.");
-    return;
-  }
-
-  const username = superAdminUsername.trim();
-  const firstName = superAdminFirstName.trim();
-  const lastName = superAdminLastName.trim();
-  const email = superAdminEmail.trim();
-  const password = superAdminPassword.trim();
-
-  if (!username) {
-    setSettingsMessage("Username is required.");
-    return;
-  }
-
-  if (password && password.length < 6) {
-    setSettingsMessage("New password must be at least 6 characters.");
-    return;
-  }
-
-  try {
-    setSuperAdminSaving(true);
-    setSettingsMessage("");
-
-    const payload: any = {
-      role: "coordinator",
-      username,
-      first_name: firstName,
-      last_name: lastName,
-      email,
-    };
-
-    if (password) {
-      payload.password = password;
+    if (!session?.user?.id) {
+      setSettingsMessage("Session user was not found. Please log in again.");
+      return;
     }
 
-    const updated: any = await updateMyProfile(payload);
+    const username = superAdminUsername.trim();
+    const firstName = superAdminFirstName.trim();
+    const lastName = superAdminLastName.trim();
+    const email = superAdminEmail.trim();
+    const password = superAdminPassword.trim();
 
-    const nextSession = {
-      ...session,
-      user: {
-        ...session.user,
-        username: updated.username || username,
-        first_name: updated.first_name || firstName,
-        last_name: updated.last_name || lastName,
-        email: updated.email || email,
-        full_name: updated.full_name || `${firstName} ${lastName}`.trim() || username,
-      },
-    };
+    if (!username) {
+      setSettingsMessage("Username is required.");
+      return;
+    }
 
-    setSession(nextSession);
-    saveSession(nextSession);
-    setSuperAdminPassword("");
-    setSettingsMessage("Super admin profile updated successfully.");
-  } catch (err: any) {
-    setSettingsMessage(err?.message || "Could not update super admin profile.");
-  } finally {
-    setSuperAdminSaving(false);
-  }
-};
+    if (password && password.length < 6) {
+      setSettingsMessage("New password must be at least 6 characters.");
+      return;
+    }
+
+    try {
+      setSuperAdminSaving(true);
+      setSettingsMessage("");
+
+      const payload: any = {
+        role: "coordinator",
+        username,
+        first_name: firstName,
+        last_name: lastName,
+        email,
+      };
+
+      if (password) {
+        payload.password = password;
+      }
+
+      const updated: any = await updateMyProfile(payload);
+
+      const nextSession = {
+        ...session,
+        user: {
+          ...session.user,
+          username: updated.username || username,
+          first_name: updated.first_name || firstName,
+          last_name: updated.last_name || lastName,
+          email: updated.email || email,
+          full_name: updated.full_name || `${firstName} ${lastName}`.trim() || username,
+        },
+      };
+
+      setSession(nextSession);
+      saveSession(nextSession);
+      setSuperAdminPassword("");
+      setSettingsMessage("Super admin profile updated successfully.");
+    } catch (err: any) {
+      setSettingsMessage(err?.message || "Could not update super admin profile.");
+    } finally {
+      setSuperAdminSaving(false);
+    }
+  };
   // ---------------- Actions ----------------
 
 
-const handleLogin = async (e: React.FormEvent) => {
-  e.preventDefault();
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
 
-  const username = loginUsername.trim();
-  const password = loginPassword;
+    const username = loginUsername.trim();
+    const password = loginPassword;
 
-  if (!username || !password) {
-    setLoginError("Please enter username and password.");
-    return;
-  }
-
-  try {
-    setLoginLoading(true);
-    setLoginError("");
-
-    const nextSession = await loginToDjango(username, password);
-
-if (rememberLogin) {
-  try {
-    localStorage.setItem(REMEMBERED_LOGIN_KEY, username);
-  } catch {
-    // ignore
-  }
-} else {
-  try {
-    localStorage.removeItem(REMEMBERED_LOGIN_KEY);
-  } catch {
-    // ignore
-  }
-}
-
-    setSession(nextSession);
-    saveSession(nextSession);
-    connectAcademyWS();
-
-    const nextUsername = String((nextSession as any)?.user?.username || (nextSession as any)?.username || "").toLowerCase();
-
-    if (nextSession.role === "platform_admin" || nextUsername === "mian") {
-      navigateToTab("platform-admin");
-    } else {
-      navigateToTab("dashboard");
+    if (!username || !password) {
+      setLoginError("Please enter username and password.");
+      return;
     }
 
-    setLoginUsername("");
-    setLoginPassword("");
-  } catch (err: any) {
-    setLoginError(err?.message || "Login failed.");
-  } finally {
-    setLoginLoading(false);
-  }
-};
+    try {
+      setLoginLoading(true);
+      setLoginError("");
 
-   const localStatusToDjango = (status: AttendanceStatus): "present" | "absent" | "leave" => {
+      const nextSession = await loginToDjango(username, password);
+
+      if (rememberLogin) {
+        try {
+          localStorage.setItem(REMEMBERED_LOGIN_KEY, username);
+        } catch {
+          // ignore
+        }
+      } else {
+        try {
+          localStorage.removeItem(REMEMBERED_LOGIN_KEY);
+        } catch {
+          // ignore
+        }
+      }
+
+      setSession(nextSession);
+      saveSession(nextSession);
+      connectAcademyWS();
+
+      const nextUsername = String((nextSession as any)?.user?.username || (nextSession as any)?.username || "").toLowerCase();
+
+      if (nextSession.role === "platform_admin" || nextUsername === "mian") {
+        navigateToTab("platform-admin");
+      } else {
+        navigateToTab("dashboard");
+      }
+
+      setLoginUsername("");
+      setLoginPassword("");
+    } catch (err: any) {
+      setLoginError(err?.message || "Login failed.");
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const localStatusToDjango = (status: AttendanceStatus): "present" | "absent" | "leave" => {
     if (status === AttendanceStatus.ABSENT) return "absent";
     if (status === AttendanceStatus.LEAVE) return "leave";
     return "present";
@@ -1874,11 +2021,31 @@ if (rememberLogin) {
     const coverageAssignments =
       args.coverageAssignments || [];
 
+    const relatedStudent =
+      entityType === EntityType.STUDENT
+        ? appState.students.find(
+          (student) =>
+            String(student.id) === entityId
+        )
+        : undefined;
+
+    const relatedTeacherId =
+      entityType === EntityType.STUDENT
+        ? String(
+          relatedStudent?.teacherId || ""
+        )
+        : entityId;
+
+    const relatedTeacher =
+      appState.teachers.find(
+        (teacher) =>
+          String(teacher.id) ===
+          relatedTeacherId
+      );
+
     const normalizedClassKey =
       entityType === EntityType.TEACHER
-        ? normalizeAttendanceClassKey(
-            args.classKey
-          )
+        ? normalizeAttendanceClassKey(args.classKey)
         : "";
 
     const key = attendanceMutationKey({
@@ -1904,25 +2071,37 @@ if (rememberLogin) {
 
     const optimisticRecord:
       AttendanceRecord = {
-        id:
-          previousRecord?.id ||
-          `local-${entityType}-${entityId}-${date}-${normalizedClassKey}-${Date.now()}`,
-        entityId,
-        entityType,
-        date,
-        classKey:
-          normalizedClassKey,
-        status,
-        timestamp: Date.now(),
-        markedById:
-          previousRecord?.markedById,
-        markedByUsername:
-          previousRecord?.markedByUsername,
-        markedByName:
-          previousRecord?.markedByName,
-        markedByRole:
-          previousRecord?.markedByRole,
-      };
+      id:
+        previousRecord?.id ||
+        `local-${entityType}-${entityId}-${date}-${normalizedClassKey}-${Date.now()}`,
+      entityId,
+      entityType,
+      date,
+      classKey:
+        normalizedClassKey,
+      teacherId:
+        relatedTeacherId || undefined,
+      teacherName:
+        relatedTeacher?.name || undefined,
+      studentId:
+        entityType === EntityType.STUDENT
+          ? entityId
+          : undefined,
+      studentName:
+        entityType === EntityType.STUDENT
+          ? relatedStudent?.name
+          : undefined,
+      status,
+      timestamp: Date.now(),
+      markedById:
+        previousRecord?.markedById,
+      markedByUsername:
+        previousRecord?.markedByUsername,
+      markedByName:
+        previousRecord?.markedByName,
+      markedByRole:
+        previousRecord?.markedByRole,
+    };
 
     replaceAttendanceRecords([
       ...attendanceRef.current.filter(
@@ -1994,8 +2173,8 @@ if (rememberLogin) {
             const backendTimestamp =
               teacherAttendance.updated_at
                 ? Date.parse(
-                    teacherAttendance.updated_at
-                  )
+                  teacherAttendance.updated_at
+                )
                 : Date.now();
 
             savedRecord = {
@@ -2010,8 +2189,16 @@ if (rememberLogin) {
               classKey:
                 normalizeAttendanceClassKey(
                   saved.class_key ||
-                    normalizedClassKey
+                  normalizedClassKey
                 ),
+              teacherId:
+                entityId,
+              teacherName:
+                relatedTeacher?.name || undefined,
+              studentId:
+                previousRecord?.studentId,
+              studentName:
+                previousRecord?.studentName,
               status:
                 djangoStatusToLocal(
                   teacherAttendance.status
@@ -2030,9 +2217,9 @@ if (rememberLogin) {
                   .marked_by_id == null
                   ? ""
                   : String(
-                      teacherAttendance
-                        .marked_by_id
-                    ),
+                    teacherAttendance
+                      .marked_by_id
+                  ),
               markedByUsername:
                 previousRecord
                   ?.markedByUsername || "",
@@ -2048,7 +2235,12 @@ if (rememberLogin) {
               await markAttendanceInDjango({
                 entity_type:
                   "student",
-                teacher_id: null,
+                teacher_id:
+                  relatedTeacherId
+                    ? Number(
+                      relatedTeacherId
+                    )
+                    : null,
                 student_id:
                   Number(entityId),
                 date,
@@ -2056,7 +2248,8 @@ if (rememberLogin) {
                   localStatusToDjango(
                     status
                   ),
-                class_key: "",
+                class_key:
+                  normalizedClassKey,
               });
 
             attendanceServerIdRef.current.set(
@@ -2075,21 +2268,41 @@ if (rememberLogin) {
             const backendTimestamp =
               saved.updated_at
                 ? Date.parse(
-                    saved.updated_at
-                  )
+                  saved.updated_at
+                )
                 : Date.now();
 
             savedRecord = {
               id: String(saved.id),
               entityId: String(
                 saved.student_id ||
-                  entityId
+                entityId
               ),
               entityType:
                 EntityType.STUDENT,
               date:
                 saved.date || date,
               classKey: "",
+              teacherId:
+                saved.teacher_id == null
+                  ? relatedTeacherId || undefined
+                  : String(
+                    saved.teacher_id
+                  ),
+              teacherName:
+                saved.teacher_name ||
+                relatedTeacher?.name ||
+                undefined,
+              studentId:
+                saved.student_id == null
+                  ? entityId
+                  : String(
+                    saved.student_id
+                  ),
+              studentName:
+                saved.student_name ||
+                relatedStudent?.name ||
+                undefined,
               status:
                 djangoStatusToLocal(
                   saved.status
@@ -2104,23 +2317,23 @@ if (rememberLogin) {
                 saved.marked_by_id == null
                   ? ""
                   : String(
-                      saved.marked_by_id
-                    ),
+                    saved.marked_by_id
+                  ),
               markedByUsername:
                 String(
                   saved.marked_by_username ||
-                    saved.marked_by ||
-                    ""
+                  saved.marked_by ||
+                  ""
                 ),
               markedByName:
                 String(
                   saved.marked_by_name ||
-                    ""
+                  ""
                 ),
               markedByRole:
                 String(
                   saved.marked_by_role ||
-                    ""
+                  ""
                 ),
             };
           }
@@ -2158,7 +2371,7 @@ if (rememberLogin) {
 
             alert(
               error?.message ||
-                "Could not save attendance."
+              "Could not save attendance."
             );
           }
 
@@ -2186,8 +2399,8 @@ if (rememberLogin) {
     const normalizedClassKey =
       entityType === EntityType.TEACHER
         ? normalizeAttendanceClassKey(
-            args.classKey
-          )
+          args.classKey
+        )
         : "";
 
     const key =
@@ -2251,14 +2464,14 @@ if (rememberLogin) {
                 .get(key) ||
               (
                 existing?.id &&
-                /^\d+$/.test(
-                  String(
-                    existing.id
-                  )
-                )
-                  ? String(
+                  /^\d+$/.test(
+                    String(
                       existing.id
                     )
+                  )
+                  ? String(
+                    existing.id
+                  )
                   : ""
               );
 
@@ -2295,7 +2508,7 @@ if (rememberLogin) {
 
             alert(
               error?.message ||
-                "Could not delete attendance."
+              "Could not delete attendance."
             );
           }
 
@@ -2310,9 +2523,21 @@ if (rememberLogin) {
     entityId: string,
     status: AttendanceStatus,
     type: EntityType = EntityType.STUDENT,
-    classKey: string = ""
-  ): Promise<boolean> =>
-    upsertAttendance({ entityId, entityType: type, date: todayStr, status, classKey });
+    classKey: string = "",
+    coverageAssignments: Array<{
+      student_id: number;
+      substitute_teacher_id: number;
+    }> = [],
+  ): Promise<boolean> => {
+    return upsertAttendance({
+      entityId,
+      entityType: type,
+      date: todayStr,
+      status,
+      classKey,
+      coverageAssignments,
+    });
+  };
 
   const unmarkAttendance = (
     entityId: string,
@@ -2321,73 +2546,73 @@ if (rememberLogin) {
   ): Promise<boolean> =>
     deleteAttendance({ entityId, entityType: type, date: todayStr, classKey });
 
-const saveStudent = (e: React.FormEvent) => {
-  e.preventDefault();
+  const saveStudent = (e: React.FormEvent) => {
+    e.preventDefault();
 
-  const form = e.target as HTMLFormElement;
-  const formData = new FormData(form);
+    const form = e.target as HTMLFormElement;
+    const formData = new FormData(form);
 
-  const teacherId = String(formData.get("teacherId") || "");
-  const timeSlot = String(formData.get("timeSlot") || "");
-  const name = String(formData.get("name") || "").trim();
+    const teacherId = String(formData.get("teacherId") || "");
+    const timeSlot = String(formData.get("timeSlot") || "");
+    const name = String(formData.get("name") || "").trim();
 
-  if (!name) {
-    alert("Please enter student name.");
-    return;
-  }
+    if (!name) {
+      alert("Please enter student name.");
+      return;
+    }
 
-  if (!teacherId) {
-    alert("Please select a teacher.");
-    return;
-  }
+    if (!teacherId) {
+      alert("Please select a teacher.");
+      return;
+    }
 
-  if (!timeSlot) {
-    alert("Please select class time.");
-    return;
-  }
+    if (!timeSlot) {
+      alert("Please select class time.");
+      return;
+    }
 
-  const existing = editingStudent;
+    const existing = editingStudent;
 
-  const nextStudent: Student = {
-    id: existing?.id || uuid(),
-    name,
-    teacherId,
-    timeSlot,
-    classType: classTypeFromDayCount(studentDaysDraft.length || 5),
-    classDays: studentDaysDraft.length ? studentDaysDraft.slice() : defaultDaysFromClassType(ClassType.FIVE_DAY),
-    loginId: existing?.loginId || generateStudentId(),
+    const nextStudent: Student = {
+      id: existing?.id || uuid(),
+      name,
+      teacherId,
+      timeSlot,
+      classType: classTypeFromDayCount(studentDaysDraft.length || 5),
+      classDays: studentDaysDraft.length ? studentDaysDraft.slice() : defaultDaysFromClassType(ClassType.FIVE_DAY),
+      loginId: existing?.loginId || generateStudentId(),
+    };
+
+    setShowModal(false);
+    setEditingStudent(null);
+
+    startTransition(() => {
+      setAppState((prev) => {
+        const others = prev.students.filter((student) => student.id !== nextStudent.id);
+
+        return {
+          ...prev,
+          students: [...others, nextStudent],
+        };
+      });
+
+      setViewingClass((prev) => {
+        if (!prev) return prev;
+
+        const sameClass =
+          String(prev.teacherId) === String(nextStudent.teacherId) &&
+          String(prev.timeSlot) === String(nextStudent.timeSlot);
+
+        const withoutStudent = prev.students.filter((student) => student.id !== nextStudent.id);
+
+        return {
+          ...prev,
+          students: sameClass ? [...withoutStudent, nextStudent] : withoutStudent,
+        };
+      });
+
+    });
   };
-
-  setShowModal(false);
-  setEditingStudent(null);
-
-  startTransition(() => {
-    setAppState((prev) => {
-    const others = prev.students.filter((student) => student.id !== nextStudent.id);
-
-    return {
-      ...prev,
-      students: [...others, nextStudent],
-    };
-  });
-
-  setViewingClass((prev) => {
-    if (!prev) return prev;
-
-    const sameClass =
-      String(prev.teacherId) === String(nextStudent.teacherId) &&
-      String(prev.timeSlot) === String(nextStudent.timeSlot);
-
-    const withoutStudent = prev.students.filter((student) => student.id !== nextStudent.id);
-
-    return {
-      ...prev,
-      students: sameClass ? [...withoutStudent, nextStudent] : withoutStudent,
-    };
-  });
-
-  });
-};
 
   const removeStudentFromClass = (studentId: string) => {
     if (!hasFeature("delete_schedule")) {
@@ -2444,11 +2669,11 @@ const saveStudent = (e: React.FormEvent) => {
   };
 
 
-// ---------------- Login Screen ----------------
-if (!session) {
-  return (
-    <>
-      <style>{`
+  // ---------------- Login Screen ----------------
+  if (!session) {
+    return (
+      <>
+        <style>{`
         @keyframes ivsIn {
           from { opacity: 0; transform: translateY(28px) scale(0.97); }
           to { opacity: 1; transform: translateY(0) scale(1); }
@@ -2926,523 +3151,528 @@ if (!session) {
         }
       `}</style>
 
-      <div className="ivs-login-root">
-        <div className="ivs-login-scene">
-          <div className="ivs-login-bg" />
-          <div className="ivs-login-grid" />
+        <div className="ivs-login-root">
+          <div className="ivs-login-scene">
+            <div className="ivs-login-bg" />
+            <div className="ivs-login-grid" />
 
-          <div className="ivs-login-orb ivs-login-orb-1" />
-          <div className="ivs-login-orb ivs-login-orb-2" />
+            <div className="ivs-login-orb ivs-login-orb-1" />
+            <div className="ivs-login-orb ivs-login-orb-2" />
 
-          <div className="ivs-login-card">
-            <div className="ivs-login-inner">
-              <div className="ivs-login-brand">
-<div className="ivs-login-logo">
-  <img
-    src="/ivs-logo.png"
-    alt="Iqra Virtual School"
-    className="ivs-login-logo-img"
-  />
-</div>
-
-                <div>
-                  <div className="ivs-login-school">Iqra Virtual School</div>
-                  <div className="ivs-login-sub">School Management Portal</div>
-                </div>
-              </div>
-
-              <h1 className="ivs-login-title">Login</h1>
-
-              <form onSubmit={handleLogin}>
-                <div className="ivs-login-field">
-                  <label className="ivs-login-label" htmlFor="ivs-username">
-                    Username
-                  </label>
-
-                  <div className="ivs-login-input-wrap">
-                    <input
-                      id="ivs-username"
-                      type="text"
-                      className="ivs-login-input"
-                      value={loginUsername}
-                      onChange={(e) => setLoginUsername(e.target.value)}
-                      placeholder="Enter username"
-                      autoComplete="username"
+            <div className="ivs-login-card">
+              <div className="ivs-login-inner">
+                <div className="ivs-login-brand">
+                  <div className="ivs-login-logo">
+                    <img
+                      src="/ivs-logo.png"
+                      alt="Iqra Virtual School"
+                      className="ivs-login-logo-img"
                     />
+                  </div>
 
-                    <div className="ivs-login-icon">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                        <path
-                          d="M20 21a8 8 0 0 0-16 0"
-                          stroke="currentColor"
-                          strokeWidth="2.3"
-                          strokeLinecap="round"
-                        />
-                        <circle
-                          cx="12"
-                          cy="8"
-                          r="4"
-                          stroke="currentColor"
-                          strokeWidth="2.3"
-                        />
-                      </svg>
-                    </div>
+                  <div>
+                    <div className="ivs-login-school">Iqra Virtual School</div>
+                    <div className="ivs-login-sub">School Management Portal</div>
                   </div>
                 </div>
 
-                <div className="ivs-login-field">
-                  <label className="ivs-login-label" htmlFor="ivs-password">
-                    Password
-                  </label>
+                <h1 className="ivs-login-title">Login</h1>
 
-                  <div className="ivs-login-input-wrap">
-                    <input
-                      id="ivs-password"
-                      type={showLoginPassword ? "text" : "password"}
-                      className="ivs-login-input"
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      placeholder="Enter password"
-                      autoComplete="current-password"
-                    />
+                <form onSubmit={handleLogin}>
+                  <div className="ivs-login-field">
+                    <label className="ivs-login-label" htmlFor="ivs-username">
+                      Username
+                    </label>
 
-                    <button
-                      type="button"
-                      className="ivs-login-eye"
-                      onClick={() => setShowLoginPassword((value) => !value)}
-                      aria-label={showLoginPassword ? "Hide password" : "Show password"}
-                    >
-                      {showLoginPassword ? (
+                    <div className="ivs-login-input-wrap">
+                      <input
+                        id="ivs-username"
+                        type="text"
+                        className="ivs-login-input"
+                        value={loginUsername}
+                        onChange={(e) => setLoginUsername(e.target.value)}
+                        placeholder="Enter username"
+                        autoComplete="username"
+                      />
+
+                      <div className="ivs-login-icon">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                           <path
-                            d="M3 3l18 18"
+                            d="M20 21a8 8 0 0 0-16 0"
                             stroke="currentColor"
-                            strokeWidth="2.2"
+                            strokeWidth="2.3"
                             strokeLinecap="round"
-                          />
-                          <path
-                            d="M10.6 10.6a2.2 2.2 0 0 0 3.1 3.1"
-                            stroke="currentColor"
-                            strokeWidth="2.2"
-                            strokeLinecap="round"
-                          />
-                          <path
-                            d="M7.2 7.5C4.8 8.9 3.5 11 3 12c1.1 2.2 4.5 6 9 6 1.5 0 2.8-.4 4-1"
-                            stroke="currentColor"
-                            strokeWidth="2.2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                          <path
-                            d="M12 6c4.5 0 7.9 3.8 9 6-.3.7-1.1 1.8-2.2 2.8"
-                            stroke="currentColor"
-                            strokeWidth="2.2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                      ) : (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                          <path
-                            d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z"
-                            stroke="currentColor"
-                            strokeWidth="2.2"
-                            strokeLinejoin="round"
                           />
                           <circle
                             cx="12"
-                            cy="12"
-                            r="3"
+                            cy="8"
+                            r="4"
                             stroke="currentColor"
-                            strokeWidth="2.2"
+                            strokeWidth="2.3"
                           />
                         </svg>
-                      )}
-                    </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
 
-                <div className="ivs-login-options">
-                  <label className="ivs-login-remember">
-                    <input
-                      type="checkbox"
-                      className="ivs-login-checkbox"
-                      checked={rememberLogin}
-                      onChange={(e) => setRememberLogin(e.target.checked)}
-                    />
-                    Remember me
-                  </label>
-                </div>
+                  <div className="ivs-login-field">
+                    <label className="ivs-login-label" htmlFor="ivs-password">
+                      Password
+                    </label>
 
-                {loginError && (
-                  <div className="ivs-login-error">
-                    {loginError}
+                    <div className="ivs-login-input-wrap">
+                      <input
+                        id="ivs-password"
+                        type={showLoginPassword ? "text" : "password"}
+                        className="ivs-login-input"
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        placeholder="Enter password"
+                        autoComplete="current-password"
+                      />
+
+                      <button
+                        type="button"
+                        className="ivs-login-eye"
+                        onClick={() => setShowLoginPassword((value) => !value)}
+                        aria-label={showLoginPassword ? "Hide password" : "Show password"}
+                      >
+                        {showLoginPassword ? (
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                            <path
+                              d="M3 3l18 18"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                              strokeLinecap="round"
+                            />
+                            <path
+                              d="M10.6 10.6a2.2 2.2 0 0 0 3.1 3.1"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                              strokeLinecap="round"
+                            />
+                            <path
+                              d="M7.2 7.5C4.8 8.9 3.5 11 3 12c1.1 2.2 4.5 6 9 6 1.5 0 2.8-.4 4-1"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                            <path
+                              d="M12 6c4.5 0 7.9 3.8 9 6-.3.7-1.1 1.8-2.2 2.8"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        ) : (
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                            <path
+                              d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                              strokeLinejoin="round"
+                            />
+                            <circle
+                              cx="12"
+                              cy="12"
+                              r="3"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                            />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
                   </div>
-                )}
 
-                <button
-                  type="submit"
-                  className="ivs-login-btn"
-                  disabled={loginLoading}
-                >
-                  <span className="ivs-login-btn-inner">
-                    {loginLoading && <span className="ivs-login-spinner" />}
-                    {loginLoading ? "Signing in..." : "Sign in"}
-                  </span>
-                </button>
-              </form>
+                  <div className="ivs-login-options">
+                    <label className="ivs-login-remember">
+                      <input
+                        type="checkbox"
+                        className="ivs-login-checkbox"
+                        checked={rememberLogin}
+                        onChange={(e) => setRememberLogin(e.target.checked)}
+                      />
+                      Remember me
+                    </label>
+                  </div>
 
-              <div className="ivs-login-footer">
-                © 2026 Iqra Virtual School
+                  {loginError && (
+                    <div className="ivs-login-error">
+                      {loginError}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    className="ivs-login-btn"
+                    disabled={loginLoading}
+                  >
+                    <span className="ivs-login-btn-inner">
+                      {loginLoading && <span className="ivs-login-spinner" />}
+                      {loginLoading ? "Signing in..." : "Sign in"}
+                    </span>
+                  </button>
+                </form>
+
+                <div className="ivs-login-footer">
+                  © 2026 Iqra Virtual School
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
-    </>
-  );
-}
+      </>
+    );
+  }
 
 
-// ---------------- Department-aware role portals ----------------
-const activeDepartment =
-  authContext?.department ||
-  (session as any)?.user?.department ||
-  (session as any)?.department ||
-  authContext?.roles?.find(
-    (item: any) =>
-      item?.department?.department_type === "tuition"
-  )?.department ||
-  null;
+  // ---------------- Department-aware role portals ----------------
+  const activeDepartment =
+    authContext?.department ||
+    (session as any)?.user?.department ||
+    (session as any)?.department ||
+    authContext?.roles?.find(
+      (item: any) =>
+        item?.department?.department_type === "tuition"
+    )?.department ||
+    null;
 
-const activeDepartmentType = String(
-  activeDepartment?.department_type || ""
-).toLowerCase();
+  const activeDepartmentType = String(
+    activeDepartment?.department_type || ""
+  ).toLowerCase();
 
-const isTuitionDepartment =
-  activeDepartmentType === "tuition";
+  const isTuitionDepartment =
+    activeDepartmentType === "tuition";
 
-// The portal type must follow the active department-role assignment returned
-// by /api/auth/context/, not only the role cached at login. The cached role can
-// be older than a later account/department-role correction and previously sent
-// Quran teachers into StudentPortal, making teacher-only tabs appear missing.
-const sessionRoleForDepartment = String(
-  authContext?.user?.role ||
-  (session as any)?.user?.role ||
-  session?.role ||
-  ""
-).trim().toLowerCase();
+  // The portal type must follow the active department-role assignment returned
+  // by /api/auth/context/, not only the role cached at login. The cached role can
+  // be older than a later account/department-role correction and previously sent
+  // Quran teachers into StudentPortal, making teacher-only tabs appear missing.
+  const sessionRoleForDepartment = String(
+    authContext?.user?.role ||
+    (session as any)?.user?.role ||
+    session?.role ||
+    ""
+  ).trim().toLowerCase();
 
-const activeDepartmentIdForRole = Number(activeDepartment?.id || 0);
-const activeDepartmentRoleAssignments = Array.isArray(authContext?.roles)
-  ? authContext.roles.filter((item: any) => {
+  const activeDepartmentIdForRole = Number(activeDepartment?.id || 0);
+  const activeDepartmentRoleAssignments = Array.isArray(authContext?.roles)
+    ? authContext.roles.filter((item: any) => {
       const assignmentDepartmentId = Number(item?.department?.id || 0);
       return (
         activeDepartmentIdForRole > 0 &&
         assignmentDepartmentId === activeDepartmentIdForRole
       );
     })
-  : [];
+    : [];
 
-const activeDepartmentRoleAssignment =
-  activeDepartmentRoleAssignments.find(
-    (item: any) =>
-      String(item?.role || "").trim().toLowerCase() ===
-      sessionRoleForDepartment,
-  ) ||
-  activeDepartmentRoleAssignments[0] ||
-  null;
+  const activeDepartmentRoleAssignment =
+    activeDepartmentRoleAssignments.find(
+      (item: any) =>
+        String(item?.role || "").trim().toLowerCase() ===
+        sessionRoleForDepartment,
+    ) ||
+    activeDepartmentRoleAssignments[0] ||
+    null;
 
-const effectiveDepartmentRole = String(
-  activeDepartmentRoleAssignment?.role || sessionRoleForDepartment
-).trim().toLowerCase();
+  const effectiveDepartmentRole = String(
+    activeDepartmentRoleAssignment?.role || sessionRoleForDepartment
+  ).trim().toLowerCase();
 
-if (
-  session &&
-  !isPlatformAdmin &&
-  !featureContextLoaded &&
-  featureContextError
-) {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-5">
-      <div className="w-full max-w-lg rounded-[28px] border border-amber-200 bg-white p-7 text-center shadow-xl">
-        <div className="text-lg font-black text-slate-950">Unable to verify dashboard access</div>
-        <div className="mt-2 text-sm font-semibold leading-6 text-slate-600">
-          {featureContextError}
-        </div>
-        <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
-          <button
-            type="button"
-            onClick={() => void loadFeatureContext()}
-            className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-black text-white transition hover:bg-indigo-700"
-          >
-            Retry access check
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              disconnectAcademyWS(true);
-              clearSession();
-            }}
-            className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50"
-          >
-            Sign in again
-          </button>
+  if (
+    session &&
+    !isPlatformAdmin &&
+    !featureContextLoaded &&
+    featureContextError
+  ) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-5">
+        <div className="w-full max-w-lg rounded-[28px] border border-amber-200 bg-white p-7 text-center shadow-xl">
+          <div className="text-lg font-black text-slate-950">Unable to verify dashboard access</div>
+          <div className="mt-2 text-sm font-semibold leading-6 text-slate-600">
+            {featureContextError}
+          </div>
+          <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
+            <button
+              type="button"
+              onClick={() => void loadFeatureContext()}
+              className="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-black text-white transition hover:bg-indigo-700"
+            >
+              Retry access check
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                disconnectAcademyWS(true);
+                clearSession();
+              }}
+              className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+            >
+              Sign in again
+            </button>
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
-if (
-  session &&
-  !isPlatformAdmin &&
-  !featureContextLoaded
-) {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50">
-      <div className="flex items-center gap-3 rounded-3xl border border-slate-200 bg-white px-6 py-5 font-black text-slate-700 shadow-xl">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-indigo-600" />
-        Loading department workspace...
-      </div>
-    </div>
-  );
-}
+  if (
+    session &&
+    !isPlatformAdmin &&
+    !featureContextLoaded
+  ) {
+    return <DepartmentWorkspaceLoading />;
+  }
 
-if (session && !isPlatformAdmin && maintenanceState.active) {
-  return (
-    <MaintenanceScreen
-      maintenance={maintenanceState}
-      onRetry={() => void retryMaintenanceStatus()}
-      onLogout={() => {
-        disconnectAcademyWS(true);
-        clearSession();
-        setSession(null);
-        setAuthContext(null);
-        setMaintenanceState({ active: false });
-        setPlatformNotices([]);
-        navigateToTab("dashboard");
-      }}
-    />
-  );
-}
-
-if (
-  session &&
-  !isPlatformAdmin &&
-  isTuitionDepartment &&
-  ["coordinator", "department_admin", "institution_admin"].includes(
-    effectiveDepartmentRole
-  )
-) {
-  return (
-    <>
-      <Suspense fallback={<TabLoading />}>
-        <TuitionCoordinatorPortal
-          department={activeDepartment}
-          features={enabledFeatures}
-          coordinatorTabs={coordinatorTabAccess}
-          user={{ ...(session.user as any), role: effectiveDepartmentRole }}
-          themeMode={themeMode}
-          onToggleTheme={toggleTheme}
-          onLogout={() => {
-            disconnectAcademyWS(true);
-            clearSession();
-            setSession(null);
-            setAuthContext(null);
-            navigateToTab("dashboard");
-          }}
-        />
-      </Suspense>
-
-      <FeatureLockedModal
-        feature={lockedFeature}
-        onClose={() => setLockedFeature(null)}
-      />
-      <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
-    </>
-  );
-}
-
-if (
-  session &&
-  isTuitionDepartment &&
-  effectiveDepartmentRole === "student"
-) {
-  return (
-    <>
-      <Suspense fallback={<TabLoading />}>
-        <TuitionStudentPortal
-          departmentId={activeDepartment?.id}
-          themeMode={themeMode}
-          onToggleTheme={toggleTheme}
-          onLogout={() => {
-            disconnectAcademyWS(true);
-            clearSession();
-            setSession(null);
-            setAuthContext(null);
-            navigateToTab("dashboard");
-          }}
-        />
-      </Suspense>
-      <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
-    </>
-  );
-}
-
-if (
-  session &&
-  isTuitionDepartment &&
-  effectiveDepartmentRole === "teacher"
-) {
-  return (
-    <>
-      <Suspense fallback={<TabLoading />}>
-        <TuitionTeacherPortal
-          departmentId={activeDepartment?.id}
-          themeMode={themeMode}
-          onToggleTheme={toggleTheme}
-          onLogout={() => {
-            disconnectAcademyWS(true);
-            clearSession();
-            setSession(null);
-            setAuthContext(null);
-            navigateToTab("dashboard");
-          }}
-        />
-      </Suspense>
-      <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
-    </>
-  );
-}
-
-// ---------------- Separate role portals ----------------
-if (effectiveDepartmentRole === "teacher") {
-  return (
-    <>
-      <TeacherPortal
-        themeMode={themeMode}
-        onToggleTheme={toggleTheme}
-        onLogout={() => {
-          clearSession();
-          setSession(null);
-          navigateToTab("dashboard");
-        }}
-      />
-      <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
-    </>
-  );
-}
-
-if (effectiveDepartmentRole === "student") {
-  return (
-    <>
-      <StudentPortal
-        departmentName={String(activeDepartment?.name || "Quran Department")}
-        onLogout={() => {
-          clearSession();
-          setSession(null);
-          navigateToTab("dashboard");
-        }}
-      />
-      <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
-    </>
-  );
-}
-  // ---------------- Separate Platform Admin Portal ----------------
-if (isPlatformAdmin) {
-  return (
-    <Suspense fallback={<TabLoading />}>
-      <PlatformAdmin
-        themeMode={themeMode}
-        onToggleTheme={toggleTheme}
-        adminName={
-          String((session as any)?.user?.full_name || sessionUsername || "Platform Administrator")
-        }
-        adminUsername={String((session as any)?.user?.username || sessionUsername || "")}
-        adminEmail={String((session as any)?.user?.email || "")}
-        onSaveAdminProfile={async ({
-          name,
-          username,
-          email,
-          currentPassword,
-          newPassword,
-        }) => {
-          if (!session) {
-            throw new Error("Main Admin session was not found. Please log in again.");
-          }
-
-          const nameParts = name.trim().split(/\s+/).filter(Boolean);
-          const firstName = nameParts.shift() || "";
-          const lastName = nameParts.join(" ");
-
-          const updated = await updateMyProfile({
-            username,
-            email,
-            first_name: firstName,
-            last_name: lastName,
-            ...(currentPassword ? { current_password: currentPassword } : {}),
-            ...(newPassword ? { new_password: newPassword } : {}),
-          });
-
-          const nextSession: Session = {
-            ...session,
-            role: updated.role as Session["role"],
-            user: {
-              ...(session.user || {}),
-              id: updated.id,
-              username: updated.username,
-              email: updated.email,
-              first_name: updated.first_name,
-              last_name: updated.last_name,
-              full_name: updated.full_name,
-              role: updated.role as Session["role"],
-              is_staff: updated.is_staff,
-              is_superuser: updated.is_superuser,
-            },
-          };
-
-          setSession(nextSession);
-          saveSession(nextSession);
-        }}
+  if (session && !isPlatformAdmin && maintenanceState.active) {
+    return (
+      <MaintenanceScreen
+        maintenance={maintenanceState}
+        onRetry={() => void retryMaintenanceStatus()}
         onLogout={() => {
           disconnectAcademyWS(true);
           clearSession();
           setSession(null);
           setAuthContext(null);
+          setMaintenanceState({ active: false });
+          setPlatformNotices([]);
           navigateToTab("dashboard");
         }}
       />
-    </Suspense>
-  );
-}
+    );
+  }
+
+  if (
+    session &&
+    !isPlatformAdmin &&
+    isTuitionDepartment &&
+    ["coordinator", "department_admin", "institution_admin"].includes(
+      effectiveDepartmentRole
+    )
+  ) {
+    return (
+      <>
+        <Suspense fallback={<TabLoading />}>
+          <TuitionCoordinatorPortal
+            department={activeDepartment}
+            features={enabledFeatures}
+            coordinatorTabs={coordinatorTabAccess}
+            user={{ ...(session.user as any), role: effectiveDepartmentRole }}
+            themeMode={themeMode}
+            onToggleTheme={toggleTheme}
+            onLogout={() => {
+              disconnectAcademyWS(true);
+              clearSession();
+              setSession(null);
+              setAuthContext(null);
+              navigateToTab("dashboard");
+            }}
+          />
+        </Suspense>
+
+        <FeatureLockedModal
+          feature={lockedFeature}
+          onClose={() => setLockedFeature(null)}
+        />
+        <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+      </>
+    );
+  }
+
+  if (
+    session &&
+    isTuitionDepartment &&
+    effectiveDepartmentRole === "student"
+  ) {
+    return (
+      <>
+        <Suspense fallback={<TabLoading />}>
+          <TuitionStudentPortal
+            departmentId={activeDepartment?.id}
+            themeMode={themeMode}
+            onToggleTheme={toggleTheme}
+            onLogout={() => {
+              disconnectAcademyWS(true);
+              clearSession();
+              setSession(null);
+              setAuthContext(null);
+              navigateToTab("dashboard");
+            }}
+          />
+        </Suspense>
+        <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+      </>
+    );
+  }
+
+  if (
+    session &&
+    isTuitionDepartment &&
+    effectiveDepartmentRole === "teacher"
+  ) {
+    return (
+      <>
+        <Suspense fallback={<TabLoading />}>
+          <TuitionTeacherPortal
+            departmentId={activeDepartment?.id}
+            themeMode={themeMode}
+            onToggleTheme={toggleTheme}
+            onLogout={() => {
+              disconnectAcademyWS(true);
+              clearSession();
+              setSession(null);
+              setAuthContext(null);
+              navigateToTab("dashboard");
+            }}
+          />
+        </Suspense>
+        <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+      </>
+    );
+  }
+
+  // ---------------- Separate role portals ----------------
+  if (effectiveDepartmentRole === "teacher") {
+    return (
+      <>
+        <Suspense fallback={<TabLoading />}>
+<TeacherPortal
+          themeMode={themeMode}
+          onToggleTheme={toggleTheme}
+          onLogout={() => {
+            clearSession();
+            setSession(null);
+            navigateToTab("dashboard");
+          }}
+        />
+</Suspense>
+        <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+      </>
+    );
+  }
+
+  if (effectiveDepartmentRole === "student") {
+    return (
+      <>
+        <Suspense fallback={<TabLoading />}>
+<StudentPortal
+          departmentName={String(activeDepartment?.name || "Quran Department")}
+          onLogout={() => {
+            clearSession();
+            setSession(null);
+            navigateToTab("dashboard");
+          }}
+        />
+</Suspense>
+        <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+      </>
+    );
+  }
+  // ---------------- Separate Platform Admin Portal ----------------
+  if (isPlatformAdmin) {
+    return (
+      <Suspense fallback={<TabLoading />}>
+        <PlatformAdmin
+          themeMode={themeMode}
+          onToggleTheme={toggleTheme}
+          adminName={
+            String((session as any)?.user?.full_name || sessionUsername || "Platform Administrator")
+          }
+          adminUsername={String((session as any)?.user?.username || sessionUsername || "")}
+          adminEmail={String((session as any)?.user?.email || "")}
+          onSaveAdminProfile={async ({
+            name,
+            username,
+            email,
+            currentPassword,
+            newPassword,
+          }) => {
+            if (!session) {
+              throw new Error("Main Admin session was not found. Please log in again.");
+            }
+
+            const nameParts = name.trim().split(/\s+/).filter(Boolean);
+            const firstName = nameParts.shift() || "";
+            const lastName = nameParts.join(" ");
+
+            const updated = await updateMyProfile({
+              username,
+              email,
+              first_name: firstName,
+              last_name: lastName,
+              ...(currentPassword ? { current_password: currentPassword } : {}),
+              ...(newPassword ? { new_password: newPassword } : {}),
+            });
+
+            const nextSession: Session = {
+              ...session,
+              role: updated.role as Session["role"],
+              user: {
+                ...(session.user || {}),
+                id: updated.id,
+                username: updated.username,
+                email: updated.email,
+                first_name: updated.first_name,
+                last_name: updated.last_name,
+                full_name: updated.full_name,
+                role: updated.role as Session["role"],
+                is_staff: updated.is_staff,
+                is_superuser: updated.is_superuser,
+              },
+            };
+
+            setSession(nextSession);
+            saveSession(nextSession);
+          }}
+          onLogout={() => {
+            disconnectAcademyWS(true);
+            clearSession();
+            setSession(null);
+            setAuthContext(null);
+            navigateToTab("dashboard");
+          }}
+        />
+      </Suspense>
+    );
+  }
 
   // ---------------- Main Quran Department UI ----------------
   return (
-  <>
+    <>
 
-  <div className="min-h-screen bg-slate-50">
-<div className="flex">
-  <div
-    className="hidden md:block fixed left-0 top-0 z-[39] h-screen w-5 bg-transparent"
-    onMouseEnter={() => setSidebarEdgeHover(true)}
-  />
+      <div className="min-h-screen bg-slate-50">
+        <div className="flex">
+          <div
+            className="hidden md:block fixed left-0 top-0 z-[39] h-screen w-5 bg-transparent"
+            onMouseEnter={() => setSidebarEdgeHover(true)}
+          />
 
-{/* ═══════════════════════════════════════════════════════
+          {/* ═══════════════════════════════════════════════════════
     SIDEBAR
     Collapsed : logo → admin icon → nav icons → logout icon
     Expanded  : full glass cards + dividers + tight icon-label gap
 ═══════════════════════════════════════════════════════ */}
-<aside
-  onMouseEnter={() => setSidebarEdgeHover(true)}
-  onMouseLeave={() => setSidebarEdgeHover(false)}
-  className={`
+          {/* Permanent desktop sidebar footprint.
+              The real sidebar is fixed so its hover expansion overlays
+              content instead of shifting the main Dashboard layout. */}
+          <div
+            className="hidden md:block w-[108px] shrink-0"
+            aria-hidden="true"
+          />
+
+          <aside
+            onMouseEnter={() => setSidebarEdgeHover(true)}
+            onMouseLeave={() => setSidebarEdgeHover(false)}
+            className={`
     group
 ${sidebarEdgeHover ? "is-sidebar-open" : ""}
     fixed inset-y-0 left-0 z-40
     transform transition-transform duration-300 ease-in-out
     ${mobileMenuOpen ? "translate-x-0" : "-translate-x-[110%]"}
-    md:translate-x-0 md:static
+    md:translate-x-0
 
     shrink-0
     m-3 md:m-4
@@ -3458,347 +3688,360 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
     md:duration-300
     md:ease-[cubic-bezier(.2,.8,.2,1)]
   `}
->
-  <div className="hidden md:block fixed left-0 top-0 h-screen w-5 bg-transparent" />
-  <div className="h-full flex flex-col">
+          >
+            <div className="hidden md:block fixed left-0 top-0 h-screen w-5 bg-transparent" />
+            <div className="h-full flex flex-col">
 
-    {/* ─────────────────────────────────────
+              {/* ─────────────────────────────────────
         LOGO
     ───────────────────────────────────── */}
-    <div className="px-3 pt-3 pb-0">
+              <div className="px-3 pt-3 pb-0">
 
-      {/* Collapsed */}
-      <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-2">
-        <div className="w-[52px] h-[52px] rounded-[17px] bg-white border border-slate-200/80 flex items-center justify-center overflow-hidden shadow-[-6px_-6px_14px_rgba(255,255,255,0.98),6px_8px_18px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)]">
-          <img src="/ivs-logo.png" alt="IVS" className="w-10 h-10 object-contain" />
-        </div>
-      </div>
-
-      {/* Expanded */}
-      <div className="flex md:hidden md:group-hover:flex items-center gap-2.5 rounded-[20px] bg-white/80 border border-white/90 px-2.5 py-2.5 shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)]">
-        <div className="w-[48px] h-[48px] rounded-[16px] bg-white border border-slate-200/70 flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_10px_20px_rgba(15,23,42,0.07)] shrink-0 overflow-hidden">
-          <img src="/ivs-logo.png" alt="Iqra Virtual School" className="w-9 h-9 object-contain" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-[13.5px] font-extrabold text-slate-950 leading-tight truncate">Iqra Virtual School</div>
-          <div className="text-[10.5px] font-semibold text-slate-500 truncate mt-0.5">{quranDepartmentDisplayName}</div>
-        </div>
-        <button onClick={() => setMobileMenuOpen(false)} className="md:hidden h-7 w-7 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-500 shrink-0" title="Close">
-          <X size={14} />
-        </button>
-      </div>
-    </div>
-
-    {/* Divider after brand */}
-    <div className="mx-4 mt-3 h-px bg-slate-200/70 hidden md:hidden md:group-hover:block" />
-    <div className="mx-4 mt-3 h-px bg-slate-200/70 md:hidden" />
-
-    {/* ─────────────────────────────────────
-        ROLE / ACCOUNT
-    ───────────────────────────────────── */}
-    <div className="px-3 pt-3 pb-0">
-
-      {/* Collapsed */}
-      <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-2">
-        <div className="w-[52px] h-[52px] rounded-[17px] bg-slate-900 border border-slate-700/50 flex items-center justify-center overflow-hidden shadow-[0_12px_28px_rgba(15,23,42,0.30)]">
-          <img src={roleIconSrc} alt={roleLabel} className="w-10 h-10 object-contain" onError={(e) => { e.currentTarget.style.display = "none"; }} />
-        </div>
-      </div>
-
-      {/* Expanded */}
-      <div className="flex md:hidden md:group-hover:flex items-center gap-2.5 rounded-[20px] bg-slate-950 px-2.5 py-2.5 text-white shadow-[0_20px_48px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.08)]">
-        <div className="w-[48px] h-[48px] rounded-[16px] bg-white/10 border border-white/10 flex items-center justify-center shadow-[0_12px_24px_rgba(0,0,0,0.25)] shrink-0 overflow-hidden">
-          <img src={roleIconSrc} alt={roleLabel} className="w-9 h-9 object-contain" onError={(e) => { e.currentTarget.style.display = "none"; }} />
-        </div>
-        <div className="min-w-0">
-          <div className="text-[12.5px] font-extrabold whitespace-nowrap">{roleLabel}</div>
-          <div className="text-[10px] text-slate-400 mt-0.5 truncate font-semibold">{sidebarDisplayName}</div>
-        </div>
-      </div>
-    </div>
-
-    {/* Divider after account */}
-    <div className="mx-4 mt-3 h-px bg-slate-200/70 hidden md:hidden md:group-hover:block" />
-    <div className="mx-4 mt-3 h-px bg-slate-200/70 md:hidden" />
-
-    {/* ─────────────────────────────────────
-        NAVIGATION
-    ───────────────────────────────────── */}
-    <nav className="flex-1 px-3 pt-3 overflow-y-auto" style={{scrollbarWidth:'none',msOverflowStyle:'none'}}>
-
-      {/* Collapsed: stacked bare icons */}
-      <div className="hidden md:flex md:group-hover:hidden flex-col items-center gap-2.5 py-1">
-        {coordinatorNavItems.map((id) => {
-          const item = NAV_META[id];
-          const Icon = item.icon;
-          const active = activeTab === id;
-          const locked = isTabLocked(id);
-          return (
-            <button
-              key={id}
-              onClick={() => { handleSidebarTabClick(id); setMobileMenuOpen(false); }}
-              title={locked ? `${item.label} is locked` : item.label}
-              aria-disabled={locked}
-              className="transition-all duration-300"
-            >
-              <div className={`relative w-[52px] h-[52px] rounded-[17px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${
-                locked
-                  ? "border border-slate-300 bg-slate-100 text-slate-400 grayscale opacity-75 shadow-inner"
-                  : active
-                    ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]"
-                    : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"
-              }`}>
-                <Icon size={20} className={locked ? "opacity-45" : ""} />
-                {locked && (
-                  <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full border border-white bg-slate-700 text-white shadow-sm">
-                    <LockKeyhole size={10} />
-                  </span>
-                )}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Expanded: icon + label — grid-cols-[52px_1fr] keeps icon & text close */}
-      <div className="flex md:hidden md:group-hover:flex flex-col gap-1">
-        {coordinatorNavItems.map((id) => {
-          const item = NAV_META[id];
-          const Icon = item.icon;
-          const active = activeTab === id;
-          const locked = isTabLocked(id);
-          return (
-            <button
-              key={id}
-              onClick={() => { handleSidebarTabClick(id); setMobileMenuOpen(false); }}
-              title={locked ? `${item.label} is locked` : item.label}
-              aria-disabled={locked}
-              className={`w-full rounded-[18px] transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${
-                locked
-                  ? "bg-slate-100/85 grayscale opacity-75"
-                  : active
-                    ? "bg-white/72 shadow-[-5px_-5px_14px_rgba(255,255,255,0.97),7px_9px_18px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,1)]"
-                    : "hover:bg-white/45"
-              }`}
-            >
-              <div className="grid grid-cols-[52px_1fr_26px] items-center">
-                <div className="flex items-center justify-center py-1.5">
-                  <div className={`relative w-[46px] h-[46px] rounded-[15px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${
-                    locked
-                      ? "border border-slate-300 bg-slate-200 text-slate-400 shadow-inner"
-                      : active
-                        ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]"
-                        : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"
-                  }`}>
-                    <Icon size={19} className={locked ? "opacity-45" : ""} />
+                {/* Collapsed */}
+                <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-2">
+                  <div className="w-[52px] h-[52px] rounded-[17px] bg-white border border-slate-200/80 flex items-center justify-center overflow-hidden shadow-[-6px_-6px_14px_rgba(255,255,255,0.98),6px_8px_18px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)]">
+                    <img src="/ivs-logo.png" alt="IVS" className="w-10 h-10 object-contain" />
                   </div>
                 </div>
-                <div className="min-w-0 pr-2">
-                  <span className={`block font-extrabold text-[13.5px] whitespace-nowrap truncate ${
-                    locked ? "text-slate-500" : active ? "text-indigo-700" : "text-slate-700"
-                  }`}>
-                    {item.label}
-                  </span>
-                </div>
-                <div className="flex justify-center">
-                  {locked && (
-                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-700 text-white shadow-sm">
-                      <LockKeyhole size={12} />
-                    </span>
-                  )}
+
+                {/* Expanded */}
+                <div className="flex md:hidden md:group-hover:flex items-center gap-2.5 rounded-[20px] bg-white/80 border border-white/90 px-2.5 py-2.5 shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)]">
+                  <div className="w-[48px] h-[48px] rounded-[16px] bg-white border border-slate-200/70 flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_10px_20px_rgba(15,23,42,0.07)] shrink-0 overflow-hidden">
+                    <img src="/ivs-logo.png" alt="Iqra Virtual School" className="w-9 h-9 object-contain" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[13.5px] font-extrabold text-slate-950 leading-tight truncate">Iqra Virtual School</div>
+                    <div className="text-[10.5px] font-semibold text-slate-500 truncate mt-0.5">{quranDepartmentDisplayName}</div>
+                  </div>
+                  <button onClick={() => setMobileMenuOpen(false)} className="md:hidden h-7 w-7 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-500 shrink-0" title="Close">
+                    <X size={14} />
+                  </button>
                 </div>
               </div>
-            </button>
-          );
-        })}
-      </div>
-    </nav>
 
-{/* ─────────────────────────────────────
+              {/* Divider after brand */}
+              <div className="mx-4 mt-3 h-px bg-slate-200/70 hidden md:hidden md:group-hover:block" />
+              <div className="mx-4 mt-3 h-px bg-slate-200/70 md:hidden" />
+
+              {/* ─────────────────────────────────────
+        ROLE / ACCOUNT
+    ───────────────────────────────────── */}
+              <div className="px-3 pt-3 pb-0">
+
+                {/* Collapsed */}
+                <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-2">
+                  <div className="w-[52px] h-[52px] rounded-[17px] bg-slate-900 border border-slate-700/50 flex items-center justify-center overflow-hidden shadow-[0_12px_28px_rgba(15,23,42,0.30)]">
+                    <RoleSidebarIcon size={22} className="text-white" aria-hidden="true" />
+                  </div>
+                </div>
+
+                {/* Expanded */}
+                <div className="flex md:hidden md:group-hover:flex items-center gap-2.5 rounded-[20px] bg-slate-950 px-2.5 py-2.5 text-white shadow-[0_20px_48px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.08)]">
+                  <div className="w-[48px] h-[48px] rounded-[16px] bg-white/10 border border-white/10 flex items-center justify-center shadow-[0_12px_24px_rgba(0,0,0,0.25)] shrink-0 overflow-hidden">
+                    <RoleSidebarIcon size={20} className="text-white" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[12.5px] font-extrabold whitespace-nowrap">{roleLabel}</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5 truncate font-semibold">{sidebarDisplayName}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Divider after account */}
+              <div className="mx-4 mt-3 h-px bg-slate-200/70 hidden md:hidden md:group-hover:block" />
+              <div className="mx-4 mt-3 h-px bg-slate-200/70 md:hidden" />
+
+              {/* ─────────────────────────────────────
+        NAVIGATION
+    ───────────────────────────────────── */}
+              <nav className="flex-1 px-3 pt-3 overflow-y-auto" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+
+                {/* Collapsed: stacked bare icons */}
+                <div className="hidden md:flex md:group-hover:hidden flex-col items-center gap-2.5 py-1">
+                  {coordinatorNavItems.map((id) => {
+                    const item = NAV_META[id];
+                    const Icon = item.icon;
+                    const active = activeTab === id;
+                    const locked = isTabLocked(id);
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => { handleSidebarTabClick(id); setMobileMenuOpen(false); }}
+                        title={locked ? `${item.label} is locked` : item.label}
+                        aria-disabled={locked}
+                        className="transition-all duration-300"
+                      >
+                        <div className={`relative w-[52px] h-[52px] rounded-[17px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${locked
+                          ? "border border-slate-300 bg-slate-100 text-slate-400 grayscale opacity-75 shadow-inner"
+                          : active
+                            ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]"
+                            : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"
+                          }`}>
+                          <Icon size={20} className={locked ? "opacity-45" : ""} />
+                          {locked && (
+                            <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full border border-white bg-slate-700 text-white shadow-sm">
+                              <LockKeyhole size={10} />
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Expanded: icon + label — grid-cols-[52px_1fr] keeps icon & text close */}
+                <div className="flex md:hidden md:group-hover:flex flex-col gap-1">
+                  {coordinatorNavItems.map((id) => {
+                    const item = NAV_META[id];
+                    const Icon = item.icon;
+                    const active = activeTab === id;
+                    const locked = isTabLocked(id);
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => { handleSidebarTabClick(id); setMobileMenuOpen(false); }}
+                        title={locked ? `${item.label} is locked` : item.label}
+                        aria-disabled={locked}
+                        className={`w-full rounded-[18px] transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${locked
+                          ? "bg-slate-100/85 grayscale opacity-75"
+                          : active
+                            ? "bg-white/72 shadow-[-5px_-5px_14px_rgba(255,255,255,0.97),7px_9px_18px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,1)]"
+                            : "hover:bg-white/45"
+                          }`}
+                      >
+                        <div className="grid grid-cols-[52px_1fr_26px] items-center">
+                          <div className="flex items-center justify-center py-1.5">
+                            <div className={`relative w-[46px] h-[46px] rounded-[15px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${locked
+                              ? "border border-slate-300 bg-slate-200 text-slate-400 shadow-inner"
+                              : active
+                                ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]"
+                                : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"
+                              }`}>
+                              <Icon size={19} className={locked ? "opacity-45" : ""} />
+                            </div>
+                          </div>
+                          <div className="min-w-0 pr-2">
+                            <span className={`block font-extrabold text-[13.5px] whitespace-nowrap truncate ${locked ? "text-slate-500" : active ? "text-indigo-700" : "text-slate-700"
+                              }`}>
+                              {item.label}
+                            </span>
+                          </div>
+                          <div className="flex justify-center">
+                            {locked && (
+                              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-700 text-white shadow-sm">
+                                <LockKeyhole size={12} />
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </nav>
+
+              {/* ─────────────────────────────────────
     AI ASSISTANT BOT
 ───────────────────────────────────── */}
-<div className="px-3 pt-3 pb-2">
-  {/* Collapsed */}
-  <div className="hidden md:flex md:group-hover:hidden items-center justify-center">
-    <button
-      type="button"
-      onClick={() => {
-        if (!hasFeature("ai_assistant")) {
-          showFeatureLocked(
-            "AI Assistant",
-            `${quranDepartmentDisplayName} AI Assistant is currently disabled by Main Admin.`,
-          );
-          return;
-        }
-        setAssistantOpen(true);
-      }}
-      className={`relative h-[54px] w-[54px] rounded-[18px] border flex items-center justify-center overflow-hidden transition active:scale-[0.97] ${
-        hasFeature("ai_assistant")
-          ? "bg-white/90 border-slate-200/80 shadow-[-6px_-6px_14px_rgba(255,255,255,0.95),6px_8px_18px_rgba(15,23,42,0.10)] hover:bg-white"
-          : "border-slate-300 bg-slate-100 text-slate-500 grayscale opacity-75 shadow-inner"
-      }`}
-      title={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
-      aria-label={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
-    >
-      {hasFeature("ai_assistant") ? (
-        aiBotAnimation ? (
-          <Lottie
-            animationData={aiBotAnimation}
-            loop
-            autoplay
-            className="h-12 w-12 pointer-events-none"
-          />
-        ) : (
-          <div className="text-[10px] font-black text-slate-500">AI</div>
-        )
-      ) : (
-        <LockKeyhole size={20} />
-      )}
-    </button>
-  </div>
+              <div className="px-3 pt-3 pb-2">
+                {/* Collapsed */}
+                <div className="hidden md:flex md:group-hover:hidden items-center justify-center">
+                  <button
+                    type="button"
+                    onMouseEnter={() => {
+                      if (hasFeature("ai_assistant")) requestAiAssistantAssets();
+                    }}
+                    onFocus={() => {
+                      if (hasFeature("ai_assistant")) requestAiAssistantAssets();
+                    }}
+                    onClick={() => {
+                      if (!hasFeature("ai_assistant")) {
+                        showFeatureLocked(
+                          "AI Assistant",
+                          `${quranDepartmentDisplayName} AI Assistant is currently disabled by Main Admin.`,
+                        );
+                        return;
+                      }
+                      requestAiAssistantAssets();
+                      setAssistantHasOpened(true);
+                      setAssistantOpen(true);
+                    }}
+                    className={`relative h-[54px] w-[54px] rounded-[18px] border flex items-center justify-center overflow-hidden transition active:scale-[0.97] ${hasFeature("ai_assistant")
+                      ? "bg-white/90 border-slate-200/80 shadow-[-6px_-6px_14px_rgba(255,255,255,0.95),6px_8px_18px_rgba(15,23,42,0.10)] hover:bg-white"
+                      : "border-slate-300 bg-slate-100 text-slate-500 grayscale opacity-75 shadow-inner"
+                      }`}
+                    title={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
+                    aria-label={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
+                  >
+                    {hasFeature("ai_assistant") ? (
+                      aiBotAnimation ? (
+                        <Suspense fallback={<div className="h-12 w-12 flex items-center justify-center text-[10px] font-black text-slate-500">AI</div>}>
+                          <Lottie
+                            animationData={aiBotAnimation}
+                            loop
+                            autoplay
+                            className="h-12 w-12 pointer-events-none"
+                          />
+                        </Suspense>
+                      ) : (
+                        <div className="text-[10px] font-black text-slate-500">AI</div>
+                      )
+                    ) : (
+                      <LockKeyhole size={20} />
+                    )}
+                  </button>
+                </div>
 
-  {/* Expanded */}
-  <button
-    type="button"
-    onClick={() => {
-      if (!hasFeature("ai_assistant")) {
-        showFeatureLocked(
-          "AI Assistant",
-          `${quranDepartmentDisplayName} AI Assistant is currently disabled by Main Admin.`,
-        );
-        return;
-      }
-      setAssistantOpen(true);
-      setMobileMenuOpen(false);
-    }}
-    className={`flex md:hidden md:group-hover:flex w-full items-center gap-3 rounded-[22px] border px-3 py-3 text-left transition active:scale-[0.99] ${
-      hasFeature("ai_assistant")
-        ? "bg-white/80 border-white/90 shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)] hover:bg-white"
-        : "border-slate-300 bg-slate-100 text-slate-500 grayscale opacity-75 shadow-inner"
-    }`}
-    title={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
-    aria-label={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
-  >
-    <div className={`h-[58px] w-[58px] rounded-[20px] border flex items-center justify-center overflow-hidden shrink-0 ${
-      hasFeature("ai_assistant")
-        ? "bg-white border-slate-200/70"
-        : "border-slate-300 bg-slate-200 text-slate-500"
-    }`}>
-      {hasFeature("ai_assistant") ? (
-        aiBotAnimation ? (
-          <Lottie
-            animationData={aiBotAnimation}
-            loop
-            autoplay
-            className="h-14 w-14 pointer-events-none"
-          />
-        ) : (
-          <div className="text-xs font-black text-slate-500">AI</div>
-        )
-      ) : (
-        <LockKeyhole size={22} />
-      )}
-    </div>
+                {/* Expanded */}
+                <button
+                  type="button"
+                  onMouseEnter={() => {
+                    if (hasFeature("ai_assistant")) requestAiAssistantAssets();
+                  }}
+                  onFocus={() => {
+                    if (hasFeature("ai_assistant")) requestAiAssistantAssets();
+                  }}
+                  onClick={() => {
+                    if (!hasFeature("ai_assistant")) {
+                      showFeatureLocked(
+                        "AI Assistant",
+                        `${quranDepartmentDisplayName} AI Assistant is currently disabled by Main Admin.`,
+                      );
+                      return;
+                    }
+                    requestAiAssistantAssets();
+                    setAssistantHasOpened(true);
+                    setAssistantOpen(true);
+                    setMobileMenuOpen(false);
+                  }}
+                  className={`flex md:hidden md:group-hover:flex w-full items-center gap-3 rounded-[22px] border px-3 py-3 text-left transition active:scale-[0.99] ${hasFeature("ai_assistant")
+                    ? "bg-white/80 border-white/90 shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)] hover:bg-white"
+                    : "border-slate-300 bg-slate-100 text-slate-500 grayscale opacity-75 shadow-inner"
+                    }`}
+                  title={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
+                  aria-label={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
+                >
+                  <div className={`h-[58px] w-[58px] rounded-[20px] border flex items-center justify-center overflow-hidden shrink-0 ${hasFeature("ai_assistant")
+                    ? "bg-white border-slate-200/70"
+                    : "border-slate-300 bg-slate-200 text-slate-500"
+                    }`}>
+                    {hasFeature("ai_assistant") ? (
+                      aiBotAnimation ? (
+                        <Suspense fallback={<div className="h-14 w-14 flex items-center justify-center text-xs font-black text-slate-500">AI</div>}>
+                          <Lottie
+                            animationData={aiBotAnimation}
+                            loop
+                            autoplay
+                            className="h-14 w-14 pointer-events-none"
+                          />
+                        </Suspense>
+                      ) : (
+                        <div className="text-xs font-black text-slate-500">AI</div>
+                      )
+                    ) : (
+                      <LockKeyhole size={22} />
+                    )}
+                  </div>
 
-    <div className="min-w-0">
-      <div className={`text-[13px] font-extrabold truncate ${hasFeature("ai_assistant") ? "text-slate-950" : "text-slate-500"}`}>
-        AI Assistant
-      </div>
-      <div className="text-[10.5px] font-semibold text-slate-500 truncate mt-0.5">
-        {hasFeature("ai_assistant") ? "Quick help anytime" : "Locked by Main Admin"}
-      </div>
-    </div>
-  </button>
-</div>
+                  <div className="min-w-0">
+                    <div className={`text-[13px] font-extrabold truncate ${hasFeature("ai_assistant") ? "text-slate-950" : "text-slate-500"}`}>
+                      AI Assistant
+                    </div>
+                    <div className="text-[10.5px] font-semibold text-slate-500 truncate mt-0.5">
+                      {hasFeature("ai_assistant") ? "Quick help anytime" : "Locked by Main Admin"}
+                    </div>
+                  </div>
+                </button>
+              </div>
 
-    <div className="mx-4 mt-2 h-px bg-slate-200/70" />
+              <div className="mx-4 mt-2 h-px bg-slate-200/70" />
 
-    {/* ─────────────────────────────────────
+              {/* ─────────────────────────────────────
         LOGOUT
     ───────────────────────────────────── */}
-    <div className="px-3 pt-2 pb-3">
+              <div className="px-3 pt-2 pb-3">
 
-      {/* Collapsed */}
-      <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-1">
-        <button onClick={() => {disconnectAcademyWS(); clearSession(); setSession(null); navigateToTab("dashboard"); }} title="Logout" className="transition-all duration-300">
-          <div className="w-[52px] h-[52px] rounded-[17px] bg-white/95 border border-rose-100 flex items-center justify-center text-rose-600 shadow-[-5px_-5px_12px_rgba(255,255,255,0.95),5px_7px_16px_rgba(244,63,94,0.12),inset_0_1px_0_rgba(255,255,255,1)]">
-            <LogOut size={19} />
-          </div>
-        </button>
-      </div>
+                {/* Collapsed */}
+                <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-1">
+                  <button onClick={() => { disconnectAcademyWS(); clearSession(); setSession(null); navigateToTab("dashboard"); }} title="Logout" className="transition-all duration-300">
+                    <div className="w-[52px] h-[52px] rounded-[17px] bg-white/95 border border-rose-100 flex items-center justify-center text-rose-600 shadow-[-5px_-5px_12px_rgba(255,255,255,0.95),5px_7px_16px_rgba(244,63,94,0.12),inset_0_1px_0_rgba(255,255,255,1)]">
+                      <LogOut size={19} />
+                    </div>
+                  </button>
+                </div>
 
-      {/* Expanded — compact pill */}
-      <button
-        onClick={() => { disconnectAcademyWS(); clearSession(); setSession(null); navigateToTab("dashboard"); }}
-        title="Logout"
-        className="w-full flex md:hidden md:group-hover:flex rounded-[16px] bg-rose-50/90 border border-rose-100/80 hover:bg-rose-100/90 transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] shadow-[-4px_-4px_12px_rgba(255,255,255,0.95),4px_6px_14px_rgba(244,63,94,0.08)]"
-      >
-        {/* Same 52px col as nav items — perfectly aligned */}
-        <div className="grid grid-cols-[52px_1fr] items-center w-full">
-          <div className="flex items-center justify-center py-1.5">
-            <div className="w-[40px] h-[40px] rounded-[13px] bg-white/95 border border-rose-100 flex items-center justify-center text-rose-600 shadow-[-4px_-4px_10px_rgba(255,255,255,0.95),4px_5px_12px_rgba(244,63,94,0.12),inset_0_1px_0_rgba(255,255,255,1)]">
-              <LogOut size={16} />
+                {/* Expanded — compact pill */}
+                <button
+                  onClick={() => { disconnectAcademyWS(); clearSession(); setSession(null); navigateToTab("dashboard"); }}
+                  title="Logout"
+                  className="w-full flex md:hidden md:group-hover:flex rounded-[16px] bg-rose-50/90 border border-rose-100/80 hover:bg-rose-100/90 transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] shadow-[-4px_-4px_12px_rgba(255,255,255,0.95),4px_6px_14px_rgba(244,63,94,0.08)]"
+                >
+                  {/* Same 52px col as nav items — perfectly aligned */}
+                  <div className="grid grid-cols-[52px_1fr] items-center w-full">
+                    <div className="flex items-center justify-center py-1.5">
+                      <div className="w-[40px] h-[40px] rounded-[13px] bg-white/95 border border-rose-100 flex items-center justify-center text-rose-600 shadow-[-4px_-4px_10px_rgba(255,255,255,0.95),4px_5px_12px_rgba(244,63,94,0.12),inset_0_1px_0_rgba(255,255,255,1)]">
+                        <LogOut size={16} />
+                      </div>
+                    </div>
+                    <div className="min-w-0 pr-2">
+                      <span className="block font-extrabold text-[13px] whitespace-nowrap text-rose-600">Logout</span>
+                    </div>
+                  </div>
+                </button>
+              </div>
+
             </div>
-          </div>
-          <div className="min-w-0 pr-2">
-            <span className="block font-extrabold text-[13px] whitespace-nowrap text-rose-600">Logout</span>
-          </div>
-        </div>
-      </button>
-    </div>
+          </aside>
 
-  </div>
-</aside>
+          {/* Content */}
+          <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
+            <header className="mx-3 md:mx-4 mt-2 md:mt-3 mb-1.5">
+              <div className="rounded-[24px] border border-slate-200/80 bg-white/82 backdrop-blur-xl shadow-[0_16px_40px_rgba(15,23,42,0.06)] px-4 md:px-5 py-2">
+                <div className="flex items-center justify-between gap-4">
+                  {/* Left */}
+                  <div className="flex items-center gap-3 min-w-0">
+                    <button
+                      onClick={() => setMobileMenuOpen(true)}
+                      className="md:hidden w-10 h-10 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-slate-700 shadow-sm active:scale-95 transition"
+                      aria-label="Open menu"
+                    >
+                      <Menu size={20} />
+                    </button>
+                    <div className="hidden md:flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-[0_18px_34px_-18px_rgba(37,99,235,0.70)] shrink-0">
+                        <ActiveTopIcon size={21} />
+                      </div>
+                      <div className="min-w-0">
+                        <h2 className="text-lg md:text-xl font-extrabold text-slate-950 truncate">
+                          {activeMeta.label}
+                        </h2>
+                        <div className="text-xs font-semibold text-slate-500 mt-0.5 truncate">
+                          {roleLabel} Panel
+                        </div>
+                      </div>
+                    </div>
+                  </div>
 
-      {/* Content */}
-      <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
-       <header className="mx-3 md:mx-4 mt-2 md:mt-3 mb-1.5">
-  <div className="rounded-[24px] border border-slate-200/80 bg-white/82 backdrop-blur-xl shadow-[0_16px_40px_rgba(15,23,42,0.06)] px-4 md:px-5 py-2">
-    <div className="flex items-center justify-between gap-4">
-      {/* Left */}
-      <div className="flex items-center gap-3 min-w-0">
-        <button
-          onClick={() => setMobileMenuOpen(true)}
-          className="md:hidden w-10 h-10 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-slate-700 shadow-sm active:scale-95 transition"
-          aria-label="Open menu"
-        >
-          <Menu size={20} />
-        </button>
-        <div className="hidden md:flex items-center gap-3">
-          <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-[0_18px_34px_-18px_rgba(37,99,235,0.70)] shrink-0">
-            <ActiveTopIcon size={21} />
-          </div>
-          <div className="min-w-0">
-            <h2 className="text-lg md:text-xl font-extrabold text-slate-950 truncate">
-              {activeMeta.label}
-            </h2>
-            <div className="text-xs font-semibold text-slate-500 mt-0.5 truncate">
-              {roleLabel} Panel
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Right */}
-      <div className="flex items-center gap-3 sm:gap-4">
-        <div
-          className="
+                  {/* Right */}
+                  <div className="flex items-center gap-3 sm:gap-4">
+                    <div
+                      className="
             px-2.5 py-1 rounded-[24px]
             bg-white/72 backdrop-blur
             border border-slate-200/80
             shadow-[0_12px_28px_rgba(15,23,42,0.07)]
           "
-        >
-          <TopbarClock />
-        </div>
+                    >
+                      <TopbarClock />
+                    </div>
 
-{(isSuperAdmin || isDepartmentAdmin) ? (
-  <button
-    onClick={() => {
-      setModalMode("settings");
-      setShowModal(true);
-    }}
-    className="
+                    {(isSuperAdmin || isDepartmentAdmin) ? (
+                      <button
+                        onClick={() => {
+                          setModalMode("settings");
+                          setShowModal(true);
+                        }}
+                        className="
       inline-flex items-center justify-center
       w-10 h-10 rounded-2xl
       bg-white/80 backdrop-blur
@@ -3807,14 +4050,14 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
       active:scale-[0.98] transition-all
       text-slate-700 hover:text-slate-950
     "
-    title="Settings"
-  >
-    <Settings size={18} />
-  </button>
-) : (
-  <button
-    onClick={toggleTheme}
-    className="
+                        title="Settings"
+                      >
+                        <Settings size={18} />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={toggleTheme}
+                        className="
       inline-flex items-center justify-center
       w-10 h-10 rounded-2xl
       bg-white/80 backdrop-blur
@@ -3823,376 +4066,300 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
       active:scale-[0.98] transition-all
       text-slate-700 hover:text-slate-950
     "
-    title={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-  >
-    {themeMode === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-  </button>
-)}
-      </div>
-    </div>
-  </div>
-</header>
+                        title={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                      >
+                        {themeMode === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </header>
 
-        <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-16 md:pb-8">
-          
+            <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-16 md:pb-8">
+
               {activeTab === "dashboard" && canAccessPortalTab("dashboard") && hasFeature("tab_daily_classes") && (
-  <div className="w-full max-w-none mx-auto space-y-6">
-    {/* ✅ KPI Row */}
-{/* ✅ Pretty background banner like your reference */}
-<div className="relative overflow-hidden rounded-[32px] border border-slate-200/70 bg-white/55 backdrop-blur-xl shadow-[0_18px_55px_rgba(15,23,42,0.10)] p-6 md:p-7">
-  <DashboardBackdrop />
-
-  <div className="relative z-10">
-    {/* ✅ KPI Row */}
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <div className="ui-glass ui-card ui-gradient-border p-4 ui-card-hover">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-xs font-semibold text-slate-500">Students</div>
-            <div className="text-2xl font-extrabold text-emerald-600 mt-1">{viewStudents.length}</div>
-          </div>
-          <div className="h-10 w-10 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-600">
-            <Users size={20} />
-          </div>
-        </div>
-      </div>
-
-      <div className="ui-glass ui-card ui-gradient-border p-4 ui-card-hover">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-xs font-semibold text-slate-500">Teachers</div>
-            <div className="text-2xl font-extrabold text-blue-600 mt-1">{viewTeachers.length}</div>
-          </div>
-          <div className="h-10 w-10 rounded-2xl bg-blue-50 flex items-center justify-center text-blue-600">
-            <BookOpen size={20} />
-          </div>
-        </div>
-      </div>
-
-      <div className="ui-glass ui-card ui-gradient-border p-4 ui-card-hover">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-xs font-semibold text-slate-500">Live Now</div>
-            <div className="text-2xl font-extrabold text-slate-900 mt-1">{currentClasses.length}</div>
-            <div className="text-[11px] text-slate-500 mt-1">{formatTime12(currentSlot)}</div>
-          </div>
-          <div className="h-10 w-10 rounded-2xl bg-rose-50 flex items-center justify-center text-rose-600">
-            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-          </div>
-        </div>
-      </div>
-
-      <div className="ui-glass ui-card ui-gradient-border p-4 ui-card-hover">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-xs font-semibold text-slate-500">Up Next</div>
-            <div className="text-2xl font-extrabold text-slate-900 mt-1">{nextClasses.length}</div>
-            <div className="text-[11px] text-slate-500 mt-1">{formatTime12(nextSlot)}</div>
-          </div>
-          <div className="h-10 w-10 rounded-2xl bg-slate-50 flex items-center justify-center text-slate-600">
-            <ChevronRight size={18} />
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-
-    {/* ✅ Collapsible Insights (Hidden by default = looks more premium) */}
-<details
-  className="ui-glass ui-card ui-gradient-border ui-card-hover p-4"
-  onToggle={(e) => setInsightsOpen((e.currentTarget as HTMLDetailsElement).open)}
->
-  <summary className="cursor-pointer list-none">
-    <div className="flex items-center justify-between gap-4">
-      <div className="min-w-0">
-        <div className="text-sm font-extrabold text-slate-800 dark:text-slate-100">
-          Insights
-        </div>
-        <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
-          Attendance snapshot + timeline
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <span className="hidden sm:inline-flex rounded-xl bg-indigo-50 px-3 py-2 text-xs font-extrabold text-indigo-700 border border-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-200 dark:border-indigo-400/20">
-          Click to open
-        </span>
-
-        <div className="h-9 w-9 rounded-2xl bg-white/70 border border-slate-100 flex items-center justify-center text-slate-600 dark:bg-slate-900/70 dark:border-slate-700 dark:text-slate-300">
-          <ChevronRight size={18} />
-        </div>
-      </div>
-    </div>
-  </summary>
-
-  <div className="mt-5 grid grid-cols-1 xl:grid-cols-2 gap-5">
-    {/* Attendance Snapshot */}
-    <div className="relative overflow-hidden rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_22px_rgba(15,23,42,0.035)] dark:bg-slate-900/75 dark:border-slate-700/70">
-      <div className="pointer-events-none absolute -top-20 -right-20 h-44 w-44 rounded-full bg-emerald-200/35 blur-3xl dark:bg-emerald-500/10" />
-      <div className="pointer-events-none absolute -bottom-20 -left-20 h-44 w-44 rounded-full bg-indigo-200/25 blur-3xl dark:bg-indigo-500/10" />
-
-      <div className="relative">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-sm font-extrabold text-slate-800 dark:text-slate-100">
-              Today’s Attendance
-            </div>
-            <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              Teachers + Students summary
-            </div>
-          </div>
-
-          <span className="text-xs font-semibold text-slate-600 bg-white/80 border border-slate-100 px-3 py-1.5 rounded-full dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300">
-            {new Date().toLocaleDateString(undefined, {
-              weekday: "short",
-              month: "short",
-              day: "numeric",
-            })}
-          </span>
-        </div>
-
-        <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="rounded-2xl border border-slate-100 bg-white/90 p-4 dark:bg-slate-950/55 dark:border-slate-700">
-            <div className="text-[12px] text-slate-500 dark:text-slate-400 font-bold">
-              Teachers
-            </div>
-
-            <div className="mt-3 grid grid-cols-4 gap-2 text-center">
-              {[
-                ["P", todayAttendanceSummary.teachers.present],
-                ["A", todayAttendanceSummary.teachers.absent],
-                ["L", todayAttendanceSummary.teachers.leave],
-                ["U", todayAttendanceSummary.teachers.unmarked],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <div className="text-[10px] text-slate-400 font-bold">{label}</div>
-                  <div className="font-extrabold text-lg text-slate-900 dark:text-white">
-                    {value}
+                !hydrated ? (
+                  <div className="w-full max-w-none mx-auto">
+                    <PageSkeleton
+                      variant="dashboard"
+                      cards={6}
+                      delayMs={0}
+                      label="Loading dashboard"
+                      className="min-h-[640px]"
+                    />
                   </div>
-                </div>
-              ))}
-            </div>
-          </div>
+                ) : (
+                <div className="w-full max-w-none mx-auto space-y-6">
+                  {/* ✅ KPI Row */}
+                  {/* ✅ Pretty background banner like your reference */}
+                  <div className="relative overflow-hidden rounded-[32px] border border-slate-200/70 bg-white/55 backdrop-blur-xl shadow-[0_18px_55px_rgba(15,23,42,0.10)] p-6 md:p-7">
+                    <DashboardBackdrop />
 
-          <div className="rounded-2xl border border-slate-100 bg-white/90 p-4 dark:bg-slate-950/55 dark:border-slate-700">
-            <div className="text-[12px] text-slate-500 dark:text-slate-400 font-bold">
-              Students
-            </div>
+                    <div className="relative z-10">
+                      {/* ✅ KPI Row */}
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className="ui-glass ui-card ui-gradient-border p-4 ui-card-hover">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="text-xs font-semibold text-slate-500">Students</div>
+                              <div className="text-2xl font-extrabold text-emerald-600 mt-1">{viewStudents.length}</div>
+                            </div>
+                            <div className="h-10 w-10 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-600">
+                              <Users size={20} />
+                            </div>
+                          </div>
+                        </div>
 
-            <div className="mt-3 grid grid-cols-4 gap-2 text-center">
-              {[
-                ["P", todayAttendanceSummary.students.present],
-                ["A", todayAttendanceSummary.students.absent],
-                ["L", todayAttendanceSummary.students.leave],
-                ["U", todayAttendanceSummary.students.unmarked],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <div className="text-[10px] text-slate-400 font-bold">{label}</div>
-                  <div className="font-extrabold text-lg text-slate-900 dark:text-white">
-                    {value}
+                        <div className="ui-glass ui-card ui-gradient-border p-4 ui-card-hover">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="text-xs font-semibold text-slate-500">Teachers</div>
+                              <div className="text-2xl font-extrabold text-blue-600 mt-1">{viewTeachers.length}</div>
+                            </div>
+                            <div className="h-10 w-10 rounded-2xl bg-blue-50 flex items-center justify-center text-blue-600">
+                              <BookOpen size={20} />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="ui-glass ui-card ui-gradient-border p-4 ui-card-hover">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="text-xs font-semibold text-slate-500">Live Now</div>
+                              <div className="text-2xl font-extrabold text-slate-900 mt-1">{currentClasses.length}</div>
+                              <div className="text-[11px] text-slate-500 mt-1">{formatTime12(currentSlot)}</div>
+                            </div>
+                            <div className="h-10 w-10 rounded-2xl bg-rose-50 flex items-center justify-center text-rose-600">
+                              <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="ui-glass ui-card ui-gradient-border p-4 ui-card-hover">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="text-xs font-semibold text-slate-500">Up Next</div>
+                              <div className="text-2xl font-extrabold text-slate-900 mt-1">{nextClasses.length}</div>
+                              <div className="text-[11px] text-slate-500 mt-1">{formatTime12(nextSlot)}</div>
+                            </div>
+                            <div className="h-10 w-10 rounded-2xl bg-slate-50 flex items-center justify-center text-slate-600">
+                              <ChevronRight size={18} />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-4 text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
-          P = Present, A = Absent, L = Leave, U = Unmarked
-        </div>
-      </div>
-    </div>
-
-{/* Timeline */}
-{(() => {
-  const todaySlots = Array.from(
-    new Set(
-      viewStudents
-        .filter((s) => (s.classDays || []).includes(currentDayName))
-        .map((s) => String(s.timeSlot || "").slice(0, 5))
-        .filter(Boolean)
-    )
-  ).sort((a, b) => timeSlotToMinutes(a) - timeSlotToMinutes(b));
-
-  const chartData = todaySlots.map((slot) => {
-    const studentsInSlot = viewStudents.filter(
-      (s) =>
-        String(s.timeSlot || "").slice(0, 5) === slot &&
-        (s.classDays || []).includes(currentDayName)
-    );
-
-    return {
-      time: slot,
-      timeLabel: formatTime12(slot),
-      count: studentsInSlot.length,
-      studentNames: studentsInSlot.map((s) => s.name),
-      students: studentsInSlot,
-    };
-  });
-
-  const totalTodayClasses = chartData.reduce((sum, item) => sum + item.count, 0);
-
-  const currentSlotCount =
-    chartData.find((item) => item.time === currentSlot)?.count || 0;
-
-  const peakSlot =
-    chartData.length > 0
-      ? chartData.reduce((best, item) => (item.count > best.count ? item : best), chartData[0])
-      : null;
 
 
-  return (
-    <div
-      ref={timelineCardRef}
-      className="relative overflow-hidden rounded-[26px] border border-slate-200/60 bg-white/70 p-4 shadow-[0_12px_32px_rgba(15,23,42,0.045)] dark:bg-slate-900/70 dark:border-slate-700/70"
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-sm font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-          <BarChart3 size={17} className="text-emerald-600" />
-          Timeline Today
-        </div>
+                  {/* ✅ Collapsible Insights (Hidden by default = looks more premium) */}
+                  <details
+                    className="ui-glass ui-card ui-gradient-border ui-card-hover p-4"
+                    onToggle={(e) => setInsightsOpen((e.currentTarget as HTMLDetailsElement).open)}
+                  >
+                    <summary className="cursor-pointer list-none">
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="text-sm font-extrabold text-slate-800 dark:text-slate-100">
+                            Insights
+                          </div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                            Attendance snapshot + timeline
+                          </div>
+                        </div>
 
-        <span className="text-xs font-semibold text-slate-600 bg-white/75 border border-slate-100 px-3 py-1.5 rounded-full dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300">
-          Now: {formatTime12(currentSlot)}
-        </span>
-      </div>
+                        <div className="flex items-center gap-2">
+                          <span className="hidden sm:inline-flex rounded-xl bg-indigo-50 px-3 py-2 text-xs font-extrabold text-indigo-700 border border-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-200 dark:border-indigo-400/20">
+                            Click to open
+                          </span>
 
-      <div
-        className="relative mt-4 w-full h-[245px] rounded-[22px] border border-slate-200/60 bg-white/65 p-3 dark:bg-slate-950/35 dark:border-slate-700"
-        onMouseLeave={() => {
-          setTimelinePopup((prev) => {
-            if (!prev || prev.pinned) return prev;
-            return null;
-          });
-        }}
-      >
-        {chartData.length === 0 ? (
-          <div className="flex h-full items-center justify-center rounded-[22px] border border-dashed border-slate-200/80 text-center dark:border-slate-700">
-            <div>
-              <div className="text-sm font-black text-slate-700 dark:text-slate-200">
-                No classes found for today
-              </div>
-              <div className="mt-1 text-xs font-semibold text-slate-400 dark:text-slate-500">
-                Once today’s schedules are available, the graph will appear here.
-              </div>
-            </div>
-          </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={205}>
-            <BarChart
-              data={chartData}
-              margin={{ top: 8, right: 10, left: -20, bottom: 0 }}
-              accessibilityLayer={false}
-            >
-              <XAxis
-                dataKey="timeLabel"
-                tick={{ fontSize: 10, fill: "#64748b" }}
-                axisLine={false}
-                tickLine={false}
-                dy={8}
-              />
+                          <div className="h-9 w-9 rounded-2xl bg-white/70 border border-slate-100 flex items-center justify-center text-slate-600 dark:bg-slate-900/70 dark:border-slate-700 dark:text-slate-300">
+                            <ChevronRight size={18} />
+                          </div>
+                        </div>
+                      </div>
+                    </summary>
 
-              <YAxis
-                allowDecimals={false}
-                axisLine={false}
-                tickLine={false}
-                tick={{ fontSize: 10, fill: "#64748b" }}
-              />
+                    {insightsOpen && (
+                    <div className="mt-5 grid grid-cols-1 xl:grid-cols-2 gap-5">
+                      {/* Attendance Snapshot */}
+                      <div className="relative overflow-hidden rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_22px_rgba(15,23,42,0.035)] dark:bg-slate-900/75 dark:border-slate-700/70">
+                        <div className="pointer-events-none absolute -top-20 -right-20 h-44 w-44 rounded-full bg-emerald-200/35 blur-3xl dark:bg-emerald-500/10" />
+                        <div className="pointer-events-none absolute -bottom-20 -left-20 h-44 w-44 rounded-full bg-indigo-200/25 blur-3xl dark:bg-indigo-500/10" />
 
-              <Bar
-                isAnimationActive={false}
-                dataKey="count"
-                radius={[9, 9, 9, 9]}
-                onMouseEnter={(data: any, _index: number, event: any) => {
-                  const current = timelinePopup;
-                  if (current?.pinned) return;
+                        <div className="relative">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-extrabold text-slate-800 dark:text-slate-100">
+                                Today’s Attendance
+                              </div>
+                              <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                                Teachers + Students summary
+                              </div>
+                            </div>
 
-                  const card = timelineCardRef.current;
-                  if (!card) return;
+                            <span className="text-xs font-semibold text-slate-600 bg-white/80 border border-slate-100 px-3 py-1.5 rounded-full dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300">
+                              {new Date().toLocaleDateString(undefined, {
+                                weekday: "short",
+                                month: "short",
+                                day: "numeric",
+                              })}
+                            </span>
+                          </div>
 
-                  const rect = card.getBoundingClientRect();
+                          <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="rounded-2xl border border-slate-100 bg-white/90 p-4 dark:bg-slate-950/55 dark:border-slate-700">
+                              <div className="text-[12px] text-slate-500 dark:text-slate-400 font-bold">
+                                Teachers
+                              </div>
 
-                  let x = event?.clientX ? event.clientX - rect.left + 16 : 260;
-                  let y = event?.clientY ? event.clientY - rect.top - 30 : 70;
+                              <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+                                {[
+                                  ["P", todayAttendanceSummary.teachers.present],
+                                  ["A", todayAttendanceSummary.teachers.absent],
+                                  ["L", todayAttendanceSummary.teachers.leave],
+                                  ["U", todayAttendanceSummary.teachers.unmarked],
+                                ].map(([label, value]) => (
+                                  <div key={label}>
+                                    <div className="text-[10px] text-slate-400 font-bold">{label}</div>
+                                    <div className="font-extrabold text-lg text-slate-900 dark:text-white">
+                                      {value}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
 
-                  x = Math.max(16, Math.min(x, rect.width - 280));
-                  y = Math.max(58, Math.min(y, rect.height - 230));
+                            <div className="rounded-2xl border border-slate-100 bg-white/90 p-4 dark:bg-slate-950/55 dark:border-slate-700">
+                              <div className="text-[12px] text-slate-500 dark:text-slate-400 font-bold">
+                                Students
+                              </div>
 
-                  setTimelinePopup({
-                    slot: data.time,
-                    x,
-                    y,
-                    pinned: false,
-                  });
-                }}
-                onMouseMove={(data: any, _index: number, event: any) => {
-                  if (timelinePopup?.pinned) return;
+                              <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+                                {[
+                                  ["P", todayAttendanceSummary.students.present],
+                                  ["A", todayAttendanceSummary.students.absent],
+                                  ["L", todayAttendanceSummary.students.leave],
+                                  ["U", todayAttendanceSummary.students.unmarked],
+                                ].map(([label, value]) => (
+                                  <div key={label}>
+                                    <div className="text-[10px] text-slate-400 font-bold">{label}</div>
+                                    <div className="font-extrabold text-lg text-slate-900 dark:text-white">
+                                      {value}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
 
-                  const card = timelineCardRef.current;
-                  if (!card) return;
+                          <div className="mt-4 text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
+                            P = Present, A = Absent, L = Leave, U = Unmarked
+                          </div>
+                        </div>
+                      </div>
 
-                  const rect = card.getBoundingClientRect();
+                      {/* Timeline */}
+                      {(() => {
+                        const todaySlots = Array.from(
+                          new Set(
+                            viewStudents
+                              .filter((s) => (s.classDays || []).includes(currentDayName))
+                              .map((s) => String(s.timeSlot || "").slice(0, 5))
+                              .filter(Boolean)
+                          )
+                        ).sort((a, b) => timeSlotToMinutes(a) - timeSlotToMinutes(b));
 
-                  let x = event?.clientX ? event.clientX - rect.left + 16 : 260;
-                  let y = event?.clientY ? event.clientY - rect.top - 30 : 70;
+                        const chartData = todaySlots.map((slot) => {
+                          const studentsInSlot = viewStudents.filter(
+                            (s) =>
+                              String(s.timeSlot || "").slice(0, 5) === slot &&
+                              (s.classDays || []).includes(currentDayName)
+                          );
 
-                  x = Math.max(16, Math.min(x, rect.width - 280));
-                  y = Math.max(58, Math.min(y, rect.height - 230));
+                          return {
+                            time: slot,
+                            timeLabel: formatTime12(slot),
+                            count: studentsInSlot.length,
+                            studentNames: studentsInSlot.map((s) => s.name),
+                            students: studentsInSlot,
+                          };
+                        });
 
-                  setTimelinePopup({
-                    slot: data.time,
-                    x,
-                    y,
-                    pinned: false,
-                  });
-                }}
-                onClick={(data: any, _index: number, event: any) => {
-                  const card = timelineCardRef.current;
-                  if (!card) return;
+                        const totalTodayClasses = chartData.reduce((sum, item) => sum + item.count, 0);
 
-                  const rect = card.getBoundingClientRect();
+                        const currentSlotCount =
+                          chartData.find((item) => item.time === currentSlot)?.count || 0;
 
-                  let x = event?.clientX ? event.clientX - rect.left + 16 : 260;
-                  let y = event?.clientY ? event.clientY - rect.top - 30 : 70;
+                        const peakSlot =
+                          chartData.length > 0
+                            ? chartData.reduce((best, item) => (item.count > best.count ? item : best), chartData[0])
+                            : null;
 
-                  x = Math.max(16, Math.min(x, rect.width - 280));
-                  y = Math.max(58, Math.min(y, rect.height - 230));
 
-                  setTimelinePopup({
-                    slot: data.time,
-                    x,
-                    y,
-                    pinned: true,
-                  });
-                }}
-                style={{
-                  cursor: "pointer",
-                  outline: "none",
-                }}
-              >
-                {chartData.map((item, index) => (
-                  <Cell
-                    key={`cell-${index}`}
-                    fill={
-                      timelinePopup?.slot === item.time
-                        ? "#10b981"
-                        : item.time === currentSlot
-                        ? "#22c55e"
-                        : "#cbd5e1"
-                    }
-                  />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        )}
+                        return (
+                          <div
+                            ref={timelineCardRef}
+                            className="relative overflow-hidden rounded-[26px] border border-slate-200/60 bg-white/70 p-4 shadow-[0_12px_32px_rgba(15,23,42,0.045)] dark:bg-slate-900/70 dark:border-slate-700/70"
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-sm font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                                <BarChart3 size={17} className="text-emerald-600" />
+                                Timeline Today
+                              </div>
 
-        {/* Floating hover / pinned popup */}
-        {timelinePopup && (
-          <div
-            className={`
+                              <span className="text-xs font-semibold text-slate-600 bg-white/75 border border-slate-100 px-3 py-1.5 rounded-full dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300">
+                                Now: {formatTime12(currentSlot)}
+                              </span>
+                            </div>
+
+                            <div
+                              className="relative mt-4 w-full h-[245px] rounded-[22px] border border-slate-200/60 bg-white/65 p-3 dark:bg-slate-950/35 dark:border-slate-700"
+                              onMouseLeave={() => {
+                                setTimelinePopup((prev) => {
+                                  if (!prev || prev.pinned) return prev;
+                                  return null;
+                                });
+                              }}
+                            >
+                              {chartData.length === 0 ? (
+                                <div className="flex h-full items-center justify-center rounded-[22px] border border-dashed border-slate-200/80 text-center dark:border-slate-700">
+                                  <div>
+                                    <div className="text-sm font-black text-slate-700 dark:text-slate-200">
+                                      No classes found for today
+                                    </div>
+                                    <div className="mt-1 text-xs font-semibold text-slate-400 dark:text-slate-500">
+                                      Once today’s schedules are available, the graph will appear here.
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : (
+                                insightsOpen ? (
+                                  <Suspense
+                                    fallback={
+                                      <div className="flex h-[205px] items-center justify-center text-xs font-bold text-slate-400">
+                                        Loading timeline…
+                                      </div>
+                                    }
+                                  >
+                                    <DashboardTimelineChart
+                                      chartData={chartData}
+                                      currentSlot={currentSlot}
+                                      timelinePopup={timelinePopup}
+                                      setTimelinePopup={setTimelinePopup}
+                                      timelineCardRef={timelineCardRef}
+                                    />
+                                  </Suspense>
+                                ) : (
+                                  <div className="h-[205px]" aria-hidden="true" />
+                                )
+                              )}
+
+                              {/* Floating hover / pinned popup */}
+                              {timelinePopup && (
+                                <div
+                                  className={`
               absolute z-30 w-[260px] rounded-[20px]
               border border-slate-200/80 bg-white/96
               p-3 backdrop-blur-xl
@@ -4200,654 +4367,662 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
               dark:bg-slate-900/96 dark:border-slate-700
               ${timelinePopup.pinned ? "pointer-events-auto" : "pointer-events-none"}
             `}
-            style={{
-              left: timelinePopup.x,
-              top: timelinePopup.y,
-            }}
-          >
-            <div className="mb-2 flex items-start justify-between gap-3">
-              <div>
-                <div className="text-xs font-black text-slate-900 dark:text-white">
-                  {formatTime12(timelinePopup.slot)} Classes
-                </div>
+                                  style={{
+                                    left: timelinePopup.x,
+                                    top: timelinePopup.y,
+                                  }}
+                                >
+                                  <div className="mb-2 flex items-start justify-between gap-3">
+                                    <div>
+                                      <div className="text-xs font-black text-slate-900 dark:text-white">
+                                        {formatTime12(timelinePopup.slot)} Classes
+                                      </div>
 
-                <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
-                  {timelinePopup.pinned
-                    ? "Pinned. Scroll this list."
-                    : "Click this bar to pin"}
-                </div>
-              </div>
+                                      <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                                        {timelinePopup.pinned
+                                          ? "Pinned. Scroll this list."
+                                          : "Click this bar to pin"}
+                                      </div>
+                                    </div>
 
-              {timelinePopup.pinned && (
-                <button
-                  type="button"
-                  onClick={() => setTimelinePopup(null)}
-                  className="rounded-full px-2 py-1 text-[10px] font-black text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
+                                    {timelinePopup.pinned && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setTimelinePopup(null)}
+                                        className="rounded-full px-2 py-1 text-[10px] font-black text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
+                                      >
+                                        Clear
+                                      </button>
+                                    )}
+                                  </div>
 
-            <div
-              className={`
+                                  <div
+                                    className={`
                 space-y-1.5 pr-1 custom-scrollbar
                 ${timelinePopup.pinned ? "max-h-[155px] overflow-y-auto" : "max-h-[135px] overflow-hidden"}
               `}
-            >
-              {viewStudents
-                .filter(
-                  (s) =>
-                    String(s.timeSlot || "").slice(0, 5) === timelinePopup.slot &&
-                    (s.classDays || []).includes(currentDayName)
-                )
-                .map((s) => (
-                  <div
-                    key={s.id}
-                    className="rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-2 text-[11px] font-bold text-slate-700 dark:bg-slate-950/70 dark:border-slate-700 dark:text-slate-200"
-                  >
-                    {s.name}
-                  </div>
-                ))}
+                                  >
+                                    {viewStudents
+                                      .filter(
+                                        (s) =>
+                                          String(s.timeSlot || "").slice(0, 5) === timelinePopup.slot &&
+                                          (s.classDays || []).includes(currentDayName)
+                                      )
+                                      .map((s) => (
+                                        <div
+                                          key={s.id}
+                                          className="rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-2 text-[11px] font-bold text-slate-700 dark:bg-slate-950/70 dark:border-slate-700 dark:text-slate-200"
+                                        >
+                                          {s.name}
+                                        </div>
+                                      ))}
 
-              {viewStudents.filter(
-                (s) =>
-                  String(s.timeSlot || "").slice(0, 5) === timelinePopup.slot &&
-                  (s.classDays || []).includes(currentDayName)
-              ).length === 0 && (
-                <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-3 text-[11px] font-semibold text-slate-400 italic dark:bg-slate-950/70 dark:border-slate-700">
-                  No classes in this slot.
+                                    {viewStudents.filter(
+                                      (s) =>
+                                        String(s.timeSlot || "").slice(0, 5) === timelinePopup.slot &&
+                                        (s.classDays || []).includes(currentDayName)
+                                    ).length === 0 && (
+                                        <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-3 text-[11px] font-semibold text-slate-400 italic dark:bg-slate-950/70 dark:border-slate-700">
+                                          No classes in this slot.
+                                        </div>
+                                      )}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    )}
+                  </details>
+
+                  {/* ✅ Main content: Classes first (this is what admins care about) */}
+                  <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start lg:gap-6">
+                    {/* Live Now */}
+                    <section className="min-w-0 space-y-2 lg:max-h-[calc(100vh-14rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="flex items-center gap-3 text-xl font-black text-slate-950 dark:text-white">
+                          <span className="h-3 w-3 rounded-full bg-rose-500 animate-pulse" />
+                          Live Now
+                        </h3>
+                        <span className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                          {currentClasses.length} class{currentClasses.length === 1 ? "" : "es"}
+                        </span>
+                      </div>
+
+                      {currentClasses.length === 0 ? (
+                        <div className="text-center p-8 ui-glass ui-card ui-gradient-border text-slate-600">
+                          No classes scheduled for {formatTime12(currentSlot)}
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {currentClasses.map((student) => {
+                            const teacher = teacherById.get(student.teacherId);
+                            const teacherRec = teacher ? getTeacherAttendance(teacher.id, student.timeSlot) : undefined;
+
+                            return (
+                              <React.Fragment key={student.id}>
+                                <ClassCard
+                                  student={student}
+                                  teacher={teacher}
+                                  attendanceToday={studentAttendanceToday.get(student.id)}
+                                  onMarkAttendance={markAttendance}
+                                  onUnmarkAttendance={(id: string) => unmarkAttendance(id)}
+                                  teacherAttendanceToday={teacherRec}
+                                  attendanceDate={todayStr}
+                                  onMarkTeacherAttendance={(
+                                    teacherId: string,
+                                    status: AttendanceStatus,
+                                    coverageAssignments = [],
+                                  ) =>
+                                    markAttendance(
+                                      teacherId,
+                                      status,
+                                      EntityType.TEACHER,
+                                      student.timeSlot,
+                                      coverageAssignments,
+                                    )
+                                  }
+                                  onUnmarkTeacherAttendance={(teacherId: string) =>
+                                    unmarkAttendance(teacherId, EntityType.TEACHER, student.timeSlot)
+                                  }
+                                  isCurrentSession={true}
+                                  onOpenStudent={(item) => openDashboardAccountEditor("student", item.id)}
+                                  onOpenTeacher={(item) => openDashboardAccountEditor("teacher", item.id)}
+                                />
+                              </React.Fragment>
+                            );
+                          })}
+
+
+                        </div>
+                      )}
+                    </section>
+
+                    {/* Up Next */}
+                    <section className="min-w-0 space-y-2 lg:max-h-[calc(100vh-14rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="flex items-center gap-2 text-xl font-black text-slate-950 dark:text-white">
+                          Up Next <ChevronRight size={19} className="text-slate-400" />
+                        </h3>
+                        <span className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                          Next scheduled classes
+                        </span>
+                      </div>
+
+                      {nextClasses.length === 0 ? (
+                        <div className="text-center p-8 ui-glass ui-card ui-gradient-border text-slate-600">
+                          No classes scheduled for {formatTime12(nextSlot)}
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {nextClasses.map((student) => {
+                            const teacher = teacherById.get(student.teacherId);
+                            const teacherRec = teacher ? getTeacherAttendance(teacher.id, student.timeSlot) : undefined;
+
+                            return (
+                              <React.Fragment key={student.id}>
+                                <ClassCard
+                                  student={student}
+                                  teacher={teacher}
+                                  attendanceToday={studentAttendanceToday.get(student.id)}
+                                  onMarkAttendance={markAttendance}
+                                  onUnmarkAttendance={(id: string) => unmarkAttendance(id)}
+                                  teacherAttendanceToday={teacherRec}
+                                  attendanceDate={todayStr}
+                                  onMarkTeacherAttendance={(
+                                    teacherId: string,
+                                    status: AttendanceStatus,
+                                    coverageAssignments = [],
+                                  ) =>
+                                    markAttendance(
+                                      teacherId,
+                                      status,
+                                      EntityType.TEACHER,
+                                      student.timeSlot,
+                                      coverageAssignments,
+                                    )
+                                  }
+                                  onUnmarkTeacherAttendance={(teacherId: string) =>
+                                    unmarkAttendance(teacherId, EntityType.TEACHER, student.timeSlot)
+                                  }
+                                  isCurrentSession={false}
+                                  onOpenStudent={(item) => openDashboardAccountEditor("student", item.id)}
+                                  onOpenTeacher={(item) => openDashboardAccountEditor("teacher", item.id)}
+                                />
+                              </React.Fragment>
+                            );
+                          })}
+
+
+                        </div>
+                      )}
+                    </section>
+                  </div>
+                </div>
+                )
+              )}
+
+
+              {/* SCHEDULING */}
+              {activeTab === "scheduling" && canAccessPortalTab("scheduling") && hasFeature("tab_scheduling") && (
+                <Suspense fallback={<TabLoading />}>
+<SchedulingTab
+                  appState={viewAppState}
+                  onCellClick={(teacherId, timeSlot, students) => {
+                    setViewingClass({ teacherId, timeSlot, students });
+                    setModalMode("class-details");
+                    setShowModal(true);
+                  }}
+                />
+</Suspense>
+              )}
+
+
+
+
+              {/* ATTENDANCE */}
+              {activeTab === "attendance" && canAccessPortalTab("attendance") && hasFeature("tab_attendance") && (
+                <div className="w-full max-w-none mx-auto space-y-6">
+                  <div className="bg-white/85 backdrop-blur-xl p-6 rounded-[28px] shadow-[0_18px_55px_rgba(15,23,42,0.08)] border border-slate-200/80">
+                    <h3 className="font-bold text-lg text-slate-950">Attendance</h3>
+                    <p className="text-sm text-slate-500 mt-1">
+                      Student and teacher attendance are recorded separately. Teacher absences require substitute coverage when applicable.
+                    </p>
+                  </div>
+
+                  <Suspense fallback={<TabLoading />}>
+                    <AttendanceEditor
+                      appState={viewAppState}
+                      onUpsert={upsertAttendance}
+                      onDelete={deleteAttendance}
+                    />
+                  </Suspense>
                 </div>
               )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-})()}
-  </div>
-</details>
 
-    {/* ✅ Main content: Classes first (this is what admins care about) */}
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start lg:gap-6">
-      {/* Live Now */}
-      <section className="min-w-0 space-y-2 lg:max-h-[calc(100vh-14rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="flex items-center gap-3 text-xl font-black text-slate-950 dark:text-white">
-            <span className="h-3 w-3 rounded-full bg-rose-500 animate-pulse" />
-            Live Now
-          </h3>
-          <span className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-            {currentClasses.length} class{currentClasses.length === 1 ? "" : "es"}
-          </span>
-        </div>
+              {/* ACCOUNTS */}
+              {activeTab === "accounts" && canAccessPortalTab("accounts") && hasFeature("tab_accounts_enrollment") && (
+                <Suspense fallback={<TabLoading />}>
+                  <CoordinatorAccounts
+                    canBulkImport={hasFeature("bulk_import")}
+                    canDeleteAccounts={hasFeature("delete_accounts")}
+                    features={enabledFeatures}
+                    editTarget={dashboardAccountEditTarget}
+                    onEditTargetHandled={() => setDashboardAccountEditTarget(null)}
+                  />
+                </Suspense>
+              )}
 
-        {currentClasses.length === 0 ? (
-          <div className="text-center p-8 ui-glass ui-card ui-gradient-border text-slate-600">
-            No classes scheduled for {formatTime12(currentSlot)}
-          </div>
-        ) : (
-          <div className="space-y-2">
-{currentClasses.map((student) => {
-  const teacher = viewTeachers.find((t) => t.id === student.teacherId);
+              {/* DROPPED & LEAVE */}
+              {activeTab === "dropped-leave" && canAccessPortalTab("dropped-leave") && hasFeature("tab_dropped_leave") && (
+                <Suspense fallback={<TabLoading />}>
+                  <QuranDroppedLeave />
+                </Suspense>
+              )}
 
-  const teacherRec = teacher
-    ? viewAtt.find(
-        (a) =>
-          a.entityId === teacher.id &&
-          a.entityType === EntityType.TEACHER &&
-          a.date === todayStr &&
-          ((a.classKey || "") === student.timeSlot || (a.classKey || "") === "")
-      )
-    : undefined;
-  return (
-    <React.Fragment key={student.id}>
-      <ClassCard
-        student={student}
-        teacher={teacher}
-        attendanceToday={viewAtt.find(
-          (a) =>
-            a.entityId === student.id &&
-            a.entityType === EntityType.STUDENT &&
-            a.date === todayStr
-        )}
-        onMarkAttendance={markAttendance}
-        onUnmarkAttendance={(id: string) => unmarkAttendance(id)}
-        teacherAttendanceToday={teacherRec}
-        onMarkTeacherAttendance={(teacherId: string, status: AttendanceStatus) =>
-          markAttendance(teacherId, status, EntityType.TEACHER, student.timeSlot)
-        }
-        onUnmarkTeacherAttendance={(teacherId: string) =>
-          unmarkAttendance(teacherId, EntityType.TEACHER, student.timeSlot)
-        }
-        isCurrentSession={true}
-        onOpenStudent={(item) => openDashboardAccountEditor("student", item.id)}
-        onOpenTeacher={(item) => openDashboardAccountEditor("teacher", item.id)}
-      />
-    </React.Fragment>
-  );
-})}
+              {/* TEACHER SALARY MANAGEMENT */}
+              {activeTab === "teacher-salary" && session?.role !== "coordinator" && hasFeature("tab_teacher_salary") && (
+                <Suspense fallback={<TabLoading />}>
+                  <TeacherSalaryManagement
+                    departmentName={quranDepartmentDisplayName}
+                    salaryLifecycleRole={
+                      isSuperAdmin
+                        ? "super_admin"
+                        : String(
+                          (session as any)?.user?.role
+                          || (session as any)?.role
+                          || ""
+                        )
+                    }
+                  />
+                </Suspense>
+              )}
+
+              {/* PLATFORM ADMIN */}
+              {activeTab === "platform-admin" && isPlatformAdmin && (
+                <Suspense fallback={<TabLoading />}>
+                  <PlatformAdmin />
+                </Suspense>
+              )}
 
 
-          </div>
-        )}
-      </section>
-
-      {/* Up Next */}
-      <section className="min-w-0 space-y-2 lg:max-h-[calc(100vh-14rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="flex items-center gap-2 text-xl font-black text-slate-950 dark:text-white">
-            Up Next <ChevronRight size={19} className="text-slate-400" />
-          </h3>
-          <span className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-            Next scheduled classes
-          </span>
-        </div>
-
-        {nextClasses.length === 0 ? (
-          <div className="text-center p-8 ui-glass ui-card ui-gradient-border text-slate-600">
-            No classes scheduled for {formatTime12(nextSlot)}
-          </div>
-        ) : (
-          <div className="space-y-2">
-{nextClasses.map((student) => {
-  const teacher = viewTeachers.find((t) => t.id === student.teacherId);
-
-  const teacherRec = teacher
-    ? viewAtt.find(
-        (a) =>
-          a.entityId === teacher.id &&
-          a.entityType === EntityType.TEACHER &&
-          a.date === todayStr &&
-          ((a.classKey || "") === student.timeSlot || (a.classKey || "") === "")
-      )
-    : undefined;
-
-  return (
-    <React.Fragment key={student.id}>
-      <ClassCard
-        student={student}
-        teacher={teacher}
-        attendanceToday={viewAtt.find(
-          (a) =>
-            a.entityId === student.id &&
-            a.entityType === EntityType.STUDENT &&
-            a.date === todayStr
-        )}
-        onMarkAttendance={markAttendance}
-        onUnmarkAttendance={(id: string) => unmarkAttendance(id)}
-        teacherAttendanceToday={teacherRec}
-        onMarkTeacherAttendance={(teacherId: string, status: AttendanceStatus) =>
-          markAttendance(teacherId, status, EntityType.TEACHER, student.timeSlot)
-        }
-        onUnmarkTeacherAttendance={(teacherId: string) =>
-          unmarkAttendance(teacherId, EntityType.TEACHER, student.timeSlot)
-        }
-        isCurrentSession={false}
-        onOpenStudent={(item) => openDashboardAccountEditor("student", item.id)}
-        onOpenTeacher={(item) => openDashboardAccountEditor("teacher", item.id)}
-      />
-    </React.Fragment>
-  );
-})}
-
-
-          </div>
-        )}
-      </section>
-    </div>
-  </div>
-)}
-
-
-          {/* SCHEDULING */}
-{activeTab === "scheduling" && canAccessPortalTab("scheduling") && hasFeature("tab_scheduling") && (
-  <SchedulingTab
-    appState={viewAppState}
-    onCellClick={(teacherId, timeSlot, students) => {
-      setViewingClass({ teacherId, timeSlot, students });
-      setModalMode("class-details");
-      setShowModal(true);
-    }}
-  />
-)}
-
-
-
-
-{/* ATTENDANCE */}
-{activeTab === "attendance" && canAccessPortalTab("attendance") && hasFeature("tab_attendance") && (
-  <div className="w-full max-w-none mx-auto space-y-6">
-    <div className="bg-white/85 backdrop-blur-xl p-6 rounded-[28px] shadow-[0_18px_55px_rgba(15,23,42,0.08)] border border-slate-200/80">
-      <h3 className="font-bold text-lg text-slate-950">Attendance</h3>
-      <p className="text-sm text-slate-500 mt-1">
-        Student and teacher attendance are recorded separately. Teacher absences require substitute coverage when applicable.
-      </p>
-    </div>
-
-<Suspense fallback={<TabLoading />}>
-  <AttendanceEditor
-    appState={viewAppState}
-    onUpsert={upsertAttendance}
-    onDelete={deleteAttendance}
-  />
-</Suspense>
-  </div>
-)}
-
-{/* ACCOUNTS */}
-{activeTab === "accounts" && canAccessPortalTab("accounts") && hasFeature("tab_accounts_enrollment") && (
-  <Suspense fallback={<TabLoading />}>
-    <CoordinatorAccounts
-      canBulkImport={hasFeature("bulk_import")}
-      canDeleteAccounts={hasFeature("delete_accounts")}
-      features={enabledFeatures}
-      editTarget={dashboardAccountEditTarget}
-      onEditTargetHandled={() => setDashboardAccountEditTarget(null)}
-    />
-  </Suspense>
-)}
-
-{/* DROPPED & LEAVE */}
-{activeTab === "dropped-leave" && canAccessPortalTab("dropped-leave") && hasFeature("tab_dropped_leave") && (
-  <Suspense fallback={<TabLoading />}>
-    <QuranDroppedLeave />
-  </Suspense>
-)}
-
-{/* TEACHER SALARY MANAGEMENT */}
-{activeTab === "teacher-salary" && session?.role !== "coordinator" && hasFeature("tab_teacher_salary") && (
-  <Suspense fallback={<TabLoading />}>
-    <TeacherSalaryManagement departmentName={quranDepartmentDisplayName} />
-  </Suspense>
-)}
-
-{/* PLATFORM ADMIN */}
-{activeTab === "platform-admin" && isPlatformAdmin && (
-  <Suspense fallback={<TabLoading />}>
-    <PlatformAdmin />
-  </Suspense>
-)}
-
-
-{/* LESSONS CONTROL */}
-{activeTab === "lessons" && canAccessPortalTab("lessons") && hasFeature("tab_lessons_control") && (
-  <div className="w-full max-w-none mx-auto">
-    <Suspense fallback={<TabLoading />}>
-      <CoordinatorLessons />
-    </Suspense>
-  </div>
-)}
-
-{/* REPORTS */}
-{activeTab === "reports" && canAccessPortalTab("reports") && hasFeature("tab_reports") && (
-  <div className="w-full max-w-none mx-auto">
-    <Suspense fallback={<TabLoading />}>
-      <ReportsTab
-        appState={viewAppState}
-        departmentName={quranDepartmentDisplayName}
-        canExportPdf={hasFeature("pdf_reports")}
-        canExportCsv={hasFeature("csv_export")}
-        canExportExcel={hasFeature("excel_export")}
-        generatedBy={
-          (session as any)?.user?.full_name ||
-          `${(session as any)?.user?.first_name || ""} ${(session as any)?.user?.last_name || ""}`.trim() ||
-          (session as any)?.user?.username ||
-          "Coordinator"
-        }
-      />
-    </Suspense>
-  </div>
-)}
-
-          
-        </div>
-
-        {hasFeature("ai_assistant") && (
-          <Suspense fallback={null}>
-            <AssistantChat
-              appState={viewAppState}
-              isOpen={assistantOpen}
-              onClose={() => setAssistantOpen(false)}
-            />
-          </Suspense>
-        )}
-
-      </main>
-
-      <FeatureLockedModal
-        feature={lockedFeature}
-        onClose={() => setLockedFeature(null)}
-      />
-      <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
-
-      {/* MODALS */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 sm:p-4 backdrop-blur-md">
-<div
-  className={`ui-glass-strong ui-card ui-gradient-border w-full max-w-5xl ui-glow ${
-    modalMode === "settings"
-      ? "p-0 overflow-hidden"
-      : "p-6 max-h-[88vh] overflow-y-auto"
-  } w-full sm:w-auto sm:max-w-2xl rounded-t-[28px] sm:rounded-[28px]`}
->
-{modalMode !== "settings" && (
-  <div className="flex justify-between items-center mb-6">
-    <h3 className="text-xl font-bold text-slate-800">
-      Class Details
-    </h3>
-    <button
-      onClick={() => {
-        setShowModal(false);
-        setEditingStudent(null);
-        setViewingClass(null);
-      }}
-      className="text-slate-400 hover:text-slate-600"
-    >
-      <X size={24} />
-    </button>
-  </div>
-)}
-
-            {/* CLASS DETAILS */}
-{modalMode === "class-details" && viewingClass && (
-  <div className="space-y-5">
-    {/* Top summary card */}
-    <div className="relative overflow-hidden rounded-3xl border border-slate-200/70 bg-white/70 backdrop-blur-xl p-4 shadow-[0_18px_50px_rgba(15,23,42,0.10)]">
-      {/* soft glow */}
-      <div className="pointer-events-none absolute -top-24 -right-24 h-56 w-56 rounded-full bg-indigo-200/35 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-24 -left-24 h-56 w-56 rounded-full bg-blue-200/25 blur-3xl" />
-
-      <div className="relative">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-xs font-extrabold text-slate-500 uppercase tracking-wide">
-              Teacher
-            </div>
-
-            <div className="mt-1 flex items-center gap-3">
-              <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-[0_18px_34px_-18px_rgba(37,99,235,0.60)]">
-                <Users2 size={18} />
-              </div>
-
-              <div className="min-w-0">
-                <div className="text-base font-extrabold text-slate-900 truncate">
-                  {viewTeachers.find(t => t.id === viewingClass.teacherId)?.name ?? "—"}
+              {/* LESSONS CONTROL */}
+              {activeTab === "lessons" && canAccessPortalTab("lessons") && hasFeature("tab_lessons_control") && (
+                <div className="w-full max-w-none mx-auto">
+                  <Suspense fallback={<TabLoading />}>
+                    <CoordinatorLessons />
+                  </Suspense>
                 </div>
-                <div className="text-xs text-slate-500 truncate">
-                  Class details & enrolled students
+              )}
+
+              {/* REPORTS */}
+              {activeTab === "reports" && canAccessPortalTab("reports") && hasFeature("tab_reports") && (
+                <div className="w-full max-w-none mx-auto">
+                  <Suspense fallback={<TabLoading />}>
+                    <ReportsTab
+                      appState={viewAppState}
+                      departmentName={quranDepartmentDisplayName}
+                      canExportPdf={hasFeature("pdf_reports")}
+                      canExportCsv={hasFeature("csv_export")}
+                      canExportExcel={hasFeature("excel_export")}
+                      generatedBy={
+                        (session as any)?.user?.full_name ||
+                        `${(session as any)?.user?.first_name || ""} ${(session as any)?.user?.last_name || ""}`.trim() ||
+                        (session as any)?.user?.username ||
+                        "Coordinator"
+                      }
+                    />
+                  </Suspense>
                 </div>
-              </div>
+              )}
+
+
             </div>
-          </div>
 
-          {/* time chip */}
-          <div className="shrink-0">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/85 border border-slate-200/70 px-3 py-1.5 text-xs font-extrabold text-slate-700 shadow-[0_10px_18px_rgba(15,23,42,0.06)] whitespace-nowrap">
-              <CalendarDays size={14} className="text-slate-500" />
-              {formatTime12(viewingClass.timeSlot)}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+            {hasFeature("ai_assistant") && assistantHasOpened && (
+              <Suspense fallback={null}>
+                <AssistantChat
+                  appState={viewAppState}
+                  isOpen={assistantOpen}
+                  onClose={() => setAssistantOpen(false)}
+                />
+              </Suspense>
+            )}
 
-    {/* Students header */}
-    <div className="flex items-center justify-between gap-3">
-      <div className="min-w-0">
-        <div className="text-sm font-extrabold text-slate-900">
-          Enrolled Students
-        </div>
-        <div className="text-xs text-slate-500">
-          {viewingClass.students.length} student{viewingClass.students.length === 1 ? "" : "s"} in this class
-        </div>
-      </div>
+          </main>
 
-<div className="shrink-0 flex items-center gap-2">
-  <span className="text-xs font-extrabold px-3 py-1.5 rounded-full bg-white/90 text-slate-700 border border-slate-200 shadow-[0_10px_18px_rgba(15,23,42,0.05)]">
-    {viewingClass.students.length}
-  </span>
+          <FeatureLockedModal
+            feature={lockedFeature}
+            onClose={() => setLockedFeature(null)}
+          />
+          <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
 
-  <button
-    type="button"
-    onClick={() => {
-      const newStudent: Student = {
-        id: "",
-        name: "",
-        teacherId: viewingClass.teacherId,
-        timeSlot: viewingClass.timeSlot,
-        classType: ClassType.FIVE_DAY,
-        classDays: defaultDaysFromClassType(ClassType.FIVE_DAY),
-        loginId: generateStudentId(),
-      };
+          {/* MODALS */}
+          {showModal && (
+            <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 sm:p-4 backdrop-blur-md">
+              <div
+                className={`ui-glass-strong ui-card ui-gradient-border w-full max-w-5xl ui-glow ${modalMode === "settings"
+                  ? "p-0 overflow-hidden"
+                  : "p-6 max-h-[88vh] overflow-y-auto"
+                  } w-full sm:w-auto sm:max-w-2xl rounded-t-[28px] sm:rounded-[28px]`}
+              >
+                {modalMode !== "settings" && (
+                  <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-xl font-bold text-slate-800">
+                      Class Details
+                    </h3>
+                    <button
+                      onClick={() => {
+                        setShowModal(false);
+                        setEditingStudent(null);
+                        setViewingClass(null);
+                      }}
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      <X size={24} />
+                    </button>
+                  </div>
+                )}
 
-      setEditingStudent(newStudent);
-      setModalMode("add-student");
-    }}
-    className="
+                {/* CLASS DETAILS */}
+                {modalMode === "class-details" && viewingClass && (
+                  <div className="space-y-5">
+                    {/* Top summary card */}
+                    <div className="relative overflow-hidden rounded-3xl border border-slate-200/70 bg-white/70 backdrop-blur-xl p-4 shadow-[0_18px_50px_rgba(15,23,42,0.10)]">
+                      {/* soft glow */}
+                      <div className="pointer-events-none absolute -top-24 -right-24 h-56 w-56 rounded-full bg-indigo-200/35 blur-3xl" />
+                      <div className="pointer-events-none absolute -bottom-24 -left-24 h-56 w-56 rounded-full bg-blue-200/25 blur-3xl" />
+
+                      <div className="relative">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-xs font-extrabold text-slate-500 uppercase tracking-wide">
+                              Teacher
+                            </div>
+
+                            <div className="mt-1 flex items-center gap-3">
+                              <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-[0_18px_34px_-18px_rgba(37,99,235,0.60)]">
+                                <Users2 size={18} />
+                              </div>
+
+                              <div className="min-w-0">
+                                <div className="text-base font-extrabold text-slate-900 truncate">
+                                  {viewTeachers.find(t => t.id === viewingClass.teacherId)?.name ?? "—"}
+                                </div>
+                                <div className="text-xs text-slate-500 truncate">
+                                  Class details & enrolled students
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* time chip */}
+                          <div className="shrink-0">
+                            <div className="inline-flex items-center gap-2 rounded-full bg-white/85 border border-slate-200/70 px-3 py-1.5 text-xs font-extrabold text-slate-700 shadow-[0_10px_18px_rgba(15,23,42,0.06)] whitespace-nowrap">
+                              <CalendarDays size={14} className="text-slate-500" />
+                              {formatTime12(viewingClass.timeSlot)}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Students header */}
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-extrabold text-slate-900">
+                          Enrolled Students
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {viewingClass.students.length} student{viewingClass.students.length === 1 ? "" : "s"} in this class
+                        </div>
+                      </div>
+
+                      <div className="shrink-0 flex items-center gap-2">
+                        <span className="text-xs font-extrabold px-3 py-1.5 rounded-full bg-white/90 text-slate-700 border border-slate-200 shadow-[0_10px_18px_rgba(15,23,42,0.05)]">
+                          {viewingClass.students.length}
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newStudent: Student = {
+                              id: "",
+                              name: "",
+                              teacherId: viewingClass.teacherId,
+                              timeSlot: viewingClass.timeSlot,
+                              classType: ClassType.FIVE_DAY,
+                              classDays: defaultDaysFromClassType(ClassType.FIVE_DAY),
+                              loginId: generateStudentId(),
+                            };
+
+                            setEditingStudent(newStudent);
+                            setModalMode("add-student");
+                          }}
+                          className="
       h-10 w-10 rounded-2xl
       bg-white/95 border border-slate-200/80
       text-slate-700 hover:text-slate-950 hover:bg-white
       shadow-[-5px_-5px_12px_rgba(255,255,255,0.95),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,1)]
       transition active:scale-[0.98]
     "
-    title="Add student"
-  >
-    <Plus size={17} className="mx-auto" />
-  </button>
-</div>
-    </div>
+                          title="Add student"
+                        >
+                          <Plus size={17} className="mx-auto" />
+                        </button>
+                      </div>
+                    </div>
 
-    {/* Students list */}
-    <div className="rounded-3xl border border-slate-200/70 bg-white/70 backdrop-blur-xl shadow-[0_18px_50px_rgba(15,23,42,0.08)] overflow-hidden">
-      {viewingClass.students.length === 0 ? (
-        <div className="p-6 text-center">
-          <div className="text-sm font-bold text-slate-700">No students yet</div>
-          <div className="text-xs text-slate-500 mt-1">
-            Add a student to this class using the button below.
-          </div>
-        </div>
-      ) : (
-        <div className="divide-y divide-slate-100">
-          {viewingClass.students.map((s) => (
-            <div
-              key={s.id}
-              className="px-4 py-3 flex items-center justify-between gap-3 hover:bg-white/60 transition"
-            >
-              <div className="min-w-0 flex items-center gap-3">
-                {/* student avatar */}
-                <div className="h-10 w-10 rounded-2xl bg-white border border-slate-200/70 shadow-sm flex items-center justify-center">
-                  <span className="font-extrabold text-slate-900">
-                    {(s.name || "S").trim().slice(0, 1).toUpperCase()}
-                  </span>
-                </div>
+                    {/* Students list */}
+                    <div className="rounded-3xl border border-slate-200/70 bg-white/70 backdrop-blur-xl shadow-[0_18px_50px_rgba(15,23,42,0.08)] overflow-hidden">
+                      {viewingClass.students.length === 0 ? (
+                        <div className="p-6 text-center">
+                          <div className="text-sm font-bold text-slate-700">No students yet</div>
+                          <div className="text-xs text-slate-500 mt-1">
+                            Add a student to this class using the button below.
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-slate-100">
+                          {viewingClass.students.map((s) => (
+                            <div
+                              key={s.id}
+                              className="px-4 py-3 flex items-center justify-between gap-3 hover:bg-white/60 transition"
+                            >
+                              <div className="min-w-0 flex items-center gap-3">
+                                {/* student avatar */}
+                                <div className="h-10 w-10 rounded-2xl bg-white border border-slate-200/70 shadow-sm flex items-center justify-center">
+                                  <span className="font-extrabold text-slate-900">
+                                    {(s.name || "S").trim().slice(0, 1).toUpperCase()}
+                                  </span>
+                                </div>
 
-                <div className="min-w-0">
-                  <div className="font-extrabold text-slate-900 truncate">{s.name}</div>
+                                <div className="min-w-0">
+                                  <div className="font-extrabold text-slate-900 truncate">{s.name}</div>
 
-                  <div className="mt-0.5 flex flex-wrap gap-2 text-xs">
-                    <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200/70 font-semibold">
-                      ID: <span className="font-extrabold text-slate-800">{s.loginId ?? "—"}</span>
-                    </span>
+                                  <div className="mt-0.5 flex flex-wrap gap-2 text-xs">
+                                    <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200/70 font-semibold">
+                                      ID: <span className="font-extrabold text-slate-800">{s.loginId ?? "—"}</span>
+                                    </span>
 
-                    <span className="px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 font-semibold">
-                      {(s.classDays && s.classDays.length) ? s.classDays.join(", ") : s.classType}
-                    </span>
-                  </div>
-                </div>
-              </div>
+                                    <span className="px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 font-semibold">
+                                      {(s.classDays && s.classDays.length) ? s.classDays.join(", ") : s.classType}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
 
-<div className="shrink-0 flex items-center gap-2">
-  <button
-    type="button"
-    onClick={() => {
-      setEditingStudent(s);
-      setModalMode("edit-student");
-    }}
-    className="
+                              <div className="shrink-0 flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingStudent(s);
+                                    setModalMode("edit-student");
+                                  }}
+                                  className="
       h-10 w-10 rounded-2xl
       bg-white/95 border border-slate-200/80
       text-slate-600 hover:text-slate-950 hover:bg-white
       shadow-[-5px_-5px_12px_rgba(255,255,255,0.95),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,1)]
       transition active:scale-[0.98]
     "
-    title="Edit student"
-  >
-    <Edit2 size={16} className="mx-auto" />
-  </button>
-    <button
-      type="button"
-      onClick={() => removeStudentFromClass(s.id)}
-      className="
+                                  title="Edit student"
+                                >
+                                  <Edit2 size={16} className="mx-auto" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeStudentFromClass(s.id)}
+                                  className="
         h-10 w-10 rounded-2xl
         bg-rose-50 border border-rose-100
         text-rose-600 hover:bg-rose-100
         shadow-[0_10px_22px_rgba(244,63,94,0.10)]
         transition active:scale-[0.98]
       "
-      title="Remove student from this class"
-    >
-      <Trash2 size={16} className="mx-auto" />
-    </button>
-</div>
+                                  title="Remove student from this class"
+                                >
+                                  <Trash2 size={16} className="mx-auto" />
+                                </button>
+                              </div>
 
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-</div>
-)}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
-{/* ADD / EDIT STUDENT */}
-{(modalMode === "add-student" || modalMode === "edit-student") && editingStudent && (
-  <form onSubmit={saveStudent} className="space-y-5">
-    <div className="relative overflow-hidden rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
-      <div className="pointer-events-none absolute -top-24 -right-24 h-56 w-56 rounded-full bg-slate-200/35 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-24 -left-24 h-56 w-56 rounded-full bg-blue-100/25 blur-3xl" />
+                {/* ADD / EDIT STUDENT */}
+                {(modalMode === "add-student" || modalMode === "edit-student") && editingStudent && (
+                  <form onSubmit={saveStudent} className="space-y-5">
+                    <div className="relative overflow-hidden rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
+                      <div className="pointer-events-none absolute -top-24 -right-24 h-56 w-56 rounded-full bg-slate-200/35 blur-3xl" />
+                      <div className="pointer-events-none absolute -bottom-24 -left-24 h-56 w-56 rounded-full bg-blue-100/25 blur-3xl" />
 
-      <div className="relative flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wide">
-            {modalMode === "add-student" ? "Create Student" : "Update Student"}
-          </div>
-          <div className="text-lg font-extrabold text-slate-950 truncate mt-1">
-            {modalMode === "add-student" ? "Add student to this class" : "Edit student details"}
-          </div>
-        </div>
+                      <div className="relative flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wide">
+                            {modalMode === "add-student" ? "Create Student" : "Update Student"}
+                          </div>
+                          <div className="text-lg font-extrabold text-slate-950 truncate mt-1">
+                            {modalMode === "add-student" ? "Add student to this class" : "Edit student details"}
+                          </div>
+                        </div>
 
-        <div className="shrink-0 inline-flex items-center gap-2 rounded-full bg-white/90 border border-slate-200 px-3 py-1.5 text-xs font-extrabold text-slate-700 shadow-[0_10px_18px_rgba(15,23,42,0.05)]">
-          Student
-        </div>
-      </div>
-    </div>
+                        <div className="shrink-0 inline-flex items-center gap-2 rounded-full bg-white/90 border border-slate-200 px-3 py-1.5 text-xs font-extrabold text-slate-700 shadow-[0_10px_18px_rgba(15,23,42,0.05)]">
+                          Student
+                        </div>
+                      </div>
+                    </div>
 
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <div className="rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
-        <label className="block text-xs font-extrabold text-slate-700 mb-2">
-          Student Name
-        </label>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      <div className="rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
+                        <label className="block text-xs font-extrabold text-slate-700 mb-2">
+                          Student Name
+                        </label>
 
-        <input
-          name="name"
-          defaultValue={editingStudent.name}
-          required
-          className="w-full rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-extrabold text-slate-900 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-indigo-200 transition"
-          placeholder="Student name"
-        />
-      </div>
+                        <input
+                          name="name"
+                          defaultValue={editingStudent.name}
+                          required
+                          className="w-full rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-extrabold text-slate-900 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-indigo-200 transition"
+                          placeholder="Student name"
+                        />
+                      </div>
 
-      <div className="rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
-        <label className="block text-xs font-extrabold text-slate-700 mb-2">
-          Assigned Teacher
-        </label>
+                      <div className="rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
+                        <label className="block text-xs font-extrabold text-slate-700 mb-2">
+                          Assigned Teacher
+                        </label>
 
-        <select
-          name="teacherId"
-          defaultValue={editingStudent.teacherId}
-          required
-          className="w-full rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-extrabold text-slate-900 outline-none focus:ring-2 focus:ring-indigo-200 transition"
-        >
-          {viewTeachers.map((teacher) => (
-            <option key={teacher.id} value={teacher.id}>
-              {teacher.name}
-            </option>
-          ))}
-        </select>
-      </div>
-    </div>
+                        <select
+                          name="teacherId"
+                          defaultValue={editingStudent.teacherId}
+                          required
+                          className="w-full rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-extrabold text-slate-900 outline-none focus:ring-2 focus:ring-indigo-200 transition"
+                        >
+                          {viewTeachers.map((teacher) => (
+                            <option key={teacher.id} value={teacher.id}>
+                              {teacher.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
 
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      <div className="lg:col-span-1 rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
-        <label className="block text-xs font-extrabold text-slate-700 mb-2">
-          Class Time
-        </label>
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                      <div className="lg:col-span-1 rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
+                        <label className="block text-xs font-extrabold text-slate-700 mb-2">
+                          Class Time
+                        </label>
 
-        <select
-          name="timeSlot"
-          defaultValue={editingStudent.timeSlot || viewingClass?.timeSlot || "16:00"}
-          required
-          className="w-full rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-extrabold text-slate-900 outline-none focus:ring-2 focus:ring-indigo-200 transition"
-        >
-          {TIME_SLOTS.map((time) => (
-            <option key={time} value={time}>
-              {formatTime12(time)}
-            </option>
-          ))}
-        </select>
-      </div>
+                        <select
+                          name="timeSlot"
+                          defaultValue={editingStudent.timeSlot || viewingClass?.timeSlot || "16:00"}
+                          required
+                          className="w-full rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-extrabold text-slate-900 outline-none focus:ring-2 focus:ring-indigo-200 transition"
+                        >
+                          {TIME_SLOTS.map((time) => (
+                            <option key={time} value={time}>
+                              {formatTime12(time)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
 
-      <div className="lg:col-span-2 rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
-        <div className="flex items-center justify-between gap-3">
-          <label className="block text-xs font-extrabold text-slate-700">
-            Class Days
-          </label>
+                      <div className="lg:col-span-2 rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
+                        <div className="flex items-center justify-between gap-3">
+                          <label className="block text-xs font-extrabold text-slate-700">
+                            Class Days
+                          </label>
 
-          <span className="text-[11px] font-extrabold px-3 py-1.5 rounded-full bg-white border border-slate-200 text-slate-700 shadow-sm">
-            {studentDaysDraft.length} selected
-          </span>
-        </div>
+                          <span className="text-[11px] font-extrabold px-3 py-1.5 rounded-full bg-white border border-slate-200 text-slate-700 shadow-sm">
+                            {studentDaysDraft.length} selected
+                          </span>
+                        </div>
 
-        <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-          {WEEKDAYS.map((day) => {
-            const checked = studentDaysDraft.includes(day);
+                        <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                          {WEEKDAYS.map((day) => {
+                            const checked = studentDaysDraft.includes(day);
 
-            return (
-              <button
-                key={day}
-                type="button"
-                onClick={() => {
-                  startTransition(() => {
-                    setStudentDaysDraft((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(day)) {
-                        next.delete(day);
-                      } else {
-                        next.add(day);
-                      }
-                      const arr = Array.from(next);
-                      return arr.length ? arr : ["Monday"];
-                    });
-                  });
-                }}
-                className={`rounded-2xl px-3 py-2 border text-xs font-extrabold transition ${
-                  checked
-                    ? "bg-white border-indigo-200 text-indigo-700 shadow-[0_10px_18px_rgba(99,102,241,0.12)]"
-                    : "bg-white/90 border-slate-200 text-slate-600 hover:bg-white shadow-[0_10px_18px_rgba(15,23,42,0.04)]"
-                }`}
-              >
-                {day}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </div>
+                            return (
+                              <button
+                                key={day}
+                                type="button"
+                                onClick={() => {
+                                  startTransition(() => {
+                                    setStudentDaysDraft((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(day)) {
+                                        next.delete(day);
+                                      } else {
+                                        next.add(day);
+                                      }
+                                      const arr = Array.from(next);
+                                      return arr.length ? arr : ["Monday"];
+                                    });
+                                  });
+                                }}
+                                className={`rounded-2xl px-3 py-2 border text-xs font-extrabold transition ${checked
+                                  ? "bg-white border-indigo-200 text-indigo-700 shadow-[0_10px_18px_rgba(99,102,241,0.12)]"
+                                  : "bg-white/90 border-slate-200 text-slate-600 hover:bg-white shadow-[0_10px_18px_rgba(15,23,42,0.04)]"
+                                  }`}
+                              >
+                                {day}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
 
-    <button
-      type="submit"
-      className="
+                    <button
+                      type="submit"
+                      className="
         w-full rounded-2xl
         bg-white/95 hover:bg-white
         border border-slate-200/80
@@ -4856,18 +5031,18 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
         shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)]
         transition active:scale-[0.99]
       "
-    >
-      {modalMode === "add-student" ? "Add Student" : "Save Changes"}
-    </button>
+                    >
+                      {modalMode === "add-student" ? "Add Student" : "Save Changes"}
+                    </button>
 
-    <button
-      type="button"
-      onClick={() => {
-        setShowModal(false);
-        setEditingStudent(null);
-        setViewingClass(null);
-      }}
-      className="
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowModal(false);
+                        setEditingStudent(null);
+                        setViewingClass(null);
+                      }}
+                      className="
         w-full rounded-2xl
         bg-white/80 hover:bg-white
         border border-slate-200/80
@@ -4876,201 +5051,201 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
         shadow-[0_10px_22px_rgba(15,23,42,0.04)]
         transition active:scale-[0.99]
       "
-    >
-      Cancel
-    </button>
-  </form>
-)}
+                    >
+                      Cancel
+                    </button>
+                  </form>
+                )}
 
-{/* SETTINGS */}
-{modalMode === "settings" && (
-  <div className="rounded-t-[28px] sm:rounded-[28px] border border-slate-200 bg-white text-slate-950 shadow-[0_24px_70px_rgba(15,23,42,0.12)] animate-settings-pop max-h-[92vh] overflow-y-auto">
-    <div className="border-b border-slate-200 px-6 py-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h3 className="text-2xl font-black tracking-tight text-slate-950">
-            Settings
-          </h3>
-          <p className="mt-1 text-sm font-semibold text-slate-500">
-            Manage your profile and dashboard appearance.
-          </p>
+                {/* SETTINGS */}
+                {modalMode === "settings" && (
+                  <div className="rounded-t-[28px] sm:rounded-[28px] border border-slate-200 bg-white text-slate-950 shadow-[0_24px_70px_rgba(15,23,42,0.12)] animate-settings-pop max-h-[92vh] overflow-y-auto">
+                    <div className="border-b border-slate-200 px-6 py-5">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <h3 className="text-2xl font-black tracking-tight text-slate-950">
+                            Settings
+                          </h3>
+                          <p className="mt-1 text-sm font-semibold text-slate-500">
+                            Manage your profile and dashboard appearance.
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={toggleTheme}
+                          className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white transition hover:bg-slate-800 active:scale-[0.98]"
+                        >
+                          {themeMode === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+                          {themeMode === "dark" ? "Light Mode" : "Dark Mode"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="p-6">
+                      {(isSuperAdmin || isDepartmentAdmin) && (
+                        <form onSubmit={saveSuperAdminProfile} className="space-y-5">
+                          <div>
+                            <h4 className="text-lg font-black text-slate-950">
+                              Department Admin Profile
+                            </h4>
+                            <p className="mt-1 text-sm font-semibold text-slate-500">
+                              Update your username, name, email, and password.
+                            </p>
+                          </div>
+
+                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                            <label className="block">
+                              <div className="mb-2 text-xs font-black text-slate-600">
+                                Username
+                              </div>
+                              <input
+                                id="superadmin-username"
+                                name="superadmin_username"
+                                value={superAdminForm.username}
+                                onChange={(e) =>
+                                  setSuperAdminForm({
+                                    ...superAdminForm,
+                                    username: e.target.value,
+                                  })
+                                }
+                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
+                                placeholder="Username"
+                              />
+                            </label>
+
+                            <label className="block">
+                              <div className="mb-2 text-xs font-black text-slate-600">
+                                Email
+                              </div>
+                              <input
+                                id="superadmin-email"
+                                name="superadmin_email"
+                                type="email"
+                                value={superAdminForm.email}
+                                onChange={(e) =>
+                                  setSuperAdminForm({
+                                    ...superAdminForm,
+                                    email: e.target.value,
+                                  })
+                                }
+                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
+                                placeholder="Email"
+                              />
+                            </label>
+
+                            <label className="block">
+                              <div className="mb-2 text-xs font-black text-slate-600">
+                                First Name
+                              </div>
+                              <input
+                                id="superadmin-first-name"
+                                name="superadmin_first_name"
+                                value={(superAdminForm as any).first_name || ""}
+                                onChange={(e) =>
+                                  setSuperAdminForm({
+                                    ...superAdminForm,
+                                    first_name: e.target.value,
+                                  } as any)
+                                }
+                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
+                                placeholder="First name"
+                              />
+                            </label>
+
+                            <label className="block">
+                              <div className="mb-2 text-xs font-black text-slate-600">
+                                Last Name
+                              </div>
+                              <input
+                                id="superadmin-last-name"
+                                name="superadmin_last_name"
+                                value={(superAdminForm as any).last_name || ""}
+                                onChange={(e) =>
+                                  setSuperAdminForm({
+                                    ...superAdminForm,
+                                    last_name: e.target.value,
+                                  } as any)
+                                }
+                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
+                                placeholder="Last name"
+                              />
+                            </label>
+
+                            <label className="block md:col-span-2">
+                              <div className="mb-2 text-xs font-black text-slate-600">
+                                New Password
+                              </div>
+                              <input
+                                id="superadmin-password"
+                                name="superadmin_password"
+                                type="password"
+                                value={superAdminForm.password}
+                                onChange={(e) =>
+                                  setSuperAdminForm({
+                                    ...superAdminForm,
+                                    password: e.target.value,
+                                  })
+                                }
+                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
+                                placeholder="Leave blank to keep current password"
+                              />
+                              <div className="mt-2 text-xs font-semibold text-slate-500">
+                                Minimum 6 characters if changing password.
+                              </div>
+                            </label>
+                          </div>
+
+                          <div className="flex flex-col gap-3 sm:flex-row">
+                            <button
+                              type="submit"
+                              disabled={superAdminSaving}
+                              className="inline-flex flex-1 items-center justify-center rounded-2xl bg-gradient-to-r from-indigo-600 to-blue-600 px-5 py-3.5 text-sm font-black text-white shadow-[0_16px_36px_rgba(37,99,235,0.25)] transition hover:brightness-110 active:scale-[0.99] disabled:opacity-60"
+                            >
+                              {superAdminSaving ? "Saving..." : "Save Profile"}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => { setShowModal(false); }}
+                              className="rounded-2xl border border-slate-200 bg-white px-5 py-3.5 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50 active:scale-[0.99]"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </form>
+                      )}
+
+                      {!(isSuperAdmin || isDepartmentAdmin) && (
+                        <div>
+                          <h4 className="text-lg font-black text-slate-950">
+                            Appearance
+                          </h4>
+                          <p className="mt-1 text-sm font-semibold text-slate-500">
+                            Switch between light and dark mode.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
-
-        <button
-          type="button"
-          onClick={toggleTheme}
-          className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white transition hover:bg-slate-800 active:scale-[0.98]"
-        >
-          {themeMode === "dark" ? <Sun size={17} /> : <Moon size={17} />}
-          {themeMode === "dark" ? "Light Mode" : "Dark Mode"}
-        </button>
-      </div>
-    </div>
-
-    <div className="p-6">
-      {(isSuperAdmin || isDepartmentAdmin) && (
-        <form onSubmit={saveSuperAdminProfile} className="space-y-5">
-          <div>
-            <h4 className="text-lg font-black text-slate-950">
-              Department Admin Profile
-            </h4>
-            <p className="mt-1 text-sm font-semibold text-slate-500">
-              Update your username, name, email, and password.
-            </p>
+        {/* TOAST */}
+        {toast && (
+          <div className="fixed bottom-6 right-6 z-[70] flex items-center gap-3 rounded-2xl border border-slate-100 bg-white px-5 py-3.5 shadow-[0_8px_30px_rgba(0,0,0,0.12)]" style={{ animation: "slideUp 0.22s ease forwards" }}>
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-50">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <circle cx="8" cy="8" r="8" fill="#10b981" opacity="0.15" />
+                <path d="M4.5 8l2.5 2.5 4.5-4.5" stroke="#10b981" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <span className="text-sm font-semibold text-slate-800">{toast}</span>
           </div>
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <label className="block">
-              <div className="mb-2 text-xs font-black text-slate-600">
-                Username
-              </div>
-              <input
-  id="superadmin-username"
-  name="superadmin_username"
-  value={superAdminForm.username}
-                onChange={(e) =>
-                  setSuperAdminForm({
-                    ...superAdminForm,
-                    username: e.target.value,
-                  })
-                }
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
-                placeholder="Username"
-              />
-            </label>
-
-            <label className="block">
-              <div className="mb-2 text-xs font-black text-slate-600">
-                Email
-              </div>
-              <input
-  id="superadmin-email"
-  name="superadmin_email"
-  type="email"
-  value={superAdminForm.email}
-                onChange={(e) =>
-                  setSuperAdminForm({
-                    ...superAdminForm,
-                    email: e.target.value,
-                  })
-                }
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
-                placeholder="Email"
-              />
-            </label>
-
-            <label className="block">
-              <div className="mb-2 text-xs font-black text-slate-600">
-                First Name
-              </div>
-              <input
-  id="superadmin-first-name"
-  name="superadmin_first_name"
-  value={(superAdminForm as any).first_name || ""}
-                onChange={(e) =>
-                  setSuperAdminForm({
-                    ...superAdminForm,
-                    first_name: e.target.value,
-                  } as any)
-                }
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
-                placeholder="First name"
-              />
-            </label>
-
-            <label className="block">
-              <div className="mb-2 text-xs font-black text-slate-600">
-                Last Name
-              </div>
-              <input
-  id="superadmin-last-name"
-  name="superadmin_last_name"
-  value={(superAdminForm as any).last_name || ""}
-                onChange={(e) =>
-                  setSuperAdminForm({
-                    ...superAdminForm,
-                    last_name: e.target.value,
-                  } as any)
-                }
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
-                placeholder="Last name"
-              />
-            </label>
-
-            <label className="block md:col-span-2">
-              <div className="mb-2 text-xs font-black text-slate-600">
-                New Password
-              </div>
-              <input
-  id="superadmin-password"
-  name="superadmin_password"
-  type="password"
-  value={superAdminForm.password}
-                onChange={(e) =>
-                  setSuperAdminForm({
-                    ...superAdminForm,
-                    password: e.target.value,
-                  })
-                }
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
-                placeholder="Leave blank to keep current password"
-              />
-              <div className="mt-2 text-xs font-semibold text-slate-500">
-                Minimum 6 characters if changing password.
-              </div>
-            </label>
-          </div>
-
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <button
-              type="submit"
-              disabled={superAdminSaving}
-              className="inline-flex flex-1 items-center justify-center rounded-2xl bg-gradient-to-r from-indigo-600 to-blue-600 px-5 py-3.5 text-sm font-black text-white shadow-[0_16px_36px_rgba(37,99,235,0.25)] transition hover:brightness-110 active:scale-[0.99] disabled:opacity-60"
-            >
-              {superAdminSaving ? "Saving..." : "Save Profile"}
-            </button>
-
-<button
-  type="button"
- onClick={() => { setShowModal(false); }}
-  className="rounded-2xl border border-slate-200 bg-white px-5 py-3.5 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50 active:scale-[0.99]"
->
-  Cancel
-</button>
-          </div>
-        </form>
-      )}
-
-      {!(isSuperAdmin || isDepartmentAdmin) && (
-        <div>
-          <h4 className="text-lg font-black text-slate-950">
-            Appearance
-          </h4>
-          <p className="mt-1 text-sm font-semibold text-slate-500">
-            Switch between light and dark mode.
-          </p>
-        </div>
-      )}
-    </div>
-  </div>
-)}
-          </div>
-        </div>
-      )}
-    </div>
-{/* TOAST */}
-{toast && (
-  <div className="fixed bottom-6 right-6 z-[70] flex items-center gap-3 rounded-2xl border border-slate-100 bg-white px-5 py-3.5 shadow-[0_8px_30px_rgba(0,0,0,0.12)]" style={{ animation: "slideUp 0.22s ease forwards" }}>
-    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-50">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-        <circle cx="8" cy="8" r="8" fill="#10b981" opacity="0.15"/>
-        <path d="M4.5 8l2.5 2.5 4.5-4.5" stroke="#10b981" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-      </svg>
-    </div>
-    <span className="text-sm font-semibold text-slate-800">{toast}</span>
-  </div>
-)}
-<style>{`
+        )}
+        <style>{`
   @keyframes settingsPop {
     0% {
       opacity: 0;
@@ -5277,7 +5452,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
 `}</style>
 
-</div>
-</>
-);
+      </div>
+    </>
+  );
 }

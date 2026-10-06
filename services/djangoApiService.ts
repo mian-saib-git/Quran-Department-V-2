@@ -1505,6 +1505,38 @@ export async function markAttendanceInDjango(
   });
 }
 
+
+export type AttendanceMonthlyImportResponse = {
+  success: boolean;
+  mode: "preview" | "commit";
+  detail: string;
+  output?: string;
+  filename?: string;
+  teacher_id?: number;
+  teacher_name?: string;
+  csv_teacher_name?: string;
+  month?: string;
+  allow_unmatched_students?: boolean;
+};
+
+export async function importMonthlyAttendanceCsv(
+  file: File,
+  options?: { commit?: boolean; allow_unmatched_students?: boolean }
+): Promise<AttendanceMonthlyImportResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("commit", options?.commit ? "true" : "false");
+  formData.append(
+    "allow_unmatched_students",
+    options?.allow_unmatched_students ? "true" : "false"
+  );
+
+  return request<AttendanceMonthlyImportResponse>(
+    "/api/academy/attendance/import-monthly/",
+    { method: "POST", body: formData }
+  );
+}
+
 export async function deleteAttendanceInDjango(attendanceId: number) {
   return request<{ detail: string }>(`/api/academy/attendance/${attendanceId}/`, {
     method: "DELETE",
@@ -1972,6 +2004,10 @@ export type QuranDroppedLeaveItem = {
   class_days: string[];
   time_slots: string[];
   class_days_count: number;
+  active_drop_event: boolean;
+  drop_event_id: number | null;
+  drop_effective_date: string;
+  can_rejoin: boolean;
 };
 
 export type QuranDroppedLeaveResponse = {
@@ -1984,7 +2020,475 @@ export async function getQuranDroppedLeave(): Promise<QuranDroppedLeaveResponse>
   return request<QuranDroppedLeaveResponse>("/api/academy/dropped-leave/");
 }
 
+export type QuranStudentRejoinResponse = {
+  detail: string;
+  rejoin: {
+    changed: boolean;
+    reason: string;
+    drop_event_id?: number;
+    restoration_required?: boolean;
+    restoration_adjustment_id?: number | null;
+    restoration_amount?: string;
+  };
+};
+
+export async function rejoinQuranStudent(
+  studentId: number,
+  rejoinDate: string,
+): Promise<QuranStudentRejoinResponse> {
+  return request<QuranStudentRejoinResponse>(
+    "/api/academy/teacher-salary-v2/",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        action: "rejoin_student",
+        student_id: studentId,
+        rejoin_date: rejoinDate,
+      }),
+    },
+  );
+}
+
 export type SalaryMoney = number | string;
+
+export type QuranSalaryV2PayrollStatus =
+  | "calculating"
+  | "department_review"
+  | "pending_super_admin"
+  | "approved"
+  | "rejected"
+  | "reopened"
+  | "paid";
+
+export type QuranSalaryV2ReadinessBlocker = {
+  code: string;
+  count: number;
+  message: string;
+};
+
+export type QuranSalaryV2Readiness = {
+  department_submission_ready: boolean;
+  super_admin_approval_ready: boolean;
+  operational_blockers: QuranSalaryV2ReadinessBlocker[];
+  approval_blockers: QuranSalaryV2ReadinessBlocker[];
+  counts: {
+    unresolved_coverages: number;
+    not_marked_student_attendance: number;
+    present_without_substitute: number;
+    invalid_substitute_assignments: number;
+    pending_adjustments: number;
+  };
+};
+
+export type QuranSalaryV2AdjustmentStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "cancelled";
+
+export type QuranSalaryV2AdjustmentEffect =
+  | "credit"
+  | "debit";
+
+export type QuranSalaryV2Adjustment = {
+  id: number;
+  payroll_id: number;
+  teacher_id: number;
+  teacher_name: string;
+  salary_month: number;
+  salary_year: number;
+  adjustment_type: string;
+  effect: QuranSalaryV2AdjustmentEffect;
+  amount: SalaryMoney;
+  reason: string;
+  source_month: number | null;
+  source_year: number | null;
+  student_id: number | null;
+  status: QuranSalaryV2AdjustmentStatus;
+  requested_by_id: number | null;
+  requested_at: string | null;
+  reviewed_by_id: number | null;
+  reviewed_at: string | null;
+  review_note: string;
+};
+
+export type QuranSalaryV2Payroll = {
+  id: number;
+  adjustments: QuranSalaryV2Adjustment[];
+  teacher_id: number;
+  teacher_name: string;
+  teacher_username: string;
+  month: number;
+  year: number;
+  status: QuranSalaryV2PayrollStatus;
+  normal_earnings: SalaryMoney;
+  substitute_earnings: SalaryMoney;
+  approved_bonus_total: SalaryMoney;
+  automatic_absence_deduction_total: SalaryMoney;
+  approved_manual_deduction_total: SalaryMoney;
+  dropped_class_reversal_total: SalaryMoney;
+  previous_month_restoration_total: SalaryMoney;
+  gross_total: SalaryMoney;
+  deduction_total: SalaryMoney;
+  final_total: SalaryMoney;
+  department_note: string;
+  super_admin_note: string;
+  submitted_at: string | null;
+  approved_at: string | null;
+  paid_at: string | null;
+  calculated_at: string | null;
+  calculation_snapshot: Record<string, any>;
+  readiness: QuranSalaryV2Readiness;
+};
+
+export type QuranSalaryV2LedgerEntry = {
+  id: number;
+  entry_type: string;
+  entry_type_label: string;
+  date: string | null;
+  teacher_id: number;
+  teacher_name: string;
+  student_id: number | null;
+  student_name: string;
+  salary_unit_number: number | null;
+  class_count_at_time: number | null;
+  rate: SalaryMoney;
+  amount: SalaryMoney;
+  description: string;
+  source_month: number | null;
+  source_year: number | null;
+  metadata: Record<string, any>;
+};
+
+export type QuranSalaryV2ProofResponse = {
+  department: {
+    id: number;
+    name: string;
+  };
+  payroll: QuranSalaryV2Payroll;
+  ledger: QuranSalaryV2LedgerEntry[];
+  ledger_count: number;
+};
+
+
+export type QuranSalaryV2DashboardResponse = {
+  department: {
+    id: number;
+    name: string;
+  };
+  month: number;
+  year: number;
+  payrolls: QuranSalaryV2Payroll[];
+  count: number;
+};
+
+export type QuranSalaryV2ActionName =
+  | "calculate"
+  | "submit"
+  | "approve"
+  | "reject"
+  | "mark_paid"
+  | "reopen"
+  | "propose_adjustment"
+  | "approve_adjustment"
+  | "reject_adjustment"
+  | "rejoin_student";
+
+export type QuranSalaryV2ActionInput = {
+  action: QuranSalaryV2ActionName;
+  department_id?: number;
+  month?: number;
+  year?: number;
+  payroll_id?: number;
+  adjustment_id?: number;
+  department_note?: string;
+  super_admin_note?: string;
+  reopen_reason?: string;
+  review_note?: string;
+  adjustment_type?: string;
+  effect?: QuranSalaryV2AdjustmentEffect;
+  amount?: SalaryMoney;
+  reason?: string;
+  source_month?: number | null;
+  source_year?: number | null;
+  student_id?: number | null;
+  rejoin_date?: string;
+  [key: string]: unknown;
+};
+
+export type QuranSalaryV2ActionResponse = {
+  detail?: string;
+  department?: {
+    id: number;
+    name: string;
+  };
+  month?: number;
+  year?: number;
+  payroll?: QuranSalaryV2Payroll;
+  payrolls?: QuranSalaryV2Payroll[];
+  adjustment?: QuranSalaryV2Adjustment;
+  readiness?: QuranSalaryV2Readiness;
+  blockers?: QuranSalaryV2ReadinessBlocker[];
+  count?: number;
+  [key: string]: any;
+};
+
+export async function getQuranSalaryV2Dashboard(
+  month: number,
+  year: number,
+  departmentId?: number | null,
+): Promise<QuranSalaryV2DashboardResponse> {
+  const query = new URLSearchParams({
+    month: String(month),
+    year: String(year),
+    _ts: String(Date.now()),
+  });
+
+  if (departmentId) {
+    query.set("department_id", String(departmentId));
+  }
+
+  return request<QuranSalaryV2DashboardResponse>(
+    `/api/academy/teacher-salary-v2/?${query.toString()}`,
+    {
+      cache: "no-store",
+    },
+  );
+}
+
+export async function getQuranSalaryV2Proof(
+  payrollId: number,
+  departmentId?: number | null,
+): Promise<QuranSalaryV2ProofResponse> {
+  const query = new URLSearchParams({
+    payroll_id: String(payrollId),
+    _ts: String(Date.now()),
+  });
+
+  if (departmentId) {
+    query.set("department_id", String(departmentId));
+  }
+
+  return request<QuranSalaryV2ProofResponse>(
+    `/api/academy/teacher-salary-v2/proof/?${query.toString()}`,
+    {
+      cache: "no-store",
+    },
+  );
+}
+
+
+export async function runQuranSalaryV2Action(
+  input: QuranSalaryV2ActionInput,
+): Promise<QuranSalaryV2ActionResponse> {
+  return request<QuranSalaryV2ActionResponse>(
+    "/api/academy/teacher-salary-v2/",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export type QuranSalaryV2LegacySlip = QuranTeacherSalarySlip & {
+  salary_source: "salary_v2";
+  v2_status: QuranSalaryV2PayrollStatus;
+  v2_readiness: QuranSalaryV2Readiness;
+  v2_adjustments: QuranSalaryV2Adjustment[];
+  v2_normal_earnings: SalaryMoney;
+  v2_substitute_earnings: SalaryMoney;
+  v2_approved_bonus_total: SalaryMoney;
+  v2_automatic_absence_deduction_total: SalaryMoney;
+  v2_approved_manual_deduction_total: SalaryMoney;
+  v2_dropped_class_reversal_total: SalaryMoney;
+  v2_previous_month_restoration_total: SalaryMoney;
+  v2_department_note: string;
+  v2_super_admin_note: string;
+  v2_submitted_at: string | null;
+  v2_approved_at: string | null;
+  v2_paid_at: string | null;
+  v2_calculated_at: string | null;
+};
+
+export type QuranSalaryV2LegacyDashboardResponse =
+  Omit<QuranSalaryDashboardResponse, "teachers"> & {
+    source: "salary_v2";
+    teachers: QuranSalaryV2LegacySlip[];
+  };
+
+function salaryV2LegacyStatus(
+  status: QuranSalaryV2PayrollStatus,
+): "draft" | "processed" {
+  return [
+    "pending_super_admin",
+    "approved",
+    "paid",
+  ].includes(status)
+    ? "processed"
+    : "draft";
+}
+
+function salaryV2LegacyDeductions(
+  payroll: QuranSalaryV2Payroll,
+): SalaryDeductions {
+  const snapshotDeductions =
+    payroll.calculation_snapshot?.deductions;
+
+  if (
+    snapshotDeductions
+    && typeof snapshotDeductions === "object"
+  ) {
+    return snapshotDeductions as SalaryDeductions;
+  }
+
+  return {
+    food: 0,
+    drop_leave: payroll.dropped_class_reversal_total,
+    fine: 0,
+    imam_hadya: 0,
+    advance: 0,
+    manual: [],
+  };
+}
+
+export function adaptQuranSalaryV2PayrollToLegacySlip(
+  payroll: QuranSalaryV2Payroll,
+): QuranSalaryV2LegacySlip {
+  return {
+    id: payroll.id,
+    teacher_id: payroll.teacher_id,
+    teacher_name: payroll.teacher_name,
+    teacher_username: payroll.teacher_username,
+    month: payroll.month,
+    year: payroll.year,
+
+    behavior_good: false,
+    half_class_overrides: [],
+    other_bonuses: [],
+    deductions: salaryV2LegacyDeductions(payroll),
+    override_values: {},
+
+    calculated_snapshot:
+      payroll.calculation_snapshot || {},
+    calculated_total: payroll.gross_total,
+    gross_total: payroll.gross_total,
+    deduction_total: payroll.deduction_total,
+    final_total: payroll.final_total,
+    net_total: payroll.final_total,
+
+    status: salaryV2LegacyStatus(payroll.status),
+    admin_note: payroll.department_note || "",
+    processed_at:
+      payroll.approved_at
+      || payroll.submitted_at
+      || null,
+    updated_at: payroll.calculated_at,
+    pdf_generated_at: null,
+    pdf_download_count: 0,
+    pdf_last_downloaded_at: null,
+
+    salary_source: "salary_v2",
+    v2_status: payroll.status,
+    v2_readiness: payroll.readiness,
+    v2_adjustments: payroll.adjustments || [],
+    v2_normal_earnings: payroll.normal_earnings,
+    v2_substitute_earnings: payroll.substitute_earnings,
+    v2_approved_bonus_total:
+      payroll.approved_bonus_total,
+    v2_automatic_absence_deduction_total:
+      payroll.automatic_absence_deduction_total,
+    v2_approved_manual_deduction_total:
+      payroll.approved_manual_deduction_total,
+    v2_dropped_class_reversal_total:
+      payroll.dropped_class_reversal_total,
+    v2_previous_month_restoration_total:
+      payroll.previous_month_restoration_total,
+    v2_department_note:
+      payroll.department_note || "",
+    v2_super_admin_note:
+      payroll.super_admin_note || "",
+    v2_submitted_at: payroll.submitted_at,
+    v2_approved_at: payroll.approved_at,
+    v2_paid_at: payroll.paid_at,
+    v2_calculated_at: payroll.calculated_at,
+  };
+}
+
+export async function getQuranSalaryV2LegacyDashboard(
+  month: number,
+  year: number,
+  page = 1,
+  pageSize = 12,
+): Promise<QuranSalaryV2LegacyDashboardResponse> {
+  const v2 = await getQuranSalaryV2Dashboard(month, year);
+  const configuration = null;
+
+  const allTeachers = v2.payrolls.map(
+    adaptQuranSalaryV2PayrollToLegacySlip,
+  );
+
+  const safePageSize = Math.max(
+    1,
+    Math.floor(pageSize || 12),
+  );
+
+  const totalItems = allTeachers.length;
+  const totalPages = Math.max(
+    1,
+    Math.ceil(totalItems / safePageSize),
+  );
+
+  const safePage = Math.min(
+    Math.max(1, Math.floor(page || 1)),
+    totalPages,
+  );
+
+  const start = (safePage - 1) * safePageSize;
+  const teachers = allTeachers.slice(
+    start,
+    start + safePageSize,
+  );
+
+  const totalPayout = allTeachers.reduce(
+    (sum, slip) => sum + Number(slip.final_total || 0),
+    0,
+  );
+
+  const pagePayout = teachers.reduce(
+    (sum, slip) => sum + Number(slip.final_total || 0),
+    0,
+  );
+
+  const processed = allTeachers.filter(
+    (slip) => slip.status === "processed",
+  ).length;
+
+  return {
+    source: "salary_v2",
+    month: v2.month,
+    year: v2.year,
+    access_mode: "administrator",
+    department: v2.department,
+    configuration,
+    teachers,
+    pagination: {
+      page: safePage,
+      page_size: safePageSize,
+      total_items: totalItems,
+      total_pages: totalPages,
+      has_next: safePage < totalPages,
+      has_previous: safePage > 1,
+    },
+    summary: {
+      teachers: totalItems,
+      page_teachers: teachers.length,
+      draft: totalItems - processed,
+      processed,
+      total_payout: totalPayout,
+      page_payout: pagePayout,
+    },
+  };
+}
 export type SalaryTier = { min: number; max: number | null; rate: SalaryMoney };
 export type AchievementPayout = { min_points: number; max_points: number; amount: SalaryMoney };
 export type QuranSalaryConfiguration = {
@@ -2191,4 +2695,3 @@ export async function updateQuranSalarySettings(
     body: JSON.stringify(input),
   });
 }
-

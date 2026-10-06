@@ -4,6 +4,7 @@ import {
   Activity,
   AlertTriangle,
   Building2,
+  CircleDollarSign,
   Database,
   ChevronRight,
   Eye,
@@ -42,6 +43,7 @@ import {
 } from "./platform/PlatformAdminTools";
 import PlatformCommunicationsPanel from "./platform/PlatformCommunicationsPanel";
 import PlatformAnalyticsOverview from "./platform/PlatformAnalyticsOverview";
+import PlatformSalaryApprovals from "./platform/PlatformSalaryApprovals";
 import {
   createPlatformDepartment,
   createPlatformInstitution,
@@ -58,6 +60,7 @@ import { PageSkeleton } from "./ui/SkeletonLoaders";
 type PlatformSection =
   | "overview"
   | "institutions"
+  | "salary_approvals"
   | "portal_admins"
   | "communications"
   | "backups"
@@ -131,6 +134,10 @@ const SECTION_COPY: Record<PlatformSection, { title: string; subtitle: string }>
     title: "Institution Management",
     subtitle: "Open an institution, choose a department, then manage its permissions.",
   },
+  salary_approvals: {
+    title: "Salary Approvals",
+    subtitle: "Review Quran Department Salary V2 submissions, adjustments, approvals, and payments.",
+  },
   portal_admins: {
     title: "Portal Administrators",
     subtitle: "Manage department manager accounts and secure password resets.",
@@ -174,6 +181,12 @@ const NAV_ITEMS: Array<{
     label: "Institutions",
     description: "Departments and access",
     icon: Building2,
+  },
+  {
+    key: "salary_approvals",
+    label: "Salary Approvals",
+    description: "Review and approve payroll",
+    icon: CircleDollarSign,
   },
   {
     key: "portal_admins",
@@ -966,6 +979,10 @@ export default function PlatformAdmin({
             )}
 
             {activeSection === "overview" && <PlatformAnalyticsOverview />}
+
+            {activeSection === "salary_approvals" && (
+              <PlatformSalaryApprovals departments={departments} />
+            )}
 
             {activeSection === "institutions" && (
               <InstitutionWorkspace

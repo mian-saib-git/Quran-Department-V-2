@@ -10,6 +10,8 @@ from academy.models import (
     ClassSchedule,
     StudentClassHistory,
 )
+from django.db import transaction
+from academy.student_state_history_service import sync_student_state_history
 
 
 SUBJECT_CHOICES = [
@@ -721,6 +723,42 @@ class UpdateAccountSerializer(serializers.Serializer):
             raise serializers.ValidationError({
                 "transfer_to_teacher_id": "Select the teacher who will receive this student."
             })
+
+        requested_class_status = attrs.get("class_status")
+        controlled_dropped_statuses = {
+            StudentProfile.ClassStatus.OLD_DROPPED,
+            StudentProfile.ClassStatus.TRIAL_DROPPED,
+            StudentProfile.ClassStatus.OLD_DROPPED_OTHER,
+        }
+
+        if requested_class_status in controlled_dropped_statuses:
+            raise serializers.ValidationError({
+                "class_status": (
+                    "Dropped status is controlled by attendance/drop workflow "
+                    "and cannot be set manually."
+                )
+            })
+
+        context_user = self.context.get("user")
+        context_student = getattr(
+            context_user,
+            "student_profile",
+            None,
+        )
+
+        if (
+            context_student
+            and context_student.class_status in controlled_dropped_statuses
+            and requested_class_status is not None
+            and requested_class_status != context_student.class_status
+        ):
+            raise serializers.ValidationError({
+                "class_status": (
+                    "A dropped student cannot be reactivated from the ordinary "
+                    "account editor. Use the controlled rejoin workflow."
+                )
+            })
+
         return attrs
 
     def validate_username(self, value):
@@ -742,6 +780,7 @@ class UpdateAccountSerializer(serializers.Serializer):
             raise serializers.ValidationError("Password must be at least 6 characters.")
         return value
 
+    @transaction.atomic
     def update(self, user, validated_data):
         if "username" in validated_data:
             user.username = validated_data["username"].strip()
@@ -789,6 +828,10 @@ class UpdateAccountSerializer(serializers.Serializer):
             previous_student_type = student.student_type
             previous_class_status = student.class_status
             previous_fee_paid = student.first_fee_paid
+            desired_class_status = validated_data.pop(
+                "class_status",
+                None,
+            )
             teacher = student.teacher
             transfer_to_teacher_id = validated_data.pop("transfer_to_teacher_id", None)
 
@@ -814,7 +857,6 @@ class UpdateAccountSerializer(serializers.Serializer):
 
             for field in [
                 "student_type",
-                "class_status",
                 "speaking_language",
                 "first_fee_paid",
             ]:
@@ -832,14 +874,13 @@ class UpdateAccountSerializer(serializers.Serializer):
 
             if (
                 previous_class_status == StudentProfile.ClassStatus.ON_LEAVE
-                and student.class_status == StudentProfile.ClassStatus.RUNNING
+                and desired_class_status == StudentProfile.ClassStatus.RUNNING
                 and "student_type" not in validated_data
             ):
                 student.student_type = StudentProfile.StudentType.RETURNED_FROM_LEAVE
 
             if (
                 teacher.id != previous_teacher.id
-                or student.class_status != previous_class_status
                 or student.student_type != previous_student_type
             ):
                 student.status_effective_date = timezone.localdate()
@@ -863,25 +904,19 @@ class UpdateAccountSerializer(serializers.Serializer):
                     effective_date=timezone.localdate(),
                 )
 
-            if student.class_status != previous_class_status:
-                event_type = (
-                    StudentClassHistory.EventType.RETURNED_FROM_LEAVE
-                    if previous_class_status == StudentProfile.ClassStatus.ON_LEAVE
-                    and student.class_status == StudentProfile.ClassStatus.RUNNING
-                    else StudentClassHistory.EventType.STATUS_CHANGED
-                )
-                _student_history(
+            if (
+                desired_class_status is not None
+                and desired_class_status != previous_class_status
+            ):
+                sync_student_state_history(
                     student=student,
-                    event_type=event_type,
-                    actor=actor,
-                    previous_teacher=previous_teacher,
-                    new_teacher=teacher,
-                    previous_student_type=previous_student_type,
-                    new_student_type=student.student_type,
-                    previous_class_status=previous_class_status,
-                    new_class_status=student.class_status,
                     effective_date=timezone.localdate(),
+                    desired_class_status=desired_class_status,
+                    desired_student_type=previous_student_type,
+                    actor=actor,
+                    note="Class status changed from account editor.",
                 )
+                student.refresh_from_db()
 
             if student.student_type != previous_student_type:
                 _student_history(

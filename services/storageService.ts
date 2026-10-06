@@ -44,10 +44,10 @@ const getSavedAccessToken = (): string => {
 
     return String(
       session?.access ||
-        session?.accessToken ||
-        session?.token ||
-        session?.tokens?.access ||
-        ""
+      session?.accessToken ||
+      session?.token ||
+      session?.tokens?.access ||
+      ""
     );
   } catch {
     return "";
@@ -103,53 +103,57 @@ const normalizeEntityType = (raw: any): EntityType => {
 const normalizeState = (state: any): AppState => {
   const teachers: Teacher[] = Array.isArray(state?.teachers)
     ? state.teachers.map((t: any) => ({
-        id: String(t?.id ?? ""),
-        name: String(t?.name ?? ""),
-        fatherName: String(t?.fatherName ?? t?.father_name ?? ""),
-        email: String(t?.email ?? ""),
-        phone: String(t?.phone ?? ""),
-        address: String(t?.address ?? ""),
-        joiningDate: String(t?.joiningDate ?? t?.joining_date ?? ""),
-        notes: String(t?.notes ?? ""),
-        photoUrl: String(t?.photoUrl ?? t?.photo_url ?? ""),
-        loginPin: String(t?.loginPin ?? t?.login_pin ?? ""),
-        salary: Number(t?.salary ?? 0),
-        subjects: Array.isArray(t?.subjects) ? t.subjects : [],
-      }))
+      id: String(t?.id ?? ""),
+      name: String(t?.name ?? ""),
+      fatherName: String(t?.fatherName ?? t?.father_name ?? ""),
+      email: String(t?.email ?? ""),
+      phone: String(t?.phone ?? ""),
+      address: String(t?.address ?? ""),
+      joiningDate: String(t?.joiningDate ?? t?.joining_date ?? ""),
+      notes: String(t?.notes ?? ""),
+      photoUrl: String(t?.photoUrl ?? t?.photo_url ?? ""),
+      loginPin: String(t?.loginPin ?? t?.login_pin ?? ""),
+      salary: Number(t?.salary ?? 0),
+      subjects: Array.isArray(t?.subjects) ? t.subjects : [],
+    }))
     : [];
 
   const students: Student[] = Array.isArray(state?.students)
     ? state.students.map((s: any) => ({
-        id: String(s?.id ?? ""),
-        name: String(s?.name ?? ""),
-        teacherId: String(s?.teacherId ?? s?.teacher_id ?? ""),
-        timeSlot: String(s?.timeSlot ?? s?.time_slot ?? "").slice(0, 5),
-        classType: normalizeClassType(s?.classType ?? s?.class_type),
-        classDays: Array.isArray(s?.classDays)
-          ? s.classDays
-          : Array.isArray(s?.class_days)
+      id: String(s?.id ?? ""),
+      name: String(s?.name ?? ""),
+      teacherId: String(s?.teacherId ?? s?.teacher_id ?? ""),
+      timeSlot: String(s?.timeSlot ?? s?.time_slot ?? "").slice(0, 5),
+      classType: normalizeClassType(s?.classType ?? s?.class_type),
+      classDays: Array.isArray(s?.classDays)
+        ? s.classDays
+        : Array.isArray(s?.class_days)
           ? s.class_days
           : [],
-        loginId: String(s?.loginId ?? s?.login_id ?? ""),
-      }))
+      loginId: String(s?.loginId ?? s?.login_id ?? ""),
+    }))
     : [];
 
   const attendance = Array.isArray(state?.attendance)
     ? state.attendance.map((a: any) => ({
-        id: String(a?.id ?? ""),
-        entityId: String(a?.entityId ?? a?.entity_id ?? ""),
-        entityType: normalizeEntityType(a?.entityType ?? a?.entity_type),
-        date: String(a?.date ?? ""),
-        classKey: String(a?.classKey ?? a?.class_key ?? ""),
-        status: normalizeAttendanceStatus(a?.status),
-        timestamp: Number(a?.timestamp ?? Date.now()),
-        markedById: String(a?.markedById ?? a?.marked_by_id ?? ""),
-        markedByUsername: String(
-          a?.markedByUsername ?? a?.marked_by_username ?? a?.marked_by ?? ""
-        ),
-        markedByName: String(a?.markedByName ?? a?.marked_by_name ?? ""),
-        markedByRole: String(a?.markedByRole ?? a?.marked_by_role ?? ""),
-      }))
+      id: String(a?.id ?? ""),
+      entityId: String(a?.entityId ?? a?.entity_id ?? ""),
+      entityType: normalizeEntityType(a?.entityType ?? a?.entity_type),
+      date: String(a?.date ?? ""),
+      classKey: String(a?.classKey ?? a?.class_key ?? ""),
+      teacherId: String(a?.teacherId ?? a?.teacher_id ?? ""),
+      teacherName: String(a?.teacherName ?? a?.teacher_name ?? ""),
+      studentId: String(a?.studentId ?? a?.student_id ?? ""),
+      studentName: String(a?.studentName ?? a?.student_name ?? ""),
+      status: normalizeAttendanceStatus(a?.status),
+      timestamp: Number(a?.timestamp ?? Date.now()),
+      markedById: String(a?.markedById ?? a?.marked_by_id ?? ""),
+      markedByUsername: String(
+        a?.markedByUsername ?? a?.marked_by_username ?? a?.marked_by ?? ""
+      ),
+      markedByName: String(a?.markedByName ?? a?.marked_by_name ?? ""),
+      markedByRole: String(a?.markedByRole ?? a?.marked_by_role ?? ""),
+    }))
     : [];
 
   return {
@@ -196,13 +200,14 @@ const readCache = (): AppState | null => {
   return null;
 };
 
-const fetchAcademyState = async (): Promise<AppState> => {
+const fetchAcademyState = async (dashboardOnly = false): Promise<AppState> => {
   if (!hasAuthToken()) {
     throw new Error("No auth token found. Please login again.");
   }
 
+  const url = `${DJANGO_API_BASE}/api/academy/state/${dashboardOnly ? "?dashboard=true" : ""}`;
   const response = await withTimeout(
-    fetch(`${DJANGO_API_BASE}/api/academy/state/`, {
+    fetch(url, {
       method: "GET",
       headers: getAuthHeaders(),
     }),
@@ -215,21 +220,24 @@ const fetchAcademyState = async (): Promise<AppState> => {
 
   const data = await response.json();
   const normalized = normalizeState(data);
+  normalized.isPartial = dashboardOnly;
 
   lastSyncedAttendanceJson = JSON.stringify(normalized.attendance);
 
   return normalized;
 };
 
-export const loadState = async (): Promise<AppState> => {
+export const loadState = async (dashboardOnly = false): Promise<AppState> => {
   const cached = readCache();
 
   // When logged in, always prefer the server state.
   // This prevents old local cache from showing stale attendance after refresh.
   if (hasAuthToken()) {
     try {
-      const fresh = await fetchAcademyState();
-      saveCache(fresh);
+      const fresh = await fetchAcademyState(dashboardOnly);
+      if (!dashboardOnly) {
+        saveCache(fresh);
+      }
       return fresh;
     } catch (err) {
       const message = String((err as any)?.message || "");
@@ -246,6 +254,9 @@ export const loadState = async (): Promise<AppState> => {
 };
 
 export const saveState = async (state: AppState): Promise<void> => {
+  // Dashboard-only state is intentionally incomplete and must never replace the full cache.
+  if (state.isPartial) return;
+
   const normalized = normalizeState(state);
 
   if (isDemoState(normalized)) return;

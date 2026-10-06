@@ -27,6 +27,9 @@ from .salary_v2_service import (
     teacher_rate_for_date,
 )
 
+from .payroll_source_locks import (
+    teacher_session_payroll_lock_payload,
+)
 from .ws_notify import notify_global
 
 
@@ -264,32 +267,167 @@ def _student_status_value(attendance):
 
 
 def _student_requires_substitute(student_status):
-    return student_status not in {
-        QuranClassCoverage.StudentStatus.ABSENT,
-        QuranClassCoverage.StudentStatus.LEAVE,
-    }
+    return (
+        student_status
+        == QuranClassCoverage.StudentStatus.PRESENT
+    )
+
+
+def _time_to_minutes(value):
+    return (
+        int(value.hour) * 60
+        + int(value.minute)
+    )
+
+
+def _safe_duration_minutes(value):
+    try:
+        parsed = int(value or 30)
+    except (TypeError, ValueError):
+        parsed = 30
+
+    return max(1, parsed)
+
+
+def _intervals_overlap(
+    start_a,
+    duration_a,
+    start_b,
+    duration_b,
+):
+    start_a_minutes = _time_to_minutes(start_a)
+    end_a_minutes = (
+        start_a_minutes
+        + _safe_duration_minutes(duration_a)
+    )
+
+    start_b_minutes = _time_to_minutes(start_b)
+    end_b_minutes = (
+        start_b_minutes
+        + _safe_duration_minutes(duration_b)
+    )
+
+    return (
+        start_a_minutes < end_b_minutes
+        and start_b_minutes < end_a_minutes
+    )
+
+
+def _session_duration_minutes(schedules):
+    if not schedules:
+        return 30
+
+    return max(
+        _safe_duration_minutes(
+            row.duration_minutes
+        )
+        for row in schedules
+    )
+
+
+def _coverage_interval(row):
+    if (
+        row.schedule_id
+        and row.schedule
+    ):
+        return (
+            row.schedule.time_slot,
+            _safe_duration_minutes(
+                row.schedule.duration_minutes
+            ),
+        )
+
+    try:
+        start_time = datetime.strptime(
+            str(row.class_key or "").strip(),
+            "%H:%M",
+        ).time()
+    except (TypeError, ValueError):
+        return None
+
+    # Historical coverage rows can exist without a schedule FK.
+    # The legacy default class duration is 30 minutes.
+    return start_time, 30
 
 
 def _busy_teacher_ids(
     *,
     department,
+    original_teacher,
     target_date,
     class_key,
     session_time,
+    session_duration_minutes,
 ):
-    scheduled_ids = set(
+    busy_ids = set()
+
+    # Exact start-time matching is unsafe. Example:
+    # 10:00-10:30 conflicts with 10:15-10:45.
+    schedule_rows = (
         _effective_schedule_queryset(
             department=department,
             target_date=target_date,
-            session_time=session_time,
         )
-        .values_list(
+        .only(
             "teacher_id",
-            flat=True,
+            "time_slot",
+            "duration_minutes",
         )
-        .distinct()
     )
 
+    for row in schedule_rows:
+        if _intervals_overlap(
+            session_time,
+            session_duration_minutes,
+            row.time_slot,
+            row.duration_minutes,
+        ):
+            busy_ids.add(
+                row.teacher_id
+            )
+
+    # Existing substitute assignments also make a teacher busy.
+    # Exclude the session currently being edited so an assignment
+    # does not block itself during a save/update.
+    coverage_rows = (
+        QuranClassCoverage.objects
+        .select_related("schedule")
+        .filter(
+            department=department,
+            date=target_date,
+            coverage_status=(
+                QuranClassCoverage
+                .CoverageStatus
+                .ASSIGNED
+            ),
+            substitute_teacher__isnull=False,
+        )
+        .exclude(
+            original_teacher=original_teacher,
+            class_key=class_key,
+        )
+    )
+
+    for row in coverage_rows:
+        interval = _coverage_interval(row)
+
+        if interval is None:
+            continue
+
+        row_start, row_duration = interval
+
+        if _intervals_overlap(
+            session_time,
+            session_duration_minutes,
+            row_start,
+            row_duration,
+        ):
+            busy_ids.add(
+                row.substitute_teacher_id
+            )
+
+    # Keep the explicit teacher absence/leave protection as a
+    # defensive guard for legacy rows.
     unavailable_ids = set(
         Attendance.objects.filter(
             entity_type=Attendance.EntityType.TEACHER,
@@ -313,7 +451,7 @@ def _busy_teacher_ids(
         )
     )
 
-    return scheduled_ids | unavailable_ids
+    return busy_ids | unavailable_ids
 
 
 def _available_substitutes(
@@ -323,12 +461,17 @@ def _available_substitutes(
     target_date,
     class_key,
     session_time,
+    session_duration_minutes,
 ):
     busy_ids = _busy_teacher_ids(
         department=department,
+        original_teacher=original_teacher,
         target_date=target_date,
         class_key=class_key,
         session_time=session_time,
+        session_duration_minutes=(
+            session_duration_minutes
+        ),
     )
 
     rows = (
@@ -357,7 +500,6 @@ def _available_substitutes(
     )
 
     return list(rows)
-
 
 def _coverage_payload(row):
     return {
@@ -501,12 +643,21 @@ def _build_session_payload(
             ),
         })
 
+    session_duration_minutes = (
+        _session_duration_minutes(
+            schedules
+        )
+    )
+
     substitutes = _available_substitutes(
         department=department,
         original_teacher=teacher,
         target_date=target_date,
         class_key=class_key,
         session_time=session_time,
+        session_duration_minutes=(
+            session_duration_minutes
+        ),
     )
 
     return {
@@ -589,9 +740,14 @@ def reconcile_student_coverage(
       - coverage -> NOT_REQUIRED
       - substitute earning is cleared
 
-    Student Present / Not Marked:
-      - an already valid ASSIGNED substitute remains assigned
-      - otherwise coverage -> UNRESOLVED
+    Student Present:
+      - substitute coverage is required
+
+    Student Not Marked:
+      - coverage -> UNRESOLVED
+      - any substitute assignment is cleared
+      - teacher absence/leave cannot be finalized until
+        student attendance is marked
 
     CANCELLED rows are historical and never reactivated.
     """
@@ -677,7 +833,7 @@ def reconcile_student_coverage(
 
     coverages = (
         QuranClassCoverage.objects
-        .select_for_update()
+        .select_for_update(of=("self",))
         .select_related(
             "student__user",
             "original_teacher__user",
@@ -781,12 +937,13 @@ def reconcile_student_coverage(
 
             not_required += 1
 
-        else:
-            # Present or Not Marked requires coverage.
-            #
-            # If an already assigned substitute remains attached,
-            # preserve it. This avoids destroying a valid assignment
-            # when Present changes to Not Marked or vice versa.
+        elif (
+            normalized_status
+            == QuranClassCoverage
+            .StudentStatus
+            .PRESENT
+        ):
+            # A present student requires substitute coverage.
             if (
                 coverage.coverage_status
                 == QuranClassCoverage
@@ -796,7 +953,6 @@ def reconcile_student_coverage(
                 .substitute_teacher_id
             ):
                 assigned += 1
-
             else:
                 coverage.coverage_status = (
                     QuranClassCoverage
@@ -808,6 +964,17 @@ def reconcile_student_coverage(
                 coverage.substitute_rate = 0
 
                 unresolved += 1
+
+        else:
+            # Not Marked is a blocker, not a substitute assignment.
+            coverage.coverage_status = (
+                QuranClassCoverage
+                .CoverageStatus
+                .UNRESOLVED
+            )
+            coverage.substitute_teacher = None
+            coverage.substitute_rate = 0
+            unresolved += 1
 
         after = {
             "student_status":
@@ -1082,6 +1249,25 @@ class QuranTeacherSessionAttendanceView(APIView):
         session_time = session["session_time"]
         schedules = session["schedules"]
 
+        source_lock = (
+            teacher_session_payroll_lock_payload(
+                department=department,
+                teacher=teacher,
+                target_date=target_date,
+                class_key=class_key,
+                request_data=request.data,
+            )
+        )
+
+        if source_lock:
+            return Response(
+                source_lock,
+                status=(
+                    status
+                    .HTTP_409_CONFLICT
+                ),
+            )
+
         teacher_status = str(
             request.data.get("status") or ""
         ).strip().lower()
@@ -1224,6 +1410,36 @@ class QuranTeacherSessionAttendanceView(APIView):
             Attendance.Status.ABSENT,
             Attendance.Status.LEAVE,
         }:
+            not_marked_ids = {
+                student_id
+                for (
+                    student_id,
+                    student_status,
+                )
+                in student_status_by_id.items()
+                if (
+                    student_status
+                    == QuranClassCoverage
+                    .StudentStatus
+                    .NOT_MARKED
+                )
+            }
+
+            if not_marked_ids:
+                return Response(
+                    {
+                        "detail": (
+                            "Student attendance must be "
+                            "marked before teacher "
+                            "Absent/Leave can be finalized."
+                        ),
+                        "not_marked_student_ids": sorted(
+                            not_marked_ids
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             required_ids = {
                 student_id
                 for (
@@ -1256,7 +1472,7 @@ class QuranTeacherSessionAttendanceView(APIView):
                         "detail": (
                             "A substitute teacher is "
                             "required for every "
-                            "Present/Not Marked student."
+                            "Present student."
                         ),
                         "missing_student_ids": sorted(
                             missing_ids
@@ -1281,24 +1497,57 @@ class QuranTeacherSessionAttendanceView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            substitute_ids = set(
+            substitute_values = list(
                 assignments.values()
+            )
+
+            if (
+                len(substitute_values)
+                != len(set(substitute_values))
+            ):
+                return Response(
+                    {
+                        "detail": (
+                            "The same substitute teacher "
+                            "cannot be assigned to more "
+                            "than one student in the same "
+                            "session."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            substitute_ids = set(
+                substitute_values
+            )
+
+            # Serialize concurrent attempts to use the same
+            # substitute teacher. The second request will wait,
+            # then re-check the now-current coverage state.
+            candidate_rows = list(
+                TeacherProfile.objects
+                .select_for_update(of=("self",))
+                .select_related(
+                    "user",
+                    "department",
+                    "institution",
+                )
+                .filter(
+                    id__in=substitute_ids
+                )
+                .order_by("id")
             )
 
             candidates = {
                 item.id: item
-                for item in (
-                    TeacherProfile.objects
-                    .select_related(
-                        "user",
-                        "department",
-                        "institution",
-                    )
-                    .filter(
-                        id__in=substitute_ids
-                    )
-                )
+                for item in candidate_rows
             }
+
+            session_duration_minutes = (
+                _session_duration_minutes(
+                    schedules
+                )
+            )
 
             available = {
                 item.id: item
@@ -1308,6 +1557,9 @@ class QuranTeacherSessionAttendanceView(APIView):
                     target_date=target_date,
                     class_key=class_key,
                     session_time=session_time,
+                    session_duration_minutes=(
+                        session_duration_minutes
+                    ),
                 )
             }
 
@@ -1362,9 +1614,10 @@ class QuranTeacherSessionAttendanceView(APIView):
                         {
                             "detail": (
                                 f"{substitute} is not "
-                                "available at "
-                                f"{class_key} on "
-                                f"{target_date}."
+                                "available for the "
+                                "requested class interval "
+                                f"starting at {class_key} "
+                                f"on {target_date}."
                             )
                         },
                         status=status.HTTP_400_BAD_REQUEST,
@@ -1647,6 +1900,25 @@ class QuranTeacherSessionAttendanceView(APIView):
         target_date = session["target_date"]
         class_key = session["class_key"]
         session_time = session["session_time"]
+
+        source_lock = (
+            teacher_session_payroll_lock_payload(
+                department=department,
+                teacher=teacher,
+                target_date=target_date,
+                class_key=class_key,
+                request_data=None,
+            )
+        )
+
+        if source_lock:
+            return Response(
+                source_lock,
+                status=(
+                    status
+                    .HTTP_409_CONFLICT
+                ),
+            )
 
         attendance = (
             Attendance.objects

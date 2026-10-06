@@ -19,10 +19,10 @@ import {
 } from "lucide-react";
 
 import {
-  getQuranSalaryDashboard,
-  type QuranSalaryDashboardResponse,
+  getQuranSalaryV2Dashboard,
+  type QuranSalaryV2DashboardResponse,
 } from "../services/djangoApiService";
-import QuranSalaryProofModal from "./QuranSalaryProofModal";
+import SalaryV2ProofModal from "./salary/SalaryV2ProofModal";
 
 import { PageSkeleton } from "./ui/SkeletonLoaders";
 const PKR = new Intl.NumberFormat("en-PK", {
@@ -176,10 +176,10 @@ export default function TeacherSalarySelfService() {
   const now = useMemo(() => new Date(), []);
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [year, setYear] = useState(now.getFullYear());
-  const [data, setData] = useState<QuranSalaryDashboardResponse | null>(null);
+  const [data, setData] = useState<QuranSalaryV2DashboardResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const [proofMetric, setProofMetric] = useState<string | null>(null);
+  const [proofOpen, setProofOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(true);
   const requestId = useRef(0);
 
@@ -187,170 +187,375 @@ export default function TeacherSalarySelfService() {
     const current = ++requestId.current;
     setLoading(true);
     setMessage("");
+
     try {
-      const response = await getQuranSalaryDashboard(month, year, 1, 1);
+      const response = await getQuranSalaryV2Dashboard(month, year);
       if (current !== requestId.current) return;
-      if (response.month !== month || response.year !== year) throw new Error("The server returned a different salary month.");
+
+      if (
+        Number(response.month) !== month ||
+        Number(response.year) !== year
+      ) {
+        throw new Error(
+          "The server returned a different salary month. Please refresh and try again.",
+        );
+      }
+
       setData(response);
     } catch (error: any) {
-      if (current === requestId.current) setMessage(error?.message || "Could not load your salary slip.");
+      if (current === requestId.current) {
+        setData(null);
+        setMessage(error?.message || "Could not load your salary.");
+      }
     } finally {
-      if (current === requestId.current) setLoading(false);
+      if (current === requestId.current) {
+        setLoading(false);
+      }
     }
   }, [month, year]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  const slip = data?.teachers?.[0];
-  const snapshot: any = slip?.calculated_snapshot || {};
-  const types = snapshot.student_type_breakdown || {};
-  const statuses = snapshot.class_status_breakdown || {};
-  const deductions = snapshot.deductions || slip?.deductions || {};
-  const years = useMemo(() => Array.from({ length: 10 }, (_, index) => now.getFullYear() - 6 + index), [now]);
-  const openProof = (metric: string) => setProofMetric(metric);
+  const slip = data?.payrolls?.[0];
+  const status = String(slip?.status || "calculating");
+  const statusLabel =
+    status === "department_review" || status === "pending_super_admin"
+      ? "Ready for Approval"
+      : status === "approved"
+        ? "Approved"
+        : status === "paid"
+          ? "Paid"
+          : status === "rejected"
+            ? "Rejected"
+            : status === "calculating"
+              ? "Calculating"
+              : status.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+  const years = useMemo(
+    () =>
+      Array.from(
+        { length: 10 },
+        (_, index) => now.getFullYear() - 6 + index,
+      ),
+    [now],
+  );
+
+  const openProof = () => setProofOpen(true);
+
+  const blockerText = (blocker: any) =>
+    String(
+      blocker?.label ||
+        blocker?.message ||
+        blocker?.detail ||
+        blocker?.code ||
+        blocker?.key ||
+        "Payroll blocker",
+    );
+
+  const dateText = (value: string | null | undefined) =>
+    value ? new Date(value).toLocaleString() : "Not yet";
 
   return (
     <div className="mx-auto max-w-[1540px] space-y-5">
       <section className="tp-card p-5 sm:p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-start gap-3">
-            <div className="tp-brand-icon"><CircleDollarSign size={22} /></div>
+            <div className="tp-brand-icon">
+              <CircleDollarSign size={22} />
+            </div>
             <div>
               <h2 className="text-xl font-black text-slate-900">My Salary</h2>
-              <p className="mt-1 text-sm font-semibold text-slate-500">Your current and historical salary slip, focused proofs, cuttings, and monthly class reconciliation.</p>
+              <p className="mt-1 text-sm font-semibold text-slate-500">
+                Your private Salary payroll, lifecycle, adjustments, and
+                calculation details for the selected month.
+              </p>
             </div>
           </div>
+
           <div className="flex flex-col gap-2 sm:flex-row">
-            <select value={month} onChange={(e) => setMonth(Number(e.target.value))} className="tp-compact-select">{Array.from({ length: 12 }, (_, i) => <option key={i + 1} value={i + 1}>{new Date(2026, i, 1).toLocaleDateString(undefined, { month: "long" })}</option>)}</select>
-            <select value={year} onChange={(e) => setYear(Number(e.target.value))} className="tp-compact-select">{years.map((item) => <option key={item} value={item}>{item}</option>)}</select>
-            <button type="button" onClick={() => void load()} className="tp-primary-btn inline-flex items-center justify-center gap-2"><RefreshCw size={16} className={loading ? "animate-spin" : ""} /> Refresh</button>
+            <select
+              value={month}
+              onChange={(event) => setMonth(Number(event.target.value))}
+              className="tp-compact-select"
+            >
+              {Array.from({ length: 12 }, (_, index) => (
+                <option key={index + 1} value={index + 1}>
+                  {new Date(2026, index, 1).toLocaleDateString(undefined, {
+                    month: "long",
+                  })}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={year}
+              onChange={(event) => setYear(Number(event.target.value))}
+              className="tp-compact-select"
+            >
+              {years.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="tp-primary-btn inline-flex items-center justify-center gap-2"
+            >
+              <RefreshCw
+                size={16}
+                className={loading ? "animate-spin" : ""}
+              />
+              Refresh
+            </button>
           </div>
         </div>
       </section>
 
-      {message && <div className="tp-card border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">{message}</div>}
-      {loading && !slip && <PageSkeleton variant="salary" cards={4} compact label="Loading salary slip" />}
-      {!loading && !message && !slip && <div className="tp-card p-10 text-center text-sm font-bold text-slate-500">No salary slip is available for this month.</div>}
+      {message && (
+        <div className="tp-card border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">
+          {message}
+        </div>
+      )}
+
+      {loading && !slip && (
+        <PageSkeleton
+          variant="salary"
+          cards={4}
+          compact
+          label="Loading Salary payroll"
+        />
+      )}
+
+      {!loading && !message && !slip && (
+        <div className="tp-card p-10 text-center text-sm font-bold text-slate-500">
+          No salary is available for this month.
+        </div>
+      )}
 
       {slip && (
         <article className="overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
           <div className="border-b border-slate-200 bg-gradient-to-r from-white via-white to-slate-50 p-4 sm:p-5">
-            <div>
-              <button type="button" onClick={() => setDetailsOpen((value) => !value)} className="flex w-full min-w-0 items-start gap-3 rounded-[20px] border border-slate-200 bg-white px-3 py-3 text-left transition hover:border-indigo-200 hover:bg-indigo-50/40">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-indigo-100 bg-indigo-50 text-indigo-600"><CircleDollarSign size={20} /></div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className="text-lg font-black text-slate-950">{slip.teacher_name}</h3>
-                      <p className="mt-1 break-words text-xs font-bold text-slate-500">@{slip.teacher_username} · {new Date(year, month - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" })} · {slip.status === "processed" ? "Processed" : "Draft"}</p>
-                    </div>
-                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition ${detailsOpen ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-500"}`}><ChevronDown size={18} className={`transition ${detailsOpen ? "rotate-180" : ""}`} /></span>
+            <button
+              type="button"
+              onClick={() => setDetailsOpen((value) => !value)}
+              className="flex w-full min-w-0 items-start gap-3 rounded-[20px] border border-slate-200 bg-white px-3 py-3 text-left transition hover:border-indigo-200 hover:bg-indigo-50/40"
+            >
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-indigo-100 bg-indigo-50 text-indigo-600">
+                <CircleDollarSign size={20} />
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="text-lg font-black text-slate-950">
+                      {slip.teacher_name}
+                    </h3>
+                    <p className="mt-1 break-words text-xs font-bold text-slate-500">
+                      @{slip.teacher_username} ·{" "}
+                      {new Date(year, month - 1, 1).toLocaleDateString(
+                        undefined,
+                        { month: "long", year: "numeric" },
+                      )}{" "}
+                      · Salary lifecycle: {statusLabel}
+                    </p>
                   </div>
+
+                  <span
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition ${
+                      detailsOpen
+                        ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+                        : "border-slate-200 bg-white text-slate-500"
+                    }`}
+                  >
+                    <ChevronDown
+                      size={18}
+                      className={`transition ${
+                        detailsOpen ? "rotate-180" : ""
+                      }`}
+                    />
+                  </span>
                 </div>
-              </button>
-            </div>
+              </div>
+            </button>
           </div>
 
           {detailsOpen && (
             <div className="p-4 sm:p-5">
               <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-                <ProofMetric label="Gross Salary" value={money(slip.gross_total)} tone="cyan" />
-                <ProofMetric label="Total Cuttings" value={money(slip.deduction_total)} tone="rose" />
-                <ProofMetric label="Net Salary" value={money(slip.final_total)} tone="emerald" />
-                <ProofMetric label="Achievement Points" value={`${snapshot.achievement_points || 0}/10`} tone="amber" onClick={() => openProof("achievement_points")} icon={<Award size={15} />} />
-              </div>
-
-              <div className="mt-4">
-                <div className="text-sm font-black text-slate-950">Monthly class reconciliation</div>
-                <div className="mt-1 text-xs font-semibold text-slate-500">Each student is classified once by source and once by final monthly outcome.</div>
-              </div>
-
-              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                <SummaryCard label="Overall monthly classes" value={snapshot.overall_classes || types.grand_total || 0} tone="indigo" icon={<CalendarDays size={19} />} />
-                <SummaryCard label="Deducted class outcomes" value={snapshot.excluded_classes || 0} tone="rose" icon={<MinusCircle size={19} />} />
-                <SummaryCard label="Salary-running classes" value={snapshot.running_classes ?? snapshot.final_active_classes ?? 0} tone="emerald" icon={<TrendingUp size={19} />} />
-              </div>
-
-              <div className="mt-4 grid grid-cols-1 items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_340px]">
-                <BreakdownList
-                  title="Student Type Breakdown"
-                  subtitle="How each class entered the monthly total"
-                  icon={<UsersRound size={16} />}
-                  tone="indigo"
-                  total={types.grand_total || 0}
-                  openProof={openProof}
-                  rows={[
-                    { label: "Old Students", value: types.old_students || 0, metric: "old_students" },
-                    { label: "New Trial Students", value: types.new_trials || 0, metric: "new_trials" },
-                    { label: "Transferred from another teacher", value: types.transferred_from_teacher || 0, metric: "transferred_from_teacher" },
-                    { label: "Students returned from leave", value: types.returns_from_leave || 0, metric: "returns_from_leave" },
-                  ]}
+                <ProofMetric
+                  label="Gross Salary"
+                  value={money(slip.gross_total)}
+                  tone="cyan"
                 />
-
-                <BreakdownList
-                  title="Class Status Breakdown"
-                  subtitle="Which classes receive salary and which are deducted"
-                  icon={<Award size={16} />}
+                <ProofMetric
+                  label="Total Deductions"
+                  value={money(slip.deduction_total)}
+                  tone="rose"
+                />
+                <ProofMetric
+                  label="Net Salary"
+                  value={money(slip.final_total)}
                   tone="emerald"
-                  total={statuses.grand_total || 0}
-                  openProof={openProof}
-                  rows={[
-                    { label: "Running Classes", value: statuses.running || 0, metric: "running" },
-                    { label: "Transferred to another teacher", value: statuses.transferred_out || types.transferred_to_other_teachers || 0, metric: "transferred_to_other_teachers" },
-                    { label: "Classes On Leave", value: statuses.on_leave || 0, metric: "on_leave" },
-                    { label: "Old Student Dropped", value: statuses.old_dropped || 0, metric: "old_dropped" },
-                    { label: "Trial Student Dropped", value: statuses.trial_dropped || 0, metric: "trial_dropped" },
-                    { label: "Old Dropped (Other)", value: statuses.old_dropped_other || 0, metric: "old_dropped_other" },
-                    { label: "Not Counted Classes", value: statuses.not_counted || 0, metric: "not_counted" },
-                  ]}
                 />
-
-                <section className="flex h-full min-w-0 flex-col rounded-[22px] border border-slate-200 bg-white p-3.5">
-                  <div className="flex items-center gap-2.5">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-100 bg-amber-50 text-amber-600"><CircleDollarSign size={16} /></div>
-                    <div><h3 className="text-sm font-black text-slate-950">Salary & Performance Proofs</h3><p className="mt-0.5 text-[10px] font-bold text-slate-400">Open only the exact proof you need</p></div>
-                  </div>
-                  <div className="mt-2 grid flex-1 auto-rows-fr grid-cols-2 gap-1.5">
-                    <ProofMetric label="Half-Month Class Salary" value={snapshot.half_classes || 0} tone="amber" onClick={() => openProof("half_classes")} icon={<CalendarDays size={15} />} />
-                    <ProofMetric label="3+ Day Class Salary" value={snapshot.standard_classes || 0} tone="cyan" onClick={() => openProof("standard_classes")} icon={<BarChart3 size={15} />} />
-                    <ProofMetric label="1–3 Day Class Salary" value={snapshot.three_day_classes || 0} tone="slate" onClick={() => openProof("three_day_classes")} icon={<CalendarDays size={15} />} />
-                    <ProofMetric label="English Language Bonus" value={snapshot.english_class_count || 0} tone="cyan" onClick={() => openProof("english_classes")} icon={<Languages size={15} />} />
-                    <ProofMetric label="Night Classes Bonus" value={snapshot.night_class_count || 0} tone="amber" onClick={() => openProof("night_classes")} icon={<Moon size={15} />} />
-                    <ProofMetric label="Lesson Completion Bonus" value={`${snapshot.lesson_logged_student_count || 0}/${snapshot.lesson_required_student_count || 0}`} tone="emerald" onClick={() => openProof("lesson_filled")} icon={<BookOpenCheck size={15} />} progress={snapshot.lesson_progress_percent || 0} helper={snapshot.lesson_bonus_eligible ? "All Present days match lesson dates · bonus eligible" : `${snapshot.lesson_logged_present_day_count || 0}/${snapshot.lesson_present_day_count || 0} Present days matched`} />
-                    <ProofMetric label="Monthly Attendance Proof" value={`${snapshot.attendance_rate || 0}%`} tone="emerald" onClick={() => openProof("attendance")} icon={<BarChart3 size={15} />} />
-                    <ProofMetric label="Achievement Points Proof" value={`${snapshot.achievement_points || 0}/10`} tone="violet" onClick={() => openProof("achievement_points")} icon={<Award size={15} />} />
-                  </div>
-                  <button type="button" onClick={() => openProof("source_records")} className="mt-2 inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-3 py-2.5 text-[10px] font-black text-white"><Database size={13} /> Full Student Source Records</button>
-                </section>
+                <ProofMetric
+                  label="Status"
+                  value={statusLabel}
+                  tone={status === "paid" ? "emerald" : "indigo"}
+                />
               </div>
 
-              <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,0.65fr)_minmax(320px,0.35fr)]">
-                <section className="rounded-[22px] border border-indigo-100 bg-indigo-50/50 p-4">
-                  <div className="flex items-center gap-2 font-black text-slate-900"><SearchCheck size={18} className="text-indigo-600" /> Calculation transparency</div>
-                  <p className="mt-2 text-sm font-semibold leading-relaxed text-slate-600">Each proof button opens only the matching records. Expand a student inside the proof window to see the exact highlighted class type, status, time, attendance, or lesson source used in this salary calculation.</p>
-                  <button type="button" onClick={() => openProof("source_records")} className="mt-2 inline-flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-2.5 text-[10px] font-black text-white"><Database size={13} /> Open Full Student Source Records</button>
-                </section>
+              <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-5">
+                <ProofMetric
+                  label="Normal Earnings"
+                  value={money(slip.normal_earnings)}
+                  tone="indigo"
+                />
+                <ProofMetric
+                  label="Substitute Earnings"
+                  value={money(slip.substitute_earnings)}
+                  tone="cyan"
+                />
+                <ProofMetric
+                  label="Approved Bonus"
+                  value={money(slip.approved_bonus_total)}
+                  tone="emerald"
+                />
+                <ProofMetric
+                  label="Absence Deduction"
+                  value={money(slip.automatic_absence_deduction_total)}
+                  tone="rose"
+                />
+                <ProofMetric
+                  label="Manual Deduction"
+                  value={money(slip.approved_manual_deduction_total)}
+                  tone="rose"
+                />
+              </div>
 
-                <section className="rounded-[22px] border border-slate-200 bg-white p-4">
-                  <h3 className="font-black text-slate-900">Cuttings Breakdown</h3>
-                  <div className="mt-3 space-y-2 text-sm font-bold text-slate-600">
-                    {[
-                      ["Food Cutting", deductions.food],
-                      ["Drop & Leave", deductions.drop_leave],
-                      ["Fine", deductions.fine],
-                      ["Imam Hadya", deductions.imam_hadya],
-                      ["Advance", deductions.advance],
-                    ].map(([label, amount]) => <div key={String(label)} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2"><span>{label}</span><b className="text-rose-700">{money(amount)}</b></div>)}
-                    {(deductions.manual || []).map((item: any, index: number) => <div key={index} className="rounded-xl bg-rose-50 px-3 py-2"><div className="flex justify-between gap-3"><span className="break-words">{item.reason}</span><b className="shrink-0 text-rose-700">{money(item.amount)}</b></div></div>)}
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <ProofMetric
+                  label="Dropped Class Reversal"
+                  value={money(slip.dropped_class_reversal_total)}
+                  tone="rose"
+                />
+                <ProofMetric
+                  label="Previous Month Restoration"
+                  value={money(slip.previous_month_restoration_total)}
+                  tone="emerald"
+                />
+              </div>
+
+              <></>
+
+              {(slip.adjustments || []).length > 0 && (
+                <section className="mt-4 rounded-[22px] border border-slate-200 bg-white p-4">
+                  <div className="text-sm font-black text-slate-950">
+                    Salary adjustments
+                  </div>
+
+                  <div className="mt-2 space-y-2">
+                    {slip.adjustments.map((adjustment) => (
+                      <div
+                        key={adjustment.id}
+                        className="flex flex-col gap-1 rounded-xl bg-slate-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-xs font-black capitalize text-slate-900">
+                            {adjustment.adjustment_type.replace(/_/g, " ")}
+                          </div>
+                          <div className="mt-0.5 text-[10px] font-semibold text-slate-500">
+                            {adjustment.reason}
+                          </div>
+                          {adjustment.review_note && (
+                            <div className="mt-0.5 text-[10px] font-semibold text-slate-400">
+                              Review note: {adjustment.review_note}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-2">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${
+                              adjustment.effect === "credit"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : "bg-rose-100 text-rose-700"
+                            }`}
+                          >
+                            {adjustment.effect}
+                          </span>
+                          <span className="text-xs font-black text-slate-900">
+                            {money(adjustment.amount)}
+                          </span>
+                          <span className="rounded-full bg-white px-2 py-0.5 text-[9px] font-black uppercase text-slate-600">
+                            {adjustment.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </section>
-              </div>
+              )}
+
+              <section className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <div className="rounded-[22px] border border-slate-200 bg-white p-4">
+                  <div className="text-sm font-black text-slate-950">
+                    Salary History
+                  </div>
+                  <div className="mt-3 space-y-2 text-xs font-semibold text-slate-600">
+                    <div>Calculated: {dateText(slip.calculated_at)}</div>
+                    <div>Submitted: {dateText(slip.submitted_at)}</div>
+                    <div>Approved: {dateText(slip.approved_at)}</div>
+                    <div>Paid: {dateText(slip.paid_at)}</div>
+                  </div>
+                </div>
+
+                <div className="rounded-[22px] border border-slate-200 bg-white p-4">
+                  <div className="text-sm font-black text-slate-950">
+                    Review notes
+                  </div>
+                  <div className="mt-3 space-y-3 text-xs font-semibold leading-5 text-slate-600">
+                    <div>
+                      <b className="text-slate-900">Department:</b>{" "}
+                      {slip.department_note || "No note."}
+                    </div>
+                    <div>
+                      <b className="text-slate-900">Super Admin:</b>{" "}
+                      {slip.super_admin_note || "No note."}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="mt-4 rounded-[22px] border border-indigo-100 bg-indigo-50/50 p-4">
+                <div className="text-sm font-black text-slate-900">
+                  Calculation details
+                </div>
+                <p className="mt-2 text-sm font-semibold leading-relaxed text-slate-600">
+                  Open the current calculation details for the selected month.
+                  Dedicated Salary PDF/export will be migrated separately.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => openProof()}
+                  className="mt-3 inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-3 py-2.5 text-[10px] font-black text-white"
+                >
+                  <Database size={13} />
+                  Open Calculation Details
+                </button>
+              </section>
             </div>
           )}
         </article>
       )}
 
-      {proofMetric && slip && <QuranSalaryProofModal teacherId={slip.teacher_id} metric={proofMetric} month={month} year={year} onClose={() => setProofMetric(null)} />}
+      {proofOpen && slip && (
+        <SalaryV2ProofModal payrollId={slip.id} onClose={() => setProofOpen(false)} />
+      )}
     </div>
   );
 }

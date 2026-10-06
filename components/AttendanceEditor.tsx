@@ -541,6 +541,21 @@ function TeacherAttendanceModal({
   const saveAbsence = async () => {
     if (!coverageEditor) return;
 
+    const notMarked =
+      coverageEditor.payload.students.filter(
+        (student) =>
+          student.student_status === "not_marked",
+      );
+
+    if (notMarked.length > 0) {
+      setError(
+        `Mark student attendance first for ${notMarked.length} student${
+          notMarked.length === 1 ? "" : "s"
+        }.`,
+      );
+      return;
+    }
+
     const required =
       coverageEditor.payload.students.filter(
         (student) =>
@@ -674,9 +689,9 @@ function TeacherAttendanceModal({
                   </div>
 
                   <div className="mt-2 text-sm text-amber-900/80">
-                    Present and Not marked
-                    students require a substitute.
+                    Present students require a substitute.
                     Absent and Leave students do not.
+                    Not marked students must be marked first.
                   </div>
                 </div>
 
@@ -700,9 +715,12 @@ function TeacherAttendanceModal({
                           </div>
 
                           <div className="mt-1 text-xs font-extrabold">
-                            {student.requires_substitute
-                              ? "Substitute required"
-                              : "No substitute required"}
+                            {student.student_status ===
+                            "not_marked"
+                              ? "Mark student attendance first"
+                              : student.requires_substitute
+                                ? "Substitute required"
+                                : "No substitute required"}
                           </div>
                         </div>
 
@@ -945,7 +963,13 @@ React.useEffect(() => {
     const map = new Map<string, AttendanceRecord>();
     for (const r of appState.attendance) {
       if (r.date !== date) continue;
-      map.set(`${r.entityType}:${r.entityId}:${r.classKey || ""}`, r);
+
+      const classKey =
+        r.entityType === EntityType.TEACHER
+          ? String(r.classKey || "").trim().slice(0, 5)
+          : "";
+
+      map.set(`${r.entityType}:${r.entityId}:${classKey}`, r);
     }
     return map;
   }, [appState.attendance, date]);

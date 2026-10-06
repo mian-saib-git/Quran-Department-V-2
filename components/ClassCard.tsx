@@ -12,6 +12,10 @@ import {
   Teacher,
 } from "../types";
 import {
+  getQuranTeacherSessionAttendance,
+  type QuranTeacherSessionPayload,
+} from "../services/djangoApiService";
+import {
   CheckCircle2,
   Clock3,
   MinusCircle,
@@ -19,11 +23,23 @@ import {
   XCircle,
 } from "lucide-react";
 
+type CoverageAssignmentInput = {
+  student_id: number;
+  substitute_teacher_id: number;
+};
+
+type LiveCoverageEditor = {
+  status: AttendanceStatus;
+  payload: QuranTeacherSessionPayload;
+  assignments: Record<number, string>;
+};
+
 type Props = {
   student: Student;
   teacher?: Teacher;
   attendanceToday?: AttendanceRecord;
   teacherAttendanceToday?: AttendanceRecord;
+  attendanceDate: string;
 
   onMarkAttendance: (
     studentId: string,
@@ -35,7 +51,8 @@ type Props = {
 
   onMarkTeacherAttendance: (
     teacherId: string,
-    status: AttendanceStatus
+    status: AttendanceStatus,
+    coverageAssignments?: CoverageAssignmentInput[]
   ) => boolean | void | Promise<boolean | void>;
   onUnmarkTeacherAttendance: (
     teacherId: string
@@ -201,6 +218,7 @@ export function ClassCard({
   teacher,
   attendanceToday,
   teacherAttendanceToday,
+  attendanceDate,
   onMarkAttendance,
   onUnmarkAttendance,
   onMarkTeacherAttendance,
@@ -215,6 +233,11 @@ export function ClassCard({
   const [teacherStatus, setTeacherStatus] = useState<AttendanceStatus | null>(
     teacherAttendanceToday?.status ?? null
   );
+  const [coverageEditor, setCoverageEditor] =
+    useState<LiveCoverageEditor | null>(null);
+  const [coverageLoading, setCoverageLoading] = useState(false);
+  const [coverageSaving, setCoverageSaving] = useState(false);
+  const [coverageError, setCoverageError] = useState("");
   const [clockTick, setClockTick] = useState(() => Date.now());
 
   const studentActionVersionRef = useRef(0);
@@ -231,6 +254,11 @@ export function ClassCard({
     teacherAttendanceToday?.status,
     teacherAttendanceToday?.timestamp,
   ]);
+
+  useEffect(() => {
+    setCoverageEditor(null);
+    setCoverageError("");
+  }, [attendanceDate, student.timeSlot, teacher?.id]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setClockTick(Date.now()), 60_000);
@@ -279,6 +307,161 @@ export function ClassCard({
           setTeacherStatus(fallbackStatus);
         }
       });
+  };
+
+  const loadCoverageEditor = async (status: AttendanceStatus) => {
+    if (!teacher) return;
+
+    if (status === AttendanceStatus.PRESENT) {
+      setCoverageEditor(null);
+      setCoverageError("");
+      runTeacherAttendanceAction(status, () =>
+        onMarkTeacherAttendance(teacher.id, status, []),
+      );
+      return;
+    }
+
+    setCoverageLoading(true);
+    setCoverageError("");
+
+    try {
+      const payload = await getQuranTeacherSessionAttendance({
+        teacher_id: Number(teacher.id),
+        date: attendanceDate,
+        class_key: student.timeSlot,
+      });
+
+      const assignments: Record<number, string> = {};
+
+      for (const row of payload.students) {
+        if (
+          row.coverage?.coverage_status === "assigned" &&
+          row.coverage.substitute_teacher_id
+        ) {
+          assignments[row.student_id] = String(
+            row.coverage.substitute_teacher_id,
+          );
+        }
+      }
+
+      const notMarked = payload.students.filter(
+        (row) => row.student_status === "not_marked",
+      );
+      const required = payload.students.filter(
+        (row) => row.requires_substitute,
+      );
+
+      if (notMarked.length > 0) {
+        setCoverageEditor({ status, payload, assignments });
+        setCoverageError(
+          `Mark student attendance first for ${notMarked.length} student${
+            notMarked.length === 1 ? "" : "s"
+          }.`,
+        );
+        return;
+      }
+
+      if (required.length === 0) {
+        setCoverageEditor(null);
+        runTeacherAttendanceAction(status, () =>
+          onMarkTeacherAttendance(teacher.id, status, []),
+        );
+        return;
+      }
+
+      setCoverageEditor({ status, payload, assignments });
+    } catch (error: any) {
+      setCoverageEditor(null);
+      setCoverageError(
+        error?.message || "Could not load substitute teachers for this session.",
+      );
+    } finally {
+      setCoverageLoading(false);
+    }
+  };
+
+  const saveCoverageAttendance = async () => {
+    if (!teacher || !coverageEditor || coverageSaving) return;
+
+    const notMarked = coverageEditor.payload.students.filter(
+      (row) => row.student_status === "not_marked",
+    );
+
+    if (notMarked.length > 0) {
+      setCoverageError(
+        `Mark student attendance first for ${notMarked.length} student${
+          notMarked.length === 1 ? "" : "s"
+        }.`,
+      );
+      return;
+    }
+
+    const required = coverageEditor.payload.students.filter(
+      (row) => row.requires_substitute,
+    );
+    const missing = required.filter(
+      (row) => !coverageEditor.assignments[row.student_id],
+    );
+
+    if (missing.length > 0) {
+      setCoverageError(
+        `Select a substitute for ${missing.length} student${
+          missing.length === 1 ? "" : "s"
+        }.`,
+      );
+      return;
+    }
+
+    const selectedIds = required.map(
+      (row) => coverageEditor.assignments[row.student_id],
+    );
+
+    if (new Set(selectedIds).size !== selectedIds.length) {
+      setCoverageError(
+        "Use a different substitute teacher for each Present student in this session.",
+      );
+      return;
+    }
+
+    const assignments: CoverageAssignmentInput[] = required.map((row) => ({
+      student_id: row.student_id,
+      substitute_teacher_id: Number(
+        coverageEditor.assignments[row.student_id],
+      ),
+    }));
+
+    const fallbackStatus = teacherStatus;
+    const nextStatus = coverageEditor.status;
+
+    flushSync(() => setTeacherStatus(nextStatus));
+    setCoverageSaving(true);
+    setCoverageError("");
+
+    try {
+      const saved = await onMarkTeacherAttendance(
+        teacher.id,
+        nextStatus,
+        assignments,
+      );
+
+      if (saved === false) {
+        setTeacherStatus(fallbackStatus);
+        setCoverageError(
+          "Could not save the teacher attendance and substitute assignment.",
+        );
+        return;
+      }
+
+      setCoverageEditor(null);
+    } catch (error: any) {
+      setTeacherStatus(fallbackStatus);
+      setCoverageError(
+        error?.message ||
+          "Could not save the teacher attendance and substitute assignment.",
+      );
+    } finally {
+      setCoverageSaving(false);
+    }
   };
 
   const durationMinutes = useMemo(
@@ -486,12 +669,12 @@ export function ClassCard({
                 current={teacherChoice}
                 onSet={(status) => {
                   if (!teacher) return;
-                  runTeacherAttendanceAction(status, () =>
-                    onMarkTeacherAttendance(teacher.id, status)
-                  );
+                  void loadCoverageEditor(status);
                 }}
                 onClear={() => {
                   if (!teacher) return;
+                  setCoverageEditor(null);
+                  setCoverageError("");
                   runTeacherAttendanceAction(null, () =>
                     onUnmarkTeacherAttendance(teacher.id)
                   );
@@ -499,6 +682,175 @@ export function ClassCard({
               />
             </div>
           </div>
+
+          {(coverageLoading || coverageError || coverageEditor) && (
+            <div className="mt-2 rounded-xl border border-indigo-200 bg-indigo-50/70 p-3 dark:border-indigo-900/70 dark:bg-indigo-950/25">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="text-[11px] font-black text-slate-900 dark:text-white">
+                    Assign substitute teacher
+                  </div>
+                  <div className="mt-0.5 text-[9px] font-semibold text-slate-500 dark:text-slate-400">
+                    Present students need substitute coverage when the original teacher is Absent or Leave.
+                  </div>
+                </div>
+
+                {coverageEditor && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCoverageEditor(null);
+                      setCoverageError("");
+                    }}
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[9px] font-black text-slate-600"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+
+              {coverageLoading && (
+                <div className="mt-3 text-[10px] font-bold text-indigo-700">
+                  Loading available substitute teachers...
+                </div>
+              )}
+
+              {coverageError && (
+                <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] font-bold text-rose-700">
+                  {coverageError}
+                </div>
+              )}
+
+              {coverageEditor && (
+                <div className="mt-3 space-y-2">
+                  {coverageEditor.payload.students
+                    .filter(
+                      (row) =>
+                        row.requires_substitute ||
+                        row.student_status === "not_marked",
+                    )
+                    .map((row) => {
+                      const currentValue =
+                        coverageEditor.assignments[row.student_id] || "";
+                      const currentCoverageId =
+                        row.coverage?.substitute_teacher_id;
+                      const currentCoverageName =
+                        row.coverage?.substitute_teacher_name || "";
+                      const currentStillAvailable =
+                        currentCoverageId == null ||
+                        coverageEditor.payload.available_substitutes.some(
+                          (item) => item.id === currentCoverageId,
+                        );
+
+                      return (
+                        <div
+                          key={row.student_id}
+                          className="rounded-lg border border-slate-200 bg-white p-2.5 dark:border-slate-700 dark:bg-slate-900"
+                        >
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0">
+                              <div className="truncate text-[10px] font-black text-slate-900 dark:text-white">
+                                {row.student_name}
+                              </div>
+                              <div className="mt-0.5 text-[9px] font-semibold text-slate-500">
+                                {row.student_status === "not_marked"
+                                  ? "Mark this student first"
+                                  : "Substitute required"}
+                              </div>
+                            </div>
+
+                            {row.requires_substitute && (
+                              <select
+                                value={currentValue}
+                                onChange={(event) =>
+                                  setCoverageEditor((current) => {
+                                    if (!current) return current;
+                                    return {
+                                      ...current,
+                                      assignments: {
+                                        ...current.assignments,
+                                        [row.student_id]: event.target.value,
+                                      },
+                                    };
+                                  })
+                                }
+                                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[10px] font-bold text-slate-800 outline-none focus:border-indigo-300 sm:w-64"
+                              >
+                                <option value="">Select substitute teacher</option>
+
+                                {currentCoverageId &&
+                                  !currentStillAvailable && (
+                                    <option
+                                      value={String(currentCoverageId)}
+                                      disabled
+                                    >
+                                      {currentCoverageName || "Current substitute"} - choose another
+                                    </option>
+                                  )}
+
+                                {coverageEditor.payload.available_substitutes.map(
+                                  (candidate) => {
+                                    const candidateId = String(candidate.id);
+                                    const usedByAnotherStudent = Object.entries(
+                                      coverageEditor.assignments,
+                                    ).some(
+                                      ([studentId, selectedId]) =>
+                                        Number(studentId) !== row.student_id &&
+                                        selectedId === candidateId,
+                                    );
+
+                                    return (
+                                      <option
+                                        key={candidate.id}
+                                        value={candidateId}
+                                        disabled={usedByAnotherStudent}
+                                      >
+                                        {candidate.name}
+                                      </option>
+                                    );
+                                  },
+                                )}
+                              </select>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                  {coverageEditor.payload.available_substitutes.length === 0 &&
+                    coverageEditor.payload.students.some(
+                      (row) => row.requires_substitute,
+                    ) && (
+                      <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] font-bold text-rose-700">
+                        No substitute teacher is currently available for this session.
+                      </div>
+                    )}
+
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => void saveCoverageAttendance()}
+                      disabled={
+                        coverageSaving ||
+                        coverageEditor.payload.students.some(
+                          (row) => row.student_status === "not_marked",
+                        ) ||
+                        (coverageEditor.payload.available_substitutes.length === 0 &&
+                          coverageEditor.payload.students.some(
+                            (row) => row.requires_substitute,
+                          ))
+                      }
+                      className="rounded-lg bg-indigo-600 px-3 py-2 text-[10px] font-black text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {coverageSaving
+                        ? "Saving..."
+                        : "Save attendance & substitute"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </article>

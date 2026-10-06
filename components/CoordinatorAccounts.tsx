@@ -5,6 +5,7 @@ import {
   BookOpen,
   CheckCircle2,
   Copy,
+  Download,
   Edit2,
   Eye,
   EyeOff,
@@ -305,9 +306,6 @@ const STUDENT_TYPES = [
 const CLASS_STATUSES = [
   ["running", "Running"],
   ["on_leave", "On Leave"],
-  ["old_dropped", "Old Class Dropped"],
-  ["trial_dropped", "Trial Dropped"],
-  ["old_dropped_other", "Old Dropped (Other)"],
   ["not_counted", "Not Counted Class"],
 ] as const;
 
@@ -821,6 +819,146 @@ export default function CoordinatorAccounts({
         .includes(q);
     });
   }, [data.students, search]);
+
+
+  const exportStudentsCsv = () => {
+    const students = data.students || [];
+
+    if (!students.length) {
+      setMessage("No student records are available to export.");
+      return;
+    }
+
+    const csvCell = (value: unknown) => {
+      const text = value === null || value === undefined ? "" : String(value);
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+
+    const headers = [
+      "Student Profile ID",
+      "User ID",
+      "Student Name",
+      "Login ID",
+      "Email",
+      "Phone",
+      "Enrollment Date",
+      "Account Status",
+      "Teacher Profile ID",
+      "Teacher Name",
+      "Class Time",
+      "Duration Minutes",
+      "Class Days",
+      "Schedule Details",
+      "Assigned Subjects",
+      "Student Type",
+      "Class Status",
+      "Speaking Language",
+      "First Fee Paid",
+      "Referral Teacher",
+      "Referral Student",
+      "Status Effective Date",
+      "Salary Class Mode",
+      "Half Month Salary Amount",
+      "Night Class",
+      "Notes",
+    ];
+
+    const rows = students.map((item) => {
+      const profile: any = item.student_profile || {};
+      const studentName =
+        item.full_name || displayName(item.first_name, item.last_name, item.username);
+      const time = getStudentTime(item);
+      const days = sortDays(getStudentDays(item));
+
+      const schedules = Array.isArray(profile.schedules)
+        ? profile.schedules
+            .filter((schedule: any) => schedule && schedule.is_active !== false)
+            .map((schedule: any) => {
+              const day =
+                schedule.weekday_display ||
+                normalizeDay(String(schedule.weekday || ""));
+              const scheduleTime = schedule.time_slot
+                ? formatTime12(String(schedule.time_slot))
+                : "";
+              const teacherName = String(schedule.teacher_name || "").trim();
+
+              return [day, scheduleTime, teacherName ? `Teacher: ${teacherName}` : ""]
+                .filter(Boolean)
+                .join(" ");
+            })
+            .join(" | ")
+        : "";
+
+      const assignedSubjects = Array.isArray(profile.assigned_subjects)
+        ? profile.assigned_subjects
+            .filter((subject: any) => subject && subject.is_active !== false)
+            .map(
+              (subject: any) =>
+                subject.display_name ||
+                subject.custom_subject_name ||
+                subject.subject ||
+                ""
+            )
+            .filter(Boolean)
+            .join(" | ")
+        : "";
+
+      return [
+        profile.id || "",
+        item.id || "",
+        studentName,
+        item.username || "",
+        item.email || "",
+        profile.phone || "",
+        profile.enrollment_date || profile.joining_date || "",
+        item.is_active ? "Active" : "Disabled",
+        profile.teacher_id || "",
+        profile.teacher_name || "No teacher assigned",
+        time ? formatTime12(time) : "",
+        profile.duration_minutes || profile.durationMinutes || "",
+        days.join(" | "),
+        schedules,
+        assignedSubjects,
+        profile.student_type_label || profile.student_type || "",
+        profile.class_status_label || profile.class_status || "",
+        profile.speaking_language_label || profile.speaking_language || "",
+        profile.first_fee_paid ? "Yes" : "No",
+        profile.referral_teacher_name || "",
+        profile.referral_student_name || "",
+        profile.status_effective_date || "",
+        profile.salary_class_mode_label || profile.salary_class_mode || "",
+        profile.half_month_salary_amount ?? "",
+        profile.is_night_class ? "Yes" : "No",
+        profile.notes || "",
+      ];
+    });
+
+    const csv = [
+      headers.map(csvCell).join(","),
+      ...rows.map((row) => row.map(csvCell).join(",")),
+    ].join("\r\n");
+
+    const blob = new Blob(["\uFEFF", csv], {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const dateStamp = new Date().toISOString().slice(0, 10);
+
+    link.href = url;
+    link.download = `student_enrollment_export_${dateStamp}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    window.dispatchEvent(
+      new CustomEvent("ivs-toast", {
+        detail: `Exported ${students.length} student${students.length === 1 ? "" : "s"}`,
+      })
+    );
+  };
 
   const handleCopyUsername = async (username: string) => {
     const copied = await copyText(username);
@@ -1396,6 +1534,15 @@ export default function CoordinatorAccounts({
               >
                 <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
                 {loading ? "Refreshing" : "Refresh"}
+              </button>
+              <button
+                type="button"
+                onClick={exportStudentsCsv}
+                title="Export all enrolled students"
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-extrabold text-emerald-700 shadow-sm transition hover:bg-emerald-100"
+              >
+                <Download size={16} />
+                <span>Export Students</span>
               </button>
               <button
                 type="button"

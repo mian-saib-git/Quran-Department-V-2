@@ -12,6 +12,7 @@ import {
 
 import {
   getQuranDroppedLeave,
+  rejoinQuranStudent,
   type QuranDroppedLeaveItem,
   type QuranDroppedLeaveResponse,
 } from "../services/djangoApiService";
@@ -24,8 +25,17 @@ function formatDate(value: string) {
   return date.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
 }
 
+function todayIsoDate() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function StatusPill({ item }: { item: QuranDroppedLeaveItem }) {
-  const leave = item.flag_type === "leave";
+  const controlledDrop = Boolean(item.active_drop_event);
+  const leave = item.flag_type === "leave" && !controlledDrop;
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-black ${
@@ -35,7 +45,7 @@ function StatusPill({ item }: { item: QuranDroppedLeaveItem }) {
       }`}
     >
       {leave ? <Clock3 size={14} /> : <AlertTriangle size={14} />}
-      {leave ? "On Leave" : "Dropped Flag"}
+      {controlledDrop ? "Controlled Drop" : leave ? "On Leave" : "Dropped Flag"}
     </span>
   );
 }
@@ -44,6 +54,7 @@ export default function QuranDroppedLeave() {
   const [data, setData] = useState<QuranDroppedLeaveResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [rejoiningId, setRejoiningId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "leave" | "dropped">("all");
 
@@ -58,6 +69,44 @@ export default function QuranDroppedLeave() {
       setLoading(false);
     }
   }, []);
+
+  const rejoinStudent = useCallback(
+    async (item: QuranDroppedLeaveItem) => {
+      if (!item.can_rejoin) return;
+
+      const rejoinDate = window.prompt(
+        `Rejoin date for ${item.student_name} (YYYY-MM-DD)`,
+        todayIsoDate(),
+      );
+
+      if (!rejoinDate) return;
+
+      setMessage("");
+      setRejoiningId(item.student_id);
+
+      try {
+        const response = await rejoinQuranStudent(
+          item.student_id,
+          rejoinDate,
+        );
+
+        window.dispatchEvent(
+          new CustomEvent("ivs-toast", {
+            detail: response.detail || "Student rejoin recorded.",
+          }),
+        );
+
+        await load();
+      } catch (error: any) {
+        setMessage(
+          error?.message || "Could not record the student rejoin.",
+        );
+      } finally {
+        setRejoiningId(null);
+      }
+    },
+    [load],
+  );
 
   useEffect(() => {
     void load();
@@ -107,7 +156,7 @@ export default function QuranDroppedLeave() {
             <div className="min-w-0">
               <h2 className="text-xl font-black text-slate-950 sm:text-2xl">Dropped &amp; Leave Classes</h2>
               <p className="mt-1 text-sm font-semibold text-slate-500">
-                Students appear automatically after two consecutive Leave or Absent attendance records.
+                Attendance warnings appear automatically. Rejoin is available only for a real controlled Salary V2 drop event.
               </p>
             </div>
           </div>
@@ -182,7 +231,7 @@ export default function QuranDroppedLeave() {
             </div>
             <h3 className="mt-4 text-lg font-black text-slate-950">No students currently flagged</h3>
             <p className="mt-2 max-w-md text-sm font-semibold text-slate-500">
-              A student is removed automatically as soon as their latest attendance is marked Present.
+              There are no current attendance warnings or active controlled drop events.
             </p>
           </div>
         ) : (
@@ -209,7 +258,22 @@ export default function QuranDroppedLeave() {
 
                 <div>
                   <StatusPill item={item} />
-                  <div className="mt-2 text-sm font-black text-slate-950">{item.days_count} consecutive day{item.days_count === 1 ? "" : "s"}</div>
+                  <div className="mt-2 text-sm font-black text-slate-950">
+                    {item.active_drop_event
+                      ? `Drop effective ${formatDate(item.drop_effective_date)}`
+                      : `${item.days_count} consecutive day${item.days_count === 1 ? "" : "s"}`}
+                  </div>
+                  {item.can_rejoin && (
+                    <button
+                      type="button"
+                      onClick={() => void rejoinStudent(item)}
+                      disabled={rejoiningId === item.student_id}
+                      className="mt-3 inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <CheckCircle2 size={15} />
+                      {rejoiningId === item.student_id ? "Rejoining..." : "Rejoin"}
+                    </button>
+                  )}
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-600">

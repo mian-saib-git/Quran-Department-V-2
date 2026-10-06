@@ -1,10 +1,19 @@
+from .student_drop_service import (
+    StudentDropDetectionError,
+    reconcile_student_drop_from_attendance,
+)
 # IVS_ATTENDANCE_TIME_CLASS_BASED_V24
 from collections import Counter
 from datetime import datetime, date, time, timedelta
+from io import StringIO
+from pathlib import Path
 import os
+import tempfile
 import requests
 import logging
 logger = logging.getLogger(__name__)
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.db import transaction
 from django.db.models import Q, Prefetch
 from django.utils import timezone
@@ -32,7 +41,24 @@ from .models import (
     LessonAccessRequest,
 )
 
+from .attendance_import import (
+    AttendanceCsvFormatError,
+    normalize_name as normalize_attendance_import_name,
+    parse_monthly_attendance_csv,
+    strip_leading_teacher_number,
+)
+from .attendance_report_import import (
+    AttendanceReportFormatError,
+    detect_attendance_csv_format,
+    import_attendance_report_csv,
+    parse_attendance_report_csv,
+)
 from .attendance_v2_api import reconcile_student_coverage
+from .payroll_source_locks import (
+    PayrollSourceLockedError,
+    student_attendance_payroll_lock_payload,
+)
+from .schedule_history_service import sync_student_schedule_history
 from .ws_notify import (
     notify_lesson_saved,
     notify_permission_granted,
@@ -2349,6 +2375,258 @@ def _scope_students_for_manager(
     return queryset.none()
 
 
+def _attendance_import_truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_attendance_import_teacher_for_user(user, csv_teacher_name):
+    """Resolve the CSV teacher inside the authenticated coordinator's Quran scope."""
+    queryset = TeacherProfile.objects.select_related("user").all()
+
+    if not getattr(user, "is_superuser", False):
+        department = quran_department_for_user(user)
+        if department is None:
+            return None, "No active Quran department is assigned to this coordinator."
+        queryset = queryset.filter(
+            Q(department=department) | Q(user__department=department)
+        ).distinct()
+
+    targets = {
+        normalize_attendance_import_name(csv_teacher_name),
+        normalize_attendance_import_name(strip_leading_teacher_number(csv_teacher_name)),
+    }
+    targets.discard("")
+
+    matches = []
+    for teacher in queryset.order_by("id"):
+        candidates = {
+            normalize_attendance_import_name(str(teacher)),
+            normalize_attendance_import_name(teacher.user.username),
+            normalize_attendance_import_name(teacher.user.get_full_name()),
+            normalize_attendance_import_name(strip_leading_teacher_number(str(teacher))),
+            normalize_attendance_import_name(strip_leading_teacher_number(teacher.user.get_full_name())),
+        }
+        if targets & candidates:
+            matches.append(teacher)
+
+    if not matches:
+        return None, f"Could not match CSV teacher {csv_teacher_name!r} inside your Quran department."
+    if len(matches) > 1:
+        ids = ", ".join(str(item.id) for item in matches)
+        return None, (
+            f"Teacher name {csv_teacher_name!r} matched multiple teachers ({ids}). "
+            "Please make the teacher name in the CSV more specific."
+        )
+    return matches[0], None
+
+
+def _attendance_import_scope_querysets(user):
+    """Return teacher/student querysets limited to the caller's Quran department."""
+    teachers = TeacherProfile.objects.select_related("user").all()
+    students = StudentProfile.objects.select_related("user", "teacher__user").all()
+
+    if getattr(user, "is_superuser", False):
+        return teachers.order_by("id"), students.order_by("id"), None
+
+    department = quran_department_for_user(user)
+    if department is None:
+        return teachers.none(), students.none(), "No active Quran department is assigned to this coordinator."
+
+    teachers = teachers.filter(
+        Q(department=department) | Q(user__department=department)
+    ).distinct()
+    students = students.filter(
+        Q(department=department) | Q(user__department=department)
+    ).distinct()
+    return teachers.order_by("id"), students.order_by("id"), None
+
+
+class AttendanceMonthlyImportView(APIView):
+    """Preview or commit one monthly teacher attendance CSV using the tested importer engine."""
+
+    permission_classes = [IsAuthenticated]
+    MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
+    def post(self, request):
+        role = str(getattr(request.user, "role", "") or "").lower()
+        if not (getattr(request.user, "is_superuser", False) or role == "coordinator"):
+            return Response(
+                {"detail": "Only coordinators can import monthly attendance."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        upload = request.FILES.get("file") or request.FILES.get("csv")
+        if upload is None:
+            return Response(
+                {"detail": "Choose a CSV attendance file first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        filename = Path(str(getattr(upload, "name", "attendance.csv"))).name
+        if Path(filename).suffix.lower() != ".csv":
+            return Response(
+                {"detail": "Attendance import accepts CSV files only."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if int(getattr(upload, "size", 0) or 0) > self.MAX_UPLOAD_BYTES:
+            return Response(
+                {"detail": "CSV file is too large. Maximum upload size is 5 MB."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        commit = _attendance_import_truthy(request.data.get("commit"))
+        allow_unmatched = _attendance_import_truthy(
+            request.data.get("allow_unmatched_students")
+        )
+
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb", suffix=".csv", prefix="ivs-attendance-", delete=False
+            ) as temp_handle:
+                for chunk in upload.chunks():
+                    temp_handle.write(chunk)
+                temp_path = temp_handle.name
+
+            detected_format = detect_attendance_csv_format(temp_path)
+
+            if detected_format == "report":
+                try:
+                    parsed_report = parse_attendance_report_csv(temp_path)
+                except AttendanceReportFormatError as exc:
+                    return Response(
+                        {
+                            "detail": str(exc),
+                            "success": False,
+                            "mode": "commit" if commit else "preview",
+                            "format": "report",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                teachers, students, scope_error = _attendance_import_scope_querysets(request.user)
+                if scope_error:
+                    return Response(
+                        {
+                            "detail": scope_error,
+                            "success": False,
+                            "mode": "commit" if commit else "preview",
+                            "format": "report",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                report_result = import_attendance_report_csv(
+                    parsed_report,
+                    allowed_teachers=teachers,
+                    allowed_students=students,
+                    actor=request.user,
+                    commit=commit,
+                    allow_unmatched_students=allow_unmatched,
+                )
+                return Response(
+                    {
+                        **report_result,
+                        "mode": "commit" if commit else "preview",
+                        "filename": filename,
+                        "format": "report",
+                        "date_range": parsed_report.date_label,
+                        "allow_unmatched_students": allow_unmatched,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            if detected_format == "unknown":
+                return Response(
+                    {
+                        "detail": (
+                            "Could not recognize this attendance CSV. Use either the monthly teacher template "
+                            "(contains TEACHER NAME, Month Start Date, and day columns) or an exported "
+                            "attendance report CSV (Date, Class Time, Teacher, Student, Type, Status)."
+                        ),
+                        "success": False,
+                        "mode": "commit" if commit else "preview",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            try:
+                parsed = parse_monthly_attendance_csv(temp_path)
+            except AttendanceCsvFormatError as exc:
+                return Response(
+                    {"detail": str(exc), "success": False, "mode": "commit" if commit else "preview", "format": "monthly"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            teacher, teacher_error = _resolve_attendance_import_teacher_for_user(
+                request.user, parsed.teacher_name
+            )
+            if teacher_error:
+                return Response(
+                    {
+                        "detail": teacher_error,
+                        "success": False,
+                        "mode": "commit" if commit else "preview",
+                        "teacher_name": parsed.teacher_name,
+                        "month": parsed.month_label,
+                        "format": "monthly",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            output = StringIO()
+            command_options = {
+                "commit": commit,
+                "allow_unmatched_students": allow_unmatched,
+                "teacher_id": teacher.id,
+                "stdout": output,
+                "stderr": output,
+            }
+            if role == "coordinator":
+                command_options["marked_by"] = request.user.username
+
+            try:
+                call_command(
+                    "import_monthly_attendance",
+                    temp_path,
+                    **command_options,
+                )
+                success = True
+                detail = (
+                    "Attendance imported successfully."
+                    if commit
+                    else "Preview passed. No database changes were made."
+                )
+            except CommandError as exc:
+                success = False
+                detail = str(exc)
+                output.write(f"\n{detail}\n")
+
+            return Response(
+                {
+                    "success": success,
+                    "mode": "commit" if commit else "preview",
+                    "detail": detail,
+                    "output": output.getvalue(),
+                    "filename": filename,
+                    "teacher_id": teacher.id,
+                    "teacher_name": str(teacher),
+                    "csv_teacher_name": parsed.teacher_name,
+                    "month": parsed.month_label,
+                    "format": "monthly",
+                    "allow_unmatched_students": allow_unmatched,
+                },
+                status=status.HTTP_200_OK,
+            )
+        finally:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+
+
 class AttendanceListCreateView(APIView):
     permission_classes = [
         IsAuthenticated
@@ -2774,6 +3052,58 @@ class AttendanceListCreateView(APIView):
                 ),
             )
 
+        attendance_teacher = student.teacher
+
+        requested_class_time = parse_frontend_time(
+            request.data.get("class_key")
+            or request.data.get("classKey")
+        )
+
+        if requested_class_time is None:
+            weekday_name = (
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+            )[target_date.weekday()]
+
+            schedule = (
+                ClassSchedule.objects
+                .filter(
+                    student=student,
+                    is_active=True,
+                    weekday=weekday_name,
+                )
+                .order_by("time_slot", "id")
+                .first()
+            )
+
+            if schedule is None:
+                schedule = (
+                    ClassSchedule.objects
+                    .filter(
+                        student=student,
+                        is_active=True,
+                    )
+                    .order_by("time_slot", "id")
+                    .first()
+                )
+
+            requested_class_time = (
+                schedule.time_slot
+                if schedule is not None
+                else None
+            )
+
+        attendance_class_key = (
+            requested_class_time.strftime("%H:%M")
+            if requested_class_time is not None
+            else ""
+        )
+
         attendance_department = (
             student.department
             or getattr(
@@ -2797,6 +3127,23 @@ class AttendanceListCreateView(APIView):
             )
         )
 
+        source_lock = (
+            student_attendance_payroll_lock_payload(
+                student=student,
+                target_date=target_date,
+                department=attendance_department,
+            )
+        )
+
+        if source_lock:
+            return Response(
+                source_lock,
+                status=(
+                    status
+                    .HTTP_409_CONFLICT
+                ),
+            )
+
         Attendance.objects.filter(
             entity_type=(
                 Attendance
@@ -2814,10 +3161,10 @@ class AttendanceListCreateView(APIView):
                     .EntityType
                     .STUDENT
                 ),
-                teacher=None,
+                teacher=attendance_teacher,
                 student=student,
                 date=target_date,
-                class_key="",
+                class_key=attendance_class_key,
                 status=status_value,
                 marked_by=user,
                 department=(
@@ -2837,6 +3184,35 @@ class AttendanceListCreateView(APIView):
                 status_value
             ),
         )
+
+        try:
+            reconcile_student_drop_from_attendance(
+                student=student,
+                target_date=target_date,
+                actor=user,
+            )
+        except PayrollSourceLockedError as exc:
+            transaction.set_rollback(
+                True
+            )
+            return Response(
+                exc.payload,
+                status=(
+                    status
+                    .HTTP_409_CONFLICT
+                ),
+            )
+        except StudentDropDetectionError as exc:
+            transaction.set_rollback(
+                True
+            )
+            return Response(
+                exc.payload,
+                status=(
+                    status
+                    .HTTP_409_CONFLICT
+                ),
+            )
 
         try:
             notify_attendance_marked(
@@ -2984,6 +3360,25 @@ class AttendanceDeleteView(APIView):
         target_date = (
             attendance.date
         )
+
+        source_lock = (
+            student_attendance_payroll_lock_payload(
+                student=student,
+                target_date=target_date,
+                department=(
+                    attendance.department
+                ),
+            )
+        )
+
+        if source_lock:
+            return Response(
+                source_lock,
+                status=(
+                    status
+                    .HTTP_409_CONFLICT
+                ),
+            )
 
         attendance.delete()
 
@@ -4035,7 +4430,7 @@ class AcademyStateView(APIView):
                 "teacher__user",
                 "student__user",
                 "marked_by",
-            ).filter(department=department).order_by("-date", "-id")[:2000]
+            ).filter(department=department)
 
         elif is_teacher_role(user):
             try:
@@ -4052,7 +4447,7 @@ class AcademyStateView(APIView):
                 "teacher__user",
                 "student__user",
                 "marked_by",
-            ).filter(department=department).filter(Q(teacher=teacher) | Q(student__teacher=teacher)).order_by("-date", "-id")[:1000]
+            ).filter(department=department).filter(Q(teacher=teacher) | Q(student__teacher=teacher))
 
         elif is_student_role(user):
             try:
@@ -4069,10 +4464,27 @@ class AcademyStateView(APIView):
                 "teacher__user",
                 "student__user",
                 "marked_by",
-            ).filter(department=department, student=student).order_by("-date", "-id")[:500]
+            ).filter(department=department, student=student)
 
         else:
             return Response({"detail": "Invalid role."}, status=status.HTTP_403_FORBIDDEN)
+
+        is_dashboard = request.query_params.get("dashboard") == "true"
+        if is_dashboard:
+            today = timezone.localdate()
+            if is_department_manager(user):
+                attendance_qs = attendance_qs.filter(date=today).order_by("-date", "-id")
+            elif is_teacher_role(user):
+                attendance_qs = attendance_qs.filter(date=today).order_by("-date", "-id")
+            elif is_student_role(user):
+                attendance_qs = attendance_qs.filter(date=today).order_by("-date", "-id")
+        else:
+            if is_department_manager(user):
+                attendance_qs = attendance_qs.order_by("-date", "-id")[:2000]
+            elif is_teacher_role(user):
+                attendance_qs = attendance_qs.order_by("-date", "-id")[:1000]
+            elif is_student_role(user):
+                attendance_qs = attendance_qs.order_by("-date", "-id")[:500]
 
         weekday_label = {
             "monday": "Monday",
@@ -4084,9 +4496,35 @@ class AcademyStateView(APIView):
             "sunday": "Sunday",
         }
 
+        teacher_subjects_map = {}
+
+        if not is_dashboard:
+            # Precompute teacher subjects for full state consumers. The Dashboard
+            # does not render or normalize these values, so skip the all-subject
+            # scan on the lightweight path.
+            active_subjects = StudentSubject.objects.filter(
+                department=department,
+                is_active=True
+            ).select_related("student").order_by("subject", "custom_subject_name", "id")
+
+            for subject in active_subjects:
+                tid = subject.student.teacher_id if subject.student else None
+                if tid:
+                    if tid not in teacher_subjects_map:
+                        teacher_subjects_map[tid] = []
+                    if subject.display_name not in teacher_subjects_map[tid]:
+                        teacher_subjects_map[tid].append(subject.display_name)
+
         teacher_rows = []
 
         for teacher in teachers:
+            if is_dashboard:
+                teacher_rows.append({
+                    "id": str(teacher.id),
+                    "name": teacher.user.get_full_name() or teacher.user.username,
+                })
+                continue
+
             teacher_rows.append({
                 "id": str(teacher.id),
                 "name": teacher.user.get_full_name() or teacher.user.username,
@@ -4099,14 +4537,7 @@ class AcademyStateView(APIView):
                 "photoUrl": "",
                 "loginPin": "",
                 "salary": 0,
-                "subjects": [
-                    item.display_name
-                    for item in StudentSubject.objects.filter(department=department).filter(
-                        department=department,
-                        student__teacher=teacher,
-                        is_active=True,
-                    ).order_by("subject", "custom_subject_name", "id")
-                ],
+                "subjects": teacher_subjects_map.get(teacher.id, []),
             })
 
         student_rows = []
@@ -4149,7 +4580,7 @@ class AcademyStateView(APIView):
             else:
                 class_type = "7 days / week"
 
-            student_rows.append({
+            student_row = {
                 "id": str(student.id),
                 "name": student.user.get_full_name() or student.user.username,
                 "teacherId": str(student.teacher_id),
@@ -4157,22 +4588,28 @@ class AcademyStateView(APIView):
                 "classType": class_type,
                 "classDays": class_days,
                 "loginId": student.user.username,
-                "studentType": student.student_type,
-                "studentTypeLabel": student.get_student_type_display(),
-                "classStatus": student.class_status,
-                "classStatusLabel": student.get_class_status_display(),
-                "speakingLanguage": student.speaking_language,
-                "speakingLanguageLabel": student.get_speaking_language_display(),
-                "firstFeePaid": student.first_fee_paid,
-                "referralTeacherId": str(student.referral_teacher_id) if student.referral_teacher_id else "",
-                "statusEffectiveDate": str(student.status_effective_date) if student.status_effective_date else "",
-                "salaryClassMode": student.salary_class_mode,
-                "halfMonthSalaryAmount": float(student.half_month_salary_amount or 0),
-                "isNightClass": any(
-                    schedule.time_slot >= time(22, 0) or schedule.time_slot <= time(8, 30)
-                    for schedule in active_schedules
-                ),
-            })
+            }
+
+            if not is_dashboard:
+                student_row.update({
+                    "studentType": student.student_type,
+                    "studentTypeLabel": student.get_student_type_display(),
+                    "classStatus": student.class_status,
+                    "classStatusLabel": student.get_class_status_display(),
+                    "speakingLanguage": student.speaking_language,
+                    "speakingLanguageLabel": student.get_speaking_language_display(),
+                    "firstFeePaid": student.first_fee_paid,
+                    "referralTeacherId": str(student.referral_teacher_id) if student.referral_teacher_id else "",
+                    "statusEffectiveDate": str(student.status_effective_date) if student.status_effective_date else "",
+                    "salaryClassMode": student.salary_class_mode,
+                    "halfMonthSalaryAmount": float(student.half_month_salary_amount or 0),
+                    "isNightClass": any(
+                        schedule.time_slot >= time(22, 0) or schedule.time_slot <= time(8, 30)
+                        for schedule in active_schedules
+                    ),
+                })
+
+            student_rows.append(student_row)
 
         attendance_rows = []
 
@@ -4186,7 +4623,10 @@ class AcademyStateView(APIView):
             else:
                 entity_id = item.student_id
                 entity_type = "Student"
-                class_key = ""
+                # Student attendance can also preserve the historical class
+                # time. This is important when a student later changes teacher
+                # or schedule and reports need the original relationship.
+                class_key = item.class_key or ""
 
             if not entity_id:
                 continue
@@ -4203,6 +4643,10 @@ class AcademyStateView(APIView):
                 "entityType": entity_type,
                 "date": str(item.date),
                 "classKey": class_key,
+                "teacherId": str(item.teacher_id) if item.teacher_id else "",
+                "teacherName": str(item.teacher) if item.teacher else "",
+                "studentId": str(item.student_id) if item.student_id else "",
+                "studentName": str(item.student) if item.student else "",
                 "status": status_map.get(item.status, item.status),
                 "markedById": str(item.marked_by_id) if item.marked_by_id else "",
                 "markedByUsername": item.marked_by.username if item.marked_by else "",
@@ -4217,6 +4661,7 @@ class AcademyStateView(APIView):
             "attendance": attendance_rows,
         })
 
+    @transaction.atomic
     def post(self, request):
         user = request.user
         department = quran_department_for_user(user)
@@ -4290,124 +4735,103 @@ class AcademyStateView(APIView):
                 student.user.last_name = ""
                 student.user.save()
 
-            teacher_id = str(student_item.get("teacherId", "")).strip()
+            teacher_id = str(
+                student_item.get(
+                    "teacherId",
+                    "",
+                )
+            ).strip()
+
+            desired_teacher = student.teacher
 
             if teacher_id.isdigit():
                 try:
-                    student.teacher = TeacherProfile.objects.filter(department=department).get(id=int(teacher_id), department=department)
-                    student.save()
+                    desired_teacher = (
+                        TeacherProfile.objects
+                        .filter(
+                            department=department
+                        )
+                        .get(
+                            id=int(teacher_id),
+                            department=department,
+                        )
+                    )
                 except TeacherProfile.DoesNotExist:
-                    pass
+                    desired_teacher = student.teacher
 
-            time_slot = parse_frontend_time(student_item.get("timeSlot"))
-            class_days = student_item.get("classDays", [])
+            time_slot = parse_frontend_time(
+                student_item.get(
+                    "timeSlot"
+                )
+            )
+            class_days = student_item.get(
+                "classDays",
+                [],
+            )
             duration_minutes = safe_int(
-                student_item.get("durationMinutes") or student_item.get("duration_minutes"),
+                student_item.get(
+                    "durationMinutes"
+                )
+                or student_item.get(
+                    "duration_minutes"
+                ),
                 30,
             )
+
             if duration_minutes not in [30, 60]:
                 duration_minutes = 30
 
             if not isinstance(class_days, list):
                 class_days = []
 
+            desired_rows = []
+            seen_days = set()
+
             if class_days and time_slot:
-                ClassSchedule.objects.filter(department=department).filter(student=student).delete()
+                for raw_day in class_days:
+                    weekday = frontend_weekday_to_django(raw_day)
 
-                for day in class_days:
-                    weekday = frontend_weekday_to_django(day)
-
-                    if not weekday:
+                    if not weekday or weekday in seen_days:
                         continue
 
-                    ClassSchedule.objects.create(
-                        institution=department.institution,
-                        department=department,
-                        student=student,
-                        teacher=student.teacher,
-                        weekday=weekday,
-                        time_slot=time_slot,
-                        duration_minutes=duration_minutes,
-                        is_active=True,
-                    )
+                    seen_days.add(weekday)
+                    desired_rows.append({
+                        "weekday": weekday,
+                        "time_slot": time_slot,
+                        "duration_minutes": duration_minutes,
+                    })
 
-        latest_attendance = {}
-
-        for item in attendance_data:
-            entity_type = frontend_entity_to_django(item.get("entityType"))
-            date_value = parse_frontend_date(item.get("date"))
-            status_value = frontend_status_to_django(item.get("status"))
-            entity_id = str(item.get("entityId", "")).strip()
-
-            if (
-                entity_type not in {Attendance.EntityType.TEACHER, Attendance.EntityType.STUDENT}
-                or not date_value
-                or status_value not in {Attendance.Status.PRESENT, Attendance.Status.ABSENT, Attendance.Status.LEAVE}
-                or not entity_id.isdigit()
-            ):
-                continue
-
-            key = f"{entity_type}:{entity_id}:{date_value}"
-            latest_attendance[key] = {
-                "entity_type": entity_type,
-                "entity_id": int(entity_id),
-                "date": date_value,
-                "status": status_value,
-            }
-
-        for item in latest_attendance.values():
-            entity_type = item["entity_type"]
-            entity_id = item["entity_id"]
-            date_value = item["date"]
-            status_value = item["status"]
-
-            if entity_type == Attendance.EntityType.TEACHER:
-                try:
-                    teacher = TeacherProfile.objects.filter(department=department).get(id=entity_id, department=department)
-                except TeacherProfile.DoesNotExist:
-                    continue
-
-                Attendance.objects.filter(department=department).filter(
-                    entity_type=Attendance.EntityType.TEACHER,
-                    teacher=teacher,
-                    date=date_value,
-                ).delete()
-
-                Attendance.objects.create(
-                    institution=department.institution,
-                    department=department,
-                    entity_type=Attendance.EntityType.TEACHER,
-                    teacher=teacher,
-                    student=None,
-                    date=date_value,
-                    status=status_value,
-                    marked_by=user,
+            try:
+                sync_student_schedule_history(
+                    student=student,
+                    desired_teacher=desired_teacher,
+                    desired_rows=desired_rows,
+                    effective_date=timezone.localdate(),
+                    actor=user,
+                    note=(
+                        "Teacher/schedule change recorded "
+                        "through Academy state sync."
+                    ),
+                )
+            except PayrollSourceLockedError as exc:
+                return Response(
+                    exc.payload,
+                    status=(
+                        status
+                        .HTTP_409_CONFLICT
+                    ),
                 )
 
-            else:
-                try:
-                    student = StudentProfile.objects.filter(department=department).get(id=entity_id, department=department)
-                except StudentProfile.DoesNotExist:
-                    continue
+        # Attendance is intentionally not written through
+        # this legacy bulk state endpoint. Student attendance
+        # uses the dedicated attendance API, while teacher
+        # attendance uses the V2 teacher-session endpoint.
 
-                Attendance.objects.filter(department=department).filter(
-                    entity_type=Attendance.EntityType.STUDENT,
-                    student=student,
-                    date=date_value,
-                ).delete()
-
-                Attendance.objects.create(
-                    institution=department.institution,
-                    department=department,
-                    entity_type=Attendance.EntityType.STUDENT,
-                    teacher=None,
-                    student=student,
-                    date=date_value,
-                    status=status_value,
-                    marked_by=user,
-                )
-
-        return Response({"detail": "State synced successfully."})
+        return Response({
+            "detail": (
+                "State synced successfully."
+            )
+        })
 
 
 # ============================================================

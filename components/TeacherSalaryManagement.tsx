@@ -1,3 +1,4 @@
+import DepartmentSalaryV2Workspace from "./salary/DepartmentSalaryV2Workspace";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Award,
@@ -32,8 +33,8 @@ import {
 
 import {
   getQuranSalaryAudit,
-  getQuranSalaryDashboard,
-  markQuranSalaryPdfDownload,
+  getQuranSalaryV2LegacyDashboard,
+  runQuranSalaryV2Action,
   updateQuranSalarySettings,
   updateQuranSalarySlip,
   type AchievementPayout,
@@ -556,6 +557,11 @@ function SalarySlipModal({
       }
       const manual = manualDeductions.filter((item) => item.reason.trim() && Number(item.amount || 0) > 0);
       if (manualDeductions.some((item) => Number(item.amount || 0) > 0 && !item.reason.trim())) throw new Error("A reason is mandatory for every manual cutting.");
+      if ((slip as any).salary_source === "salary_v2") {
+        throw new Error(
+          "Legacy salary editing is disabled for Salary V2 payrolls. Use the Salary V2 lifecycle and adjustment controls.",
+        );
+      }
       const saved = await updateQuranSalarySlip(slip.id, {
         behavior_good: behaviorGood,
         status,
@@ -923,7 +929,13 @@ async function createTeacherSalaryPdf(slip: QuranTeacherSalarySlip, audit: Quran
   doc.save(`${safeName}_${slip.year}_${String(slip.month).padStart(2, "0")}_salary.pdf`);
 }
 
-export default function TeacherSalaryManagement({ departmentName = "Quran Department" }: { departmentName?: string }) {
+function LegacyTeacherSalaryManagement({
+  departmentName = "Quran Department",
+  salaryLifecycleRole = "",
+}: {
+  departmentName?: string;
+  salaryLifecycleRole?: string;
+}) {
   const today = useMemo(() => new Date(), []);
   const [month, setMonth] = useState(today.getMonth() + 1);
   const [year, setYear] = useState(today.getFullYear());
@@ -932,18 +944,17 @@ export default function TeacherSalaryManagement({ departmentName = "Quran Depart
   const [data, setData] = useState<QuranSalaryDashboardResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const [view, setView] = useState<"dashboard" | "settings">("dashboard");
-  const [selectedSlip, setSelectedSlip] = useState<QuranTeacherSalarySlip | null>(null);
   const [proof, setProof] = useState<{ teacherId: number; metric: string } | null>(null);
   const [pdfBusyId, setPdfBusyId] = useState<number | null>(null);
   const [expandedTeacherId, setExpandedTeacherId] = useState<number | null>(null);
+  const [salaryActionBusy, setSalaryActionBusy] = useState<string | null>(null);
   const requestId = useRef(0);
 
   const load = useCallback(async () => {
     const currentRequest = ++requestId.current;
     setLoading(true); setMessage("");
     try {
-      const response = await getQuranSalaryDashboard(month, year, page, pageSize);
+      const response = await getQuranSalaryV2LegacyDashboard(month, year, page, pageSize);
       if (currentRequest !== requestId.current) return;
       if (Number(response.month) !== month || Number(response.year) !== year) throw new Error("The server returned a different salary month. Please refresh and try again.");
       setData(response);
@@ -959,7 +970,17 @@ export default function TeacherSalaryManagement({ departmentName = "Quran Depart
 
   const years = useMemo(() => Array.from({ length: 10 }, (_, index) => today.getFullYear() - 6 + index), [today]);
   const teacherRows = data?.teachers || [];
-  const settings = data?.configuration || null;
+  const normalizedSalaryRole = String(
+    salaryLifecycleRole || "",
+  ).trim().toLowerCase();
+  const salaryRoleLabel =
+    normalizedSalaryRole === "department_admin"
+      ? "Department Admin"
+      : normalizedSalaryRole === "super_admin"
+        ? "Super Admin"
+        : normalizedSalaryRole
+          ? normalizedSalaryRole.replace(/_/g, " ")
+          : "Viewer";
 
   useEffect(() => {
     if (teacherRows.length === 0) {
@@ -970,11 +991,13 @@ export default function TeacherSalaryManagement({ departmentName = "Quran Depart
   }, [teacherRows]);
   const openProof = (teacherId: number, metric: string) => setProof({ teacherId, metric });
 
-  const updateSlipInState = (saved: QuranTeacherSalarySlip) => {
-    setData((previous) => previous ? { ...previous, teachers: previous.teachers.map((item) => item.id === saved.id ? saved : item) } : previous);
-  };
-
   const downloadSalaryPdf = async (slip: QuranTeacherSalarySlip) => {
+    if ((slip as any).salary_source === "salary_v2") {
+      setMessage(
+        "Salary V2 PDF export is temporarily disabled until the V2 proof/export contract is migrated.",
+      );
+      return;
+    }
     if ((slip.pdf_download_count || 0) > 0) {
       const again = window.confirm(`This salary PDF was already downloaded ${slip.pdf_download_count} time${slip.pdf_download_count === 1 ? "" : "s"}. Download it again?`);
       if (!again) return;
@@ -989,12 +1012,398 @@ export default function TeacherSalaryManagement({ departmentName = "Quran Depart
         year: slip.year,
       });
       await createTeacherSalaryPdf(slip, audit, departmentName);
-      const saved = await markQuranSalaryPdfDownload(slip.id);
-      updateSlipInState(saved);
     } catch (error: any) {
       setMessage(error?.message || "Could not generate the teacher salary PDF.");
     } finally {
       setPdfBusyId(null);
+    }
+  };
+
+  const runSalaryLifecycleAction = async (
+    action:
+      | "calculate"
+      | "submit"
+      | "approve"
+      | "reject"
+      | "mark_paid"
+      | "reopen",
+    slip?: QuranTeacherSalarySlip,
+  ) => {
+    const payrollId = slip?.id;
+    const busyKey = `${action}:${payrollId ?? "month"}`;
+
+    if (salaryActionBusy) return;
+
+    let payload: Record<string, unknown> = {
+      action,
+    };
+
+    if (action === "calculate") {
+      if (normalizedSalaryRole !== "department_admin") {
+        setMessage(
+          "Only Department Admin can calculate Salary V2 payrolls.",
+        );
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Calculate Salary V2 payrolls for ${monthLabel(month, year)}?`,
+      );
+
+      if (!confirmed) return;
+
+      payload = {
+        action,
+        month,
+        year,
+      };
+    } else {
+      if (!payrollId) {
+        setMessage("Could not identify the Salary V2 payroll.");
+        return;
+      }
+
+      payload = {
+        action,
+        payroll_id: payrollId,
+      };
+    }
+
+    if (action === "submit") {
+      if (normalizedSalaryRole !== "department_admin") {
+        setMessage(
+          "Only Department Admin can submit payroll for Super Admin review.",
+        );
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Submit ${slip?.teacher_name || "this teacher"} payroll to Super Admin? A fresh calculation will run before submission.`,
+      );
+
+      if (!confirmed) return;
+    }
+
+    if (action === "approve") {
+      if (normalizedSalaryRole !== "super_admin") {
+        setMessage("Only Super Admin can approve payroll.");
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Approve ${slip?.teacher_name || "this teacher"} payroll?`,
+      );
+
+      if (!confirmed) return;
+    }
+
+    if (action === "reject") {
+      if (normalizedSalaryRole !== "super_admin") {
+        setMessage("Only Super Admin can reject payroll.");
+        return;
+      }
+
+      const reason = window.prompt(
+        "Enter the rejection reason. This is required:",
+        "",
+      );
+
+      if (reason === null) return;
+
+      if (!reason.trim()) {
+        setMessage("A rejection reason is required.");
+        return;
+      }
+
+      payload = {
+        ...payload,
+        super_admin_note: reason.trim(),
+      };
+    }
+
+    if (action === "mark_paid") {
+      if (normalizedSalaryRole !== "super_admin") {
+        setMessage("Only Super Admin can mark payroll as paid.");
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Mark ${slip?.teacher_name || "this teacher"} payroll as Paid? Paid payrolls are immutable.`,
+      );
+
+      if (!confirmed) return;
+    }
+
+    if (action === "reopen") {
+      if (normalizedSalaryRole !== "super_admin") {
+        setMessage("Only Super Admin can reopen payroll.");
+        return;
+      }
+
+      const reason = window.prompt(
+        "Enter the reopen reason. This is required:",
+        "",
+      );
+
+      if (reason === null) return;
+
+      if (!reason.trim()) {
+        setMessage("A reopen reason is required.");
+        return;
+      }
+
+      payload = {
+        ...payload,
+        reopen_reason: reason.trim(),
+      };
+    }
+
+    setSalaryActionBusy(busyKey);
+    setMessage("");
+
+    try {
+      const response = await runQuranSalaryV2Action(
+        payload as any,
+      );
+
+      setMessage(
+        response?.detail
+        || "Salary V2 action completed successfully.",
+      );
+
+      await load();
+    } catch (error: any) {
+      setMessage(
+        error?.message
+        || "Salary V2 lifecycle action failed.",
+      );
+    } finally {
+      setSalaryActionBusy(null);
+    }
+  };
+
+  const runSalaryAdjustmentAction = async (
+    action:
+      | "propose_adjustment"
+      | "approve_adjustment"
+      | "reject_adjustment",
+    slip: QuranTeacherSalarySlip,
+    adjustmentId?: number,
+  ) => {
+    if (salaryActionBusy) return;
+
+    const v2Status = String(
+      (slip as any)?.v2_status || "",
+    );
+
+    if (action === "propose_adjustment") {
+      if (normalizedSalaryRole !== "department_admin") {
+        setMessage(
+          "Only Department Admin can propose salary adjustments.",
+        );
+        return;
+      }
+
+      if (["approved", "paid"].includes(v2Status)) {
+        setMessage(
+          v2Status === "paid"
+            ? "Paid payrolls are immutable."
+            : "Reopen the approved payroll before proposing a new adjustment.",
+        );
+        return;
+      }
+
+      const rawType = window.prompt(
+        "Adjustment type: bonus, fine, deduction, or correction",
+        "bonus",
+      );
+
+      if (rawType === null) return;
+
+      const adjustmentType = rawType
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "_");
+
+      const allowedTypes = [
+        "bonus",
+        "fine",
+        "deduction",
+        "correction",
+      ];
+
+      if (!allowedTypes.includes(adjustmentType)) {
+        setMessage(
+          "Adjustment type must be bonus, fine, deduction, or correction.",
+        );
+        return;
+      }
+
+      const rawAmount = window.prompt(
+        "Adjustment amount in PKR:",
+        "",
+      );
+
+      if (rawAmount === null) return;
+
+      const amount = Number(rawAmount);
+
+      if (!Number.isFinite(amount) || amount <= 0) {
+        setMessage(
+          "Adjustment amount must be greater than zero.",
+        );
+        return;
+      }
+
+      const rawReason = window.prompt(
+        "Enter the adjustment reason:",
+        "",
+      );
+
+      if (rawReason === null) return;
+
+      const reason = rawReason.trim();
+
+      if (!reason) {
+        setMessage("An adjustment reason is required.");
+        return;
+      }
+
+      let effect: "credit" | "debit";
+
+      if (adjustmentType === "bonus") {
+        effect = "credit";
+      } else if (
+        adjustmentType === "fine"
+        || adjustmentType === "deduction"
+      ) {
+        effect = "debit";
+      } else {
+        const rawEffect = window.prompt(
+          "Correction effect: credit or debit",
+          "credit",
+        );
+
+        if (rawEffect === null) return;
+
+        const normalizedEffect = rawEffect
+          .trim()
+          .toLowerCase();
+
+        if (
+          normalizedEffect !== "credit"
+          && normalizedEffect !== "debit"
+        ) {
+          setMessage(
+            "A correction must specify effect as credit or debit.",
+          );
+          return;
+        }
+
+        effect = normalizedEffect;
+      }
+
+      const busyKey = `propose_adjustment:${slip.id}`;
+      setSalaryActionBusy(busyKey);
+      setMessage("");
+
+      try {
+        const response = await runQuranSalaryV2Action({
+          action,
+          payroll_id: slip.id,
+          adjustment_type: adjustmentType,
+          effect,
+          amount,
+          reason,
+        });
+
+        setMessage(
+          response?.detail
+          || "Salary adjustment proposed.",
+        );
+
+        await load();
+      } catch (error: any) {
+        setMessage(
+          error?.message
+          || "Could not propose salary adjustment.",
+        );
+      } finally {
+        setSalaryActionBusy(null);
+      }
+
+      return;
+    }
+
+    if (normalizedSalaryRole !== "super_admin") {
+      setMessage(
+        "Only Super Admin can approve or reject salary adjustments.",
+      );
+      return;
+    }
+
+    if (!adjustmentId) {
+      setMessage("Could not identify the salary adjustment.");
+      return;
+    }
+
+    if (v2Status === "paid") {
+      setMessage("Paid payrolls are immutable.");
+      return;
+    }
+
+    let reviewNote = "";
+
+    if (action === "reject_adjustment") {
+      const rawNote = window.prompt(
+        "Enter the adjustment rejection note. This is required:",
+        "",
+      );
+
+      if (rawNote === null) return;
+
+      reviewNote = rawNote.trim();
+
+      if (!reviewNote) {
+        setMessage(
+          "A rejection note is required.",
+        );
+        return;
+      }
+    } else {
+      const confirmed = window.confirm(
+        "Approve this salary adjustment? The payroll will be recalculated and returned to Department Review for resubmission.",
+      );
+
+      if (!confirmed) return;
+    }
+
+    const busyKey = `${action}:${adjustmentId}`;
+    setSalaryActionBusy(busyKey);
+    setMessage("");
+
+    try {
+      const response = await runQuranSalaryV2Action({
+        action,
+        adjustment_id: adjustmentId,
+        ...(reviewNote
+          ? { review_note: reviewNote }
+          : {}),
+      });
+
+      setMessage(
+        response?.detail
+        || "Salary adjustment review completed.",
+      );
+
+      await load();
+    } catch (error: any) {
+      setMessage(
+        error?.message
+        || "Could not review salary adjustment.",
+      );
+    } finally {
+      setSalaryActionBusy(null);
     }
   };
 
@@ -1007,25 +1416,101 @@ export default function TeacherSalaryManagement({ departmentName = "Quran Depart
     <div className="space-y-5">
       <section className="rounded-[30px] border border-slate-200/80 bg-white/90 p-5 shadow-[0_18px_55px_rgba(15,23,42,0.08)] sm:p-6">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex items-start gap-3"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-indigo-100 bg-indigo-50 text-indigo-600 shadow-sm"><CircleDollarSign size={24} /></div><div><h2 className="text-xl font-black text-slate-950 sm:text-2xl">Teacher Salary Management</h2><p className="mt-1 text-sm font-semibold text-slate-500">Transparent formulas, editable inputs, highlighted proofs, bonuses, deductions and full audit trails.</p></div></div>
+          <div className="flex items-start gap-3"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-indigo-100 bg-indigo-50 text-indigo-600 shadow-sm"><CircleDollarSign size={24} /></div><div><h2 className="text-xl font-black text-slate-950 sm:text-2xl">Teacher Salary Management</h2><p className="mt-1 text-sm font-semibold text-slate-500">Salary V2 payroll totals, readiness, lifecycle status and source proofs. Legacy direct salary editing is disabled.</p></div></div>
           <div className="flex flex-col gap-2 sm:flex-row">
-            <select value={month} onChange={(e) => { setPage(1); setSelectedSlip(null); setMonth(Number(e.target.value)); }} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black outline-none">{Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={index + 1}>{new Date(2026, index, 1).toLocaleDateString(undefined, { month: "long" })}</option>)}</select>
-            <select value={year} onChange={(e) => { setPage(1); setSelectedSlip(null); setYear(Number(e.target.value)); }} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black outline-none">{years.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+            <select value={month} onChange={(e) => { setPage(1); setMonth(Number(e.target.value)); }} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black outline-none">{Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={index + 1}>{new Date(2026, index, 1).toLocaleDateString(undefined, { month: "long" })}</option>)}</select>
+            <select value={year} onChange={(e) => { setPage(1); setYear(Number(e.target.value)); }} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black outline-none">{years.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+            {normalizedSalaryRole === "department_admin" && (
+              <button
+                type="button"
+                onClick={() => void runSalaryLifecycleAction("calculate")}
+                disabled={Boolean(salaryActionBusy) || loading}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-black text-white disabled:opacity-50"
+              >
+                {salaryActionBusy === "calculate:month"
+                  ? <Loader2 size={17} className="animate-spin" />
+                  : <Calculator size={17} />}
+                Calculate Month
+              </button>
+            )}
             <button type="button" onClick={() => void load()} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700"><RefreshCw size={17} className={loading ? "animate-spin" : ""} /> Refresh</button>
           </div>
         </div>
-        <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4"><Metric label="Teachers" value={data?.summary.teachers || 0} /><Metric label="This page" value={data?.summary.page_teachers || 0} accent="slate" /><Metric label="Processed" value={data?.summary.processed || 0} accent="emerald" /><Metric label="Page net payout" value={money(data?.summary.page_payout || 0)} accent="cyan" /></div>
-        <div className="mt-5 inline-flex max-w-full overflow-x-auto rounded-2xl border border-slate-200 bg-slate-50 p-1"><button type="button" onClick={() => setView("dashboard")} className={`whitespace-nowrap rounded-xl px-4 py-2 text-sm font-black ${view === "dashboard" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"}`}><Calculator className="mr-1.5 inline" size={16} />Salary Dashboard</button><button type="button" onClick={() => setView("settings")} className={`whitespace-nowrap rounded-xl px-4 py-2 text-sm font-black ${view === "settings" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500"}`}><Settings2 className="mr-1.5 inline" size={16} />Configuration</button></div>
+        <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4"><Metric label="Teachers" value={data?.summary.teachers || 0} /><Metric label="This page" value={data?.summary.page_teachers || 0} accent="slate" /><Metric label="Submitted / Final" value={data?.summary.processed || 0} accent="emerald" /><Metric label="Page net payout" value={money(data?.summary.page_payout || 0)} accent="cyan" /></div>
+        <div className="mt-5 rounded-[22px] border border-indigo-100 bg-gradient-to-r from-indigo-50 via-white to-cyan-50 p-4">
+          <div className="text-[10px] font-black uppercase tracking-[0.14em] text-indigo-600">
+            Department Admin V2 workflow
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-4">
+            {[
+              ["1", "Calculate", "Create or refresh the month payroll"],
+              ["2", "Review", "Resolve attendance and substitute blockers"],
+              ["3", "Adjust", "Propose bonus, fine, deduction or correction"],
+              ["4", "Submit", "Send ready payrolls to Super Admin"],
+            ].map(([step, title, helper]) => (
+              <div key={step} className="rounded-2xl border border-white bg-white/85 p-3 shadow-sm">
+                <div className="flex items-center gap-2">
+                  <span className="grid h-7 w-7 place-items-center rounded-xl bg-indigo-600 text-[10px] font-black text-white">
+                    {step}
+                  </span>
+                  <span className="text-xs font-black text-slate-950">{title}</span>
+                </div>
+                <div className="mt-2 text-[10px] font-semibold leading-4 text-slate-500">
+                  {helper}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </section>
 
       {message && <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">{message}</div>}
-      {view === "settings" && settings ? <SettingsPanel config={settings} onSaved={(config) => setData((prev) => prev ? { ...prev, configuration: config } : prev)} /> : loading && !data ? <PageSkeleton variant="salary" cards={6} label={`Loading ${monthLabel(month, year)} salaries`} /> : (
+      {loading && !data ? <PageSkeleton variant="salary" cards={6} label={`Loading ${monthLabel(month, year)} salaries`} /> : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {loading && <div className="col-span-full rounded-2xl border border-indigo-200 bg-indigo-50 p-3 text-center text-xs font-black text-indigo-700">Refreshing {monthLabel(month, year)}...</div>}
           {teacherRows.map((slip) => {
             const snapshot: any = slip.calculated_snapshot || {};
             const type = snapshot.student_type_breakdown || {};
             const statuses = snapshot.class_status_breakdown || {};
+            const v2Slip = slip as QuranTeacherSalarySlip & {
+              salary_source?: "salary_v2";
+              v2_status?: string;
+              v2_adjustments?: Array<{
+                id: number;
+                adjustment_type: string;
+                effect: "credit" | "debit";
+                amount: number | string;
+                reason: string;
+                source_month: number | null;
+                source_year: number | null;
+                student_id: number | null;
+                status: "pending" | "approved" | "rejected" | "cancelled";
+                review_note: string;
+              }>;
+              v2_readiness?: {
+                department_submission_ready?: boolean;
+                super_admin_approval_ready?: boolean;
+                operational_blockers?: Array<{
+                  code: string;
+                  count: number;
+                  message: string;
+                }>;
+                approval_blockers?: Array<{
+                  code: string;
+                  count: number;
+                  message: string;
+                }>;
+              };
+            };
+            const v2Status = String(
+              v2Slip.v2_status || "unknown",
+            );
+            const v2Readiness = v2Slip.v2_readiness;
+            const v2Adjustments = v2Slip.v2_adjustments || [];
+            const operationalBlockers =
+              v2Readiness?.operational_blockers || [];
+            const approvalBlockers =
+              v2Readiness?.approval_blockers || [];
             const isOpen = expandedTeacherId === slip.id;
             return (
               <article key={slip.id} className={`overflow-hidden border border-slate-200/80 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.045)] ${isOpen ? "col-span-full rounded-[26px]" : "rounded-[20px]"}`}>
@@ -1049,15 +1534,17 @@ export default function TeacherSalaryManagement({ departmentName = "Quran Depart
                         <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-indigo-100 bg-indigo-50 text-indigo-600"><GraduationCap size={21} /></div>
                         <div className="min-w-0">
                           <h3 className="truncate text-xl font-black text-slate-950">{slip.teacher_name}</h3>
-                          <p className="mt-1 text-xs font-bold text-slate-500">{monthLabel(slip.month, slip.year)}</p>
+                          <p className="mt-1 text-xs font-bold text-slate-500">
+                            {monthLabel(slip.month, slip.year)} Â· Salary V2 lifecycle: {v2Status.replace(/_/g, " ")} Â· {salaryRoleLabel}
+                          </p>
                         </div>
                         <span className="ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700"><ChevronDown size={17} className="rotate-180" /></span>
                       </button>
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:w-[660px]">
                         <div className="rounded-2xl border border-cyan-100 bg-cyan-50 px-3 py-2.5 text-cyan-800"><div className="text-[9px] font-black uppercase tracking-[0.12em]">Gross salary</div><div className="mt-1 text-base font-black">{money(slip.gross_total)}</div></div>
                         <div className="rounded-2xl border border-rose-100 bg-rose-50 px-3 py-2.5 text-rose-800"><div className="text-[9px] font-black uppercase tracking-[0.12em]">Total cuttings</div><div className="mt-1 text-base font-black">{money(slip.deduction_total)}</div></div>
-                        <button type="button" onClick={() => setSelectedSlip(slip)} className="inline-flex min-h-[58px] items-center justify-center gap-2 rounded-2xl bg-slate-950 px-3 py-2.5 text-xs font-black text-white shadow-[0_10px_24px_rgba(15,23,42,0.16)] transition hover:bg-slate-900"><Edit3 size={16} /> Net {money(slip.final_total)}</button>
-                        <button type="button" onClick={() => void downloadSalaryPdf(slip)} disabled={pdfBusyId === slip.id} className={`inline-flex min-h-[58px] items-center justify-center gap-2 rounded-2xl border px-3 py-2.5 text-xs font-black transition disabled:opacity-60 ${(slip.pdf_download_count || 0) > 0 ? "border-emerald-200 bg-white text-emerald-700" : "border-indigo-200 bg-indigo-50 text-indigo-700"}`} title={(slip.pdf_download_count || 0) > 0 ? `Already downloaded ${slip.pdf_download_count} time(s). You can download again after confirmation.` : "Generate teacher salary PDF"}>
+                        <button type="button" disabled className="inline-flex min-h-[58px] items-center justify-center gap-2 rounded-2xl bg-slate-950 px-3 py-2.5 text-xs font-black text-white shadow-[0_10px_24px_rgba(15,23,42,0.16)] transition hover:bg-slate-900"><Eye size={16} /> Net {money(slip.final_total)}</button>
+                        <button type="button" disabled className={`inline-flex min-h-[58px] items-center justify-center gap-2 rounded-2xl border px-3 py-2.5 text-xs font-black transition disabled:opacity-60 ${(slip.pdf_download_count || 0) > 0 ? "border-emerald-200 bg-white text-emerald-700" : "border-indigo-200 bg-indigo-50 text-indigo-700"}`} title={(slip.pdf_download_count || 0) > 0 ? `Already downloaded ${slip.pdf_download_count} time(s). You can download again after confirmation.` : "Generate teacher salary PDF"}>
                           {pdfBusyId === slip.id ? <Loader2 size={16} className="animate-spin" /> : (slip.pdf_download_count || 0) > 0 ? <FileCheck2 size={16} /> : <FileDown size={16} />}
                           {(slip.pdf_download_count || 0) > 0 ? "PDF Generated" : "Generate PDF"}
                         </button>
@@ -1070,6 +1557,310 @@ export default function TeacherSalaryManagement({ departmentName = "Quran Depart
                   <div className="w-full bg-slate-50/45 p-3.5 sm:p-4">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                       <div>
+                        <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-3">
+                          <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-3">
+                            <div className="text-[9px] font-black uppercase tracking-[0.12em] text-indigo-500">Salary V2 lifecycle</div>
+                            <div className="mt-1 text-sm font-black capitalize text-indigo-950">
+                              {v2Status.replace(/_/g, " ")}
+                            </div>
+                          </div>
+
+                          <div className={`rounded-2xl border p-3 ${
+                            v2Readiness?.department_submission_ready
+                              ? "border-emerald-100 bg-emerald-50"
+                              : "border-amber-100 bg-amber-50"
+                          }`}>
+                            <div className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Department submission</div>
+                            <div className="mt-1 text-sm font-black text-slate-950">
+                              {v2Readiness?.department_submission_ready
+                                ? "Ready"
+                                : `${operationalBlockers.length} blocker(s)`}
+                            </div>
+                          </div>
+
+                          <div className={`rounded-2xl border p-3 ${
+                            v2Readiness?.super_admin_approval_ready
+                              ? "border-emerald-100 bg-emerald-50"
+                              : "border-amber-100 bg-amber-50"
+                          }`}>
+                            <div className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">Super Admin approval</div>
+                            <div className="mt-1 text-sm font-black text-slate-950">
+                              {v2Readiness?.super_admin_approval_ready
+                                ? "Ready"
+                                : `${approvalBlockers.length} blocker(s)`}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mb-3 flex flex-wrap gap-2">
+                          {normalizedSalaryRole === "department_admin"
+                            && v2Status === "department_review" && (
+                            <button
+                              type="button"
+                              onClick={() => void runSalaryLifecycleAction("submit", slip)}
+                              disabled={
+                                Boolean(salaryActionBusy)
+                                || !v2Readiness?.department_submission_ready
+                              }
+                              className="rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-40"
+                              title={
+                                v2Readiness?.department_submission_ready
+                                  ? "Submit payroll for Super Admin review"
+                                  : "Resolve operational blockers before submission"
+                              }
+                            >
+                              {salaryActionBusy === `submit:${slip.id}`
+                                ? "Submitting..."
+                                : "Submit to Super Admin"}
+                            </button>
+                          )}
+
+                          {normalizedSalaryRole === "super_admin"
+                            && v2Status === "pending_super_admin" && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void runSalaryLifecycleAction("approve", slip)}
+                                disabled={
+                                  Boolean(salaryActionBusy)
+                                  || !v2Readiness?.super_admin_approval_ready
+                                }
+                                className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-40"
+                                title={
+                                  v2Readiness?.super_admin_approval_ready
+                                    ? "Approve payroll"
+                                    : "Resolve approval blockers before approval"
+                                }
+                              >
+                                {salaryActionBusy === `approve:${slip.id}`
+                                  ? "Approving..."
+                                  : "Approve"}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => void runSalaryLifecycleAction("reject", slip)}
+                                disabled={Boolean(salaryActionBusy)}
+                                className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-black text-rose-700 disabled:opacity-40"
+                              >
+                                {salaryActionBusy === `reject:${slip.id}`
+                                  ? "Rejecting..."
+                                  : "Reject"}
+                              </button>
+                            </>
+                          )}
+
+                          {normalizedSalaryRole === "super_admin"
+                            && v2Status === "approved" && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void runSalaryLifecycleAction("mark_paid", slip)}
+                                disabled={
+                                  Boolean(salaryActionBusy)
+                                  || !v2Readiness?.super_admin_approval_ready
+                                }
+                                className="rounded-xl bg-slate-950 px-3 py-2 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-40"
+                                title={
+                                  v2Readiness?.super_admin_approval_ready
+                                    ? "Mark approved payroll as Paid"
+                                    : "Payroll readiness must remain valid before payment"
+                                }
+                              >
+                                {salaryActionBusy === `mark_paid:${slip.id}`
+                                  ? "Marking Paid..."
+                                  : "Mark Paid"}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => void runSalaryLifecycleAction("reopen", slip)}
+                                disabled={Boolean(salaryActionBusy)}
+                                className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-black text-amber-800 disabled:opacity-40"
+                              >
+                                {salaryActionBusy === `reopen:${slip.id}`
+                                  ? "Reopening..."
+                                  : "Reopen"}
+                              </button>
+                            </>
+                          )}
+
+                          {v2Status === "paid" && (
+                            <span className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-800">
+                              Paid - Locked
+                            </span>
+                          )}
+
+                          {normalizedSalaryRole === "department_admin"
+                            && ["rejected", "reopened"].includes(v2Status) && (
+                            <span className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-black text-amber-800">
+                              Recalculate month before resubmission
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="mb-3 rounded-2xl border border-slate-200 bg-white p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <div className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                                Salary V2 adjustments
+                              </div>
+                              <div className="mt-0.5 text-xs font-bold text-slate-700">
+                                {v2Adjustments.length} adjustment(s) recorded
+                              </div>
+                            </div>
+
+                            {normalizedSalaryRole === "department_admin"
+                              && !["approved", "paid"].includes(v2Status) && (
+                              <button
+                                type="button"
+                                onClick={() => void runSalaryAdjustmentAction(
+                                  "propose_adjustment",
+                                  slip,
+                                )}
+                                disabled={Boolean(salaryActionBusy)}
+                                className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 disabled:opacity-40"
+                              >
+                                {salaryActionBusy === `propose_adjustment:${slip.id}`
+                                  ? "Proposing..."
+                                  : "Propose Adjustment"}
+                              </button>
+                            )}
+                          </div>
+
+                          {v2Adjustments.length === 0 ? (
+                            <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs font-semibold text-slate-500">
+                              No Salary V2 adjustments for this payroll.
+                            </div>
+                          ) : (
+                            <div className="mt-3 space-y-2">
+                              {v2Adjustments.map((adjustment) => {
+                                const adjustmentType = String(
+                                  adjustment.adjustment_type || "",
+                                );
+                                const isPending =
+                                  adjustment.status === "pending";
+                                const isRejoinRestoration =
+                                  adjustmentType.toLowerCase()
+                                  === "rejoin_restoration";
+
+                                return (
+                                  <div
+                                    key={adjustment.id}
+                                    className="rounded-xl border border-slate-200 bg-slate-50 p-3"
+                                  >
+                                    <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                                      <div className="min-w-0">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <span className="text-xs font-black capitalize text-slate-950">
+                                            {adjustmentType.replace(/_/g, " ")}
+                                          </span>
+                                          <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase ${
+                                            adjustment.effect === "credit"
+                                              ? "bg-emerald-100 text-emerald-700"
+                                              : "bg-rose-100 text-rose-700"
+                                          }`}>
+                                            {adjustment.effect}
+                                          </span>
+                                          <span className="rounded-full bg-white px-2 py-0.5 text-[9px] font-black uppercase text-slate-600">
+                                            {adjustment.status}
+                                          </span>
+                                          {isRejoinRestoration && (
+                                            <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[9px] font-black uppercase text-indigo-700">
+                                              System controlled
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        <div className="mt-1 text-sm font-black text-slate-950">
+                                          PKR {money(adjustment.amount)}
+                                        </div>
+
+                                        <div className="mt-1 text-xs font-semibold text-slate-600">
+                                          {adjustment.reason}
+                                        </div>
+
+                                        {adjustment.review_note && (
+                                          <div className="mt-1 text-[10px] font-bold text-slate-500">
+                                            Review: {adjustment.review_note}
+                                          </div>
+                                        )}
+
+                                        {(adjustment.source_month
+                                          || adjustment.source_year) && (
+                                          <div className="mt-1 text-[10px] font-bold text-indigo-600">
+                                            Source period: {adjustment.source_month || "-"} / {adjustment.source_year || "-"}
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      {normalizedSalaryRole === "super_admin"
+                                        && isPending
+                                        && v2Status !== "paid" && (
+                                        <div className="flex shrink-0 flex-wrap gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => void runSalaryAdjustmentAction(
+                                              "approve_adjustment",
+                                              slip,
+                                              adjustment.id,
+                                            )}
+                                            disabled={Boolean(salaryActionBusy)}
+                                            className="rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-black text-white disabled:opacity-40"
+                                          >
+                                            {salaryActionBusy === `approve_adjustment:${adjustment.id}`
+                                              ? "Approving..."
+                                              : "Approve Adjustment"}
+                                          </button>
+
+                                          <button
+                                            type="button"
+                                            onClick={() => void runSalaryAdjustmentAction(
+                                              "reject_adjustment",
+                                              slip,
+                                              adjustment.id,
+                                            )}
+                                            disabled={Boolean(salaryActionBusy)}
+                                            className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] font-black text-rose-700 disabled:opacity-40"
+                                          >
+                                            {salaryActionBusy === `reject_adjustment:${adjustment.id}`
+                                              ? "Rejecting..."
+                                              : "Reject Adjustment"}
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        {(operationalBlockers.length > 0 || approvalBlockers.length > 0) && (
+                          <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 p-3">
+                            <div className="text-[10px] font-black uppercase tracking-[0.12em] text-amber-800">
+                              Readiness blockers
+                            </div>
+                            <div className="mt-2 space-y-1.5">
+                              {(approvalBlockers.length > 0
+                                ? approvalBlockers
+                                : operationalBlockers
+                              ).map((blocker, index) => (
+                                <div
+                                  key={`${blocker.code}-${index}`}
+                                  className="text-xs font-bold text-amber-900"
+                                >
+                                  {blocker.message}
+                                  {blocker.count > 0
+                                    ? ` (${blocker.count})`
+                                    : ""}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                         <div className="text-[11px] font-black text-slate-950">Monthly salary class reconciliation</div>
                         <div className="mt-0.5 text-[9px] font-semibold text-slate-500">Every proof opens only the matching source records, and the related detail is highlighted inside the proof.</div>
                       </div>
@@ -1153,8 +1944,36 @@ export default function TeacherSalaryManagement({ departmentName = "Quran Depart
         </div>
       )}
 
-      {selectedSlip && <SalarySlipModal slip={selectedSlip} config={settings} onClose={() => setSelectedSlip(null)} onSaved={updateSlipInState} />}
+
       {proof && <QuranSalaryProofModal teacherId={proof.teacherId} metric={proof.metric} month={month} year={year} onClose={() => setProof(null)} />}
     </div>
+  );
+}
+
+
+export default function TeacherSalaryManagement({
+  departmentName = "Quran Department",
+  salaryLifecycleRole = "",
+}: {
+  departmentName?: string;
+  salaryLifecycleRole?: string;
+}) {
+  const normalizedRole = String(salaryLifecycleRole || "")
+    .trim()
+    .toLowerCase();
+
+  if (normalizedRole === "department_admin") {
+    return (
+      <DepartmentSalaryV2Workspace
+        departmentName={departmentName}
+      />
+    );
+  }
+
+  return (
+    <LegacyTeacherSalaryManagement
+      departmentName={departmentName}
+      salaryLifecycleRole={salaryLifecycleRole}
+    />
   );
 }

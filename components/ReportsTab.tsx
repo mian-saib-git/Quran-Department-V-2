@@ -12,6 +12,7 @@ import {
 
 import {
   getLessons,
+  importMonthlyAttendanceCsv,
   type LessonPayload,
   type ProgressStatus,
 } from "../services/djangoApiService";
@@ -43,6 +44,8 @@ import {
   Clock3,
   X,
   RotateCcw,
+  Upload,
+  AlertTriangle,
 } from "lucide-react";
 
 // IVS_REPORTS_DROPDOWN_THEME_V9
@@ -843,6 +846,135 @@ export function ReportsTab({
   const [attendancePage, setAttendancePage] = useState(1);
   const [studentPage, setStudentPage] = useState(1);
   const [teacherPage, setTeacherPage] = useState(1);
+  const [attendanceImportOpen, setAttendanceImportOpen] = useState(false);
+  const [attendanceImportFile, setAttendanceImportFile] = useState<File | null>(null);
+  const [attendanceImportAllowUnmatched, setAttendanceImportAllowUnmatched] = useState(false);
+  const [attendanceImportLoading, setAttendanceImportLoading] = useState(false);
+  const [attendanceImportPreviewPassed, setAttendanceImportPreviewPassed] = useState(false);
+  const [attendanceImportCommitted, setAttendanceImportCommitted] = useState(false);
+  const [attendanceImportOutput, setAttendanceImportOutput] = useState("");
+  const [attendanceImportMessage, setAttendanceImportMessage] = useState("");
+
+
+  const resetAttendanceImport = () => {
+    setAttendanceImportFile(null);
+    setAttendanceImportAllowUnmatched(false);
+    setAttendanceImportLoading(false);
+    setAttendanceImportPreviewPassed(false);
+    setAttendanceImportCommitted(false);
+    setAttendanceImportOutput("");
+    setAttendanceImportMessage("");
+  };
+
+  const closeAttendanceImport = () => {
+    if (attendanceImportLoading) return;
+    setAttendanceImportOpen(false);
+    resetAttendanceImport();
+  };
+
+  const downloadAttendanceImportSample = () => {
+    const dayHeaders = Array.from({ length: 31 }, (_, index) =>
+      String(index + 1).padStart(2, "0")
+    );
+
+    const rows: Array<Array<string | number>> = [
+      [],
+      [
+        "TEACHER NAME",
+        "REPLACE WITH DASHBOARD TEACHER NAME",
+        "",
+        "Month Start Date",
+        "01-Sep-2026",
+      ],
+      [],
+      ["Time", "No", "Admission#", "student", "Days", "P", ...dayHeaders],
+      [
+        "1:00 PM",
+        1,
+        "1001",
+        "REPLACE WITH STUDENT NAME",
+        "(Mon,Tue,Wed,Thu,Fri)",
+        "",
+        "P",
+        "SA",
+        "SL",
+        "TA",
+        "TL",
+        "OFF",
+        "P",
+        ...Array(24).fill(""),
+      ],
+      [],
+      [
+        "INSTRUCTIONS",
+        "Replace teacher/student details, add one numbered row per student, then fill day cells with P, SA, SL, TA, TL, OFF/OF, or leave blank.",
+      ],
+      [
+        "CODES",
+        "P=student present/teacher present; SA=student absent/teacher present; SL=student leave/teacher present; TA=student present/teacher absent; TL=student present/teacher leave; OFF/OF=no class; blank=ignore.",
+      ],
+    ];
+
+    const csvCell = (value: string | number) => {
+      const text = String(value ?? "");
+      return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+
+    const csv = `\uFEFF${rows
+      .map((row) => row.map((value) => csvCell(value)).join(","))
+      .join("\r\n")}`;
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "attendance_import_sample.csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const runAttendanceImport = async (commit: boolean) => {
+    if (!attendanceImportFile || attendanceImportLoading) return;
+
+    if (commit) {
+      const confirmed = window.confirm(
+        "Import this attendance into the database? Only continue after the preview has passed."
+      );
+      if (!confirmed) return;
+    }
+
+    try {
+      setAttendanceImportLoading(true);
+      setAttendanceImportMessage("");
+      if (!commit) {
+        setAttendanceImportPreviewPassed(false);
+        setAttendanceImportCommitted(false);
+      }
+
+      const result = await importMonthlyAttendanceCsv(attendanceImportFile, {
+        commit,
+        allow_unmatched_students: attendanceImportAllowUnmatched,
+      });
+
+      setAttendanceImportOutput(result.output || result.detail || "");
+      setAttendanceImportMessage(result.detail || "");
+
+      if (!commit) {
+        setAttendanceImportPreviewPassed(Boolean(result.success));
+      } else if (result.success) {
+        setAttendanceImportCommitted(true);
+        setAttendanceImportPreviewPassed(true);
+      }
+    } catch (error) {
+      setAttendanceImportPreviewPassed(false);
+      setAttendanceImportMessage(
+        error instanceof Error ? error.message : "Attendance import request failed."
+      );
+    } finally {
+      setAttendanceImportLoading(false);
+    }
+  };
 
   const loadLessons = async () => {
     try {
@@ -1051,8 +1183,6 @@ export function ReportsTab({
     reportStudents.forEach((student) => add(String(student.teacherId), student.timeSlot));
 
     appState.attendance.forEach((record) => {
-      if (record.entityType !== EntityType.TEACHER) return;
-
       const basisDate =
         dateFilterBasis === "attendance_date"
           ? record.date
@@ -1060,8 +1190,22 @@ export function ReportsTab({
 
       if (!basisDate) return;
       if (basisDate < effectiveRange.start || basisDate > effectiveRange.end) return;
-      if (!reportTeacherIdSet.has(String(record.entityId))) return;
-      add(String(record.entityId), record.classKey);
+
+      if (record.entityType === EntityType.TEACHER) {
+        if (!reportTeacherIdSet.has(String(record.entityId))) return;
+        add(String(record.entityId), record.classKey);
+        return;
+      }
+
+      const historicalTeacherId = String(record.teacherId || "");
+      if (!historicalTeacherId) return;
+      if (
+        selectedTeacherIds.length > 0 &&
+        !selectedTeacherIdSet.has(historicalTeacherId)
+      ) {
+        return;
+      }
+      add(historicalTeacherId, record.classKey);
     });
 
     const result = new Map<string, string[]>();
@@ -1073,6 +1217,8 @@ export function ReportsTab({
     reportStudents,
     appState.attendance,
     reportTeacherIdSet,
+    selectedTeacherIds,
+    selectedTeacherIdSet,
     effectiveRange,
     dateFilterBasis,
   ]);
@@ -1100,6 +1246,29 @@ export function ReportsTab({
 
     return map;
   }, [appState.attendance]);
+
+  const historicalStudentNamesByTeacherSession = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+
+    for (const record of appState.attendance) {
+      if (record.entityType !== EntityType.STUDENT) continue;
+
+      const teacherId = String(record.teacherId || "");
+      const classKey = normalizeClassTime(record.classKey);
+      if (!teacherId || !classKey) continue;
+
+      const studentId = String(record.studentId || record.entityId);
+      const student = studentById.get(studentId);
+      const studentName = String(record.studentName || student?.name || "").trim();
+      if (!studentName) continue;
+
+      const key = `${record.date}:${teacherId}:${classKey}`;
+      if (!map.has(key)) map.set(key, new Set<string>());
+      map.get(key)!.add(studentName);
+    }
+
+    return map;
+  }, [appState.attendance, studentById]);
 
   const rows = useMemo(() => {
     const { start: s, end: e } = effectiveRange;
@@ -1130,6 +1299,29 @@ export function ReportsTab({
       return (teacherClassTimes.get(teacherId) || []).some((time) =>
         timeMatchesRange(time, classTimeStart, classTimeEnd)
       );
+    };
+
+    const teacherSessionStudentName = (
+      teacherId: string,
+      date: string,
+      classKey: string,
+      directName?: string
+    ) => {
+      const names = new Set<string>();
+      const normalizedTime = normalizeClassTime(classKey);
+
+      if (normalizedTime) {
+        const historical =
+          historicalStudentNamesByTeacherSession.get(
+            `${date}:${teacherId}:${normalizedTime}`
+          );
+        historical?.forEach((name) => names.add(name));
+      }
+
+      const direct = String(directName || "").trim();
+      if (direct) names.add(direct);
+
+      return names.size > 0 ? Array.from(names).sort().join(", ") : "—";
     };
 
     const pushFromRecord = (record: AttendanceRecord) => {
@@ -1169,8 +1361,13 @@ export function ReportsTab({
         out.push({
           date: record.date,
           entityType: record.entityType,
-          teacherName: teacher?.name ?? "Unknown Teacher",
-          studentName: "—",
+          teacherName: record.teacherName || teacher?.name || "Unknown Teacher",
+          studentName: teacherSessionStudentName(
+            teacherId,
+            record.date,
+            normalizedTime,
+            record.studentName
+          ),
           classTime: displayTime,
           status: record.status,
           markedBy: record.markedByName || record.markedByUsername || "—",
@@ -1179,20 +1376,53 @@ export function ReportsTab({
         return;
       }
 
-      const studentId = String(record.entityId);
-      if (!reportStudentIdSet.has(studentId)) return;
+      const studentId = String(record.studentId || record.entityId);
+      if (
+        selectedStudentIds.length > 0 &&
+        !selectedStudentIdSet.has(studentId)
+      ) {
+        return;
+      }
 
       const student = studentById.get(studentId);
-      if (!student) return;
-      if (!timeMatchesRange(student.timeSlot, classTimeStart, classTimeEnd)) return;
+      const historicalTeacherId = String(
+        record.teacherId || student?.teacherId || ""
+      );
 
-      const teacher = teacherById.get(String(student.teacherId));
+      if (
+        selectedTeacherIds.length > 0 &&
+        !selectedTeacherIdSet.has(historicalTeacherId)
+      ) {
+        return;
+      }
+
+      const historicalClassTime =
+        normalizeClassTime(record.classKey) ||
+        normalizeClassTime(student?.timeSlot);
+
+      if (
+        !timeMatchesRange(
+          historicalClassTime,
+          classTimeStart,
+          classTimeEnd
+        )
+      ) {
+        return;
+      }
+
+      const teacher = teacherById.get(historicalTeacherId);
       out.push({
         date: record.date,
         entityType: record.entityType,
-        teacherName: teacher?.name ?? "Unknown Teacher",
-        studentName: student.name,
-        classTime: formatClassTime(student.timeSlot),
+        teacherName:
+          record.teacherName ||
+          teacher?.name ||
+          "Unknown Teacher",
+        studentName:
+          record.studentName ||
+          student?.name ||
+          "Unknown Student",
+        classTime: formatClassTime(historicalClassTime),
         status: record.status,
         markedBy: record.markedByName || record.markedByUsername || "—",
         updatedAt: record.timestamp,
@@ -1228,7 +1458,12 @@ export function ReportsTab({
               date,
               entityType: EntityType.TEACHER,
               teacherName: teacher.name,
-              studentName: "—",
+              studentName: teacherSessionStudentName(
+                teacherId,
+                date,
+                time,
+                record?.studentName
+              ),
               classTime: formatClassTime(time),
               status: record?.status ?? "Unmarked",
               markedBy: record?.markedByName || record?.markedByUsername || "—",
@@ -1260,7 +1495,9 @@ export function ReportsTab({
     appState.attendance,
     effectiveRange,
     selectedTeacherIds,
+    selectedTeacherIdSet,
     selectedStudentIds,
+    selectedStudentIdSet,
     includeUnmarked,
     includeTeacherRow,
     hasTimeFilter,
@@ -1272,6 +1509,7 @@ export function ReportsTab({
     reportStudentIdSet,
     teacherClassTimes,
     teacherDatesWithClassRecords,
+    historicalStudentNamesByTeacherSession,
     teacherById,
     studentById,
     dateFilterBasis,
@@ -1387,7 +1625,6 @@ export function ReportsTab({
         return String(lesson.teacher_id) === String(teacher.id);
       });
 
-      const scopedStudentIds = new Set(students.map((student) => String(student.id)));
       const attendanceRows = appState.attendance.filter((item) => {
         if (item.date < effectiveRange.start || item.date > effectiveRange.end) return false;
 
@@ -1410,7 +1647,25 @@ export function ReportsTab({
         }
 
         if (item.entityType === EntityType.STUDENT) {
-          return scopedStudentIds.has(String(item.entityId));
+          const studentId = String(item.studentId || item.entityId);
+          const student = studentById.get(studentId);
+          const historicalTeacherId = String(
+            item.teacherId || student?.teacherId || ""
+          );
+
+          if (historicalTeacherId !== String(teacher.id)) return false;
+
+          if (!hasTimeFilter) return true;
+
+          const historicalClassTime =
+            normalizeClassTime(item.classKey) ||
+            normalizeClassTime(student?.timeSlot);
+
+          return timeMatchesRange(
+            historicalClassTime,
+            classTimeStart,
+            classTimeEnd
+          );
         }
 
         return false;
@@ -1450,6 +1705,7 @@ export function ReportsTab({
     classTimeEnd,
     hasTimeFilter,
     teacherClassTimes,
+    studentById,
   ]);
 
   const filteredStudentReports = useMemo(() => {
@@ -2549,6 +2805,18 @@ const pagedTeachers = useMemo(
           </div>
 
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                resetAttendanceImport();
+                setAttendanceImportOpen(true);
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-extrabold bg-violet-600 hover:bg-violet-700 text-white transition active:scale-[0.99] shadow-[0_18px_36px_-18px_rgba(124,58,237,0.60)]"
+            >
+              <Upload size={16} />
+              Import Attendance
+            </button>
+
             <IconButton
               enabled={canExportCsv}
               onClick={exportCSV}
@@ -2622,7 +2890,7 @@ const pagedTeachers = useMemo(
         </div>
       )}
 
-      <div className="relative z-50 isolate overflow-visible rounded-[28px] border border-[#DCE5F1] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04),0_24px_56px_-30px_rgba(51,65,85,0.28)]">
+      <div className="relative z-20 isolate overflow-visible rounded-[28px] border border-[#DCE5F1] bg-white shadow-[0_2px_8px_rgba(15,23,42,0.04),0_24px_56px_-30px_rgba(51,65,85,0.28)]">
         <div className="p-4 md:p-5">
           <div className={`flex flex-col gap-3 rounded-[18px] border border-[#E7EDF5] bg-[#F8FAFD] px-3 py-3 sm:flex-row sm:items-center sm:justify-between ${
             filtersCollapsed ? "" : "mb-1"
@@ -3189,6 +3457,161 @@ pagedAttendance.items.map((r, idx) => {
             pageSize={CARD_PAGE_SIZE}
             onPageChange={setTeacherPage}
           />
+        </div>
+      )}
+
+      {attendanceImportOpen && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeAttendanceImport();
+          }}
+        >
+          <div className="w-full max-w-3xl overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+              <div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-violet-100 bg-violet-50 px-3 py-1 text-xs font-extrabold text-violet-700">
+                  <Upload size={14} /> Attendance CSV Import
+                </div>
+                <h3 className="mt-3 text-xl font-black text-slate-950">Preview first, then import</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Upload either the monthly teacher template or a CSV exported from Reports. Preview never changes the database.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeAttendanceImport}
+                disabled={attendanceImportLoading}
+                className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+                aria-label="Close attendance import"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="max-h-[75vh] space-y-5 overflow-y-auto p-6">
+              <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-xs leading-5 text-blue-900">
+                <div className="font-extrabold">Accepted CSV formats</div>
+                <div className="mt-1">
+                  1. Monthly teacher template with TEACHER NAME + day columns, or 2. a CSV exported from this Reports page with Date, Class Time, Teacher, Student, Type and Status.
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={downloadAttendanceImportSample}
+                    className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-3.5 py-2 text-xs font-extrabold text-blue-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-100"
+                  >
+                    <Download size={15} />
+                    Download Sample CSV
+                  </button>
+                  <span className="text-[11px] font-semibold text-blue-700">
+                    Monthly template sample. Replace the example teacher/student details before previewing.
+                  </span>
+                </div>
+              </div>
+
+              <label className="block">
+                <span className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-slate-600">CSV file</span>
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  disabled={attendanceImportLoading || attendanceImportCommitted}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] || null;
+                    setAttendanceImportFile(file);
+                    setAttendanceImportPreviewPassed(false);
+                    setAttendanceImportCommitted(false);
+                    setAttendanceImportOutput("");
+                    setAttendanceImportMessage("");
+                  }}
+                  className="block w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 file:mr-4 file:rounded-xl file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-xs file:font-extrabold file:text-white"
+                />
+              </label>
+
+              <label className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <input
+                  type="checkbox"
+                  checked={attendanceImportAllowUnmatched}
+                  disabled={attendanceImportLoading || attendanceImportCommitted}
+                  onChange={(event) => {
+                    setAttendanceImportAllowUnmatched(event.target.checked);
+                    setAttendanceImportPreviewPassed(false);
+                  }}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="flex items-center gap-2 text-sm font-extrabold text-amber-900">
+                    <AlertTriangle size={16} /> Allow unmatched historical students
+                  </span>
+                  <span className="mt-1 block text-xs leading-5 text-amber-800">
+                    Keep this off for normal imports. Turn it on only when old students no longer exist in the database; their student attendance will be skipped while teacher/session attendance is retained.
+                  </span>
+                </span>
+              </label>
+
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  disabled={!attendanceImportFile || attendanceImportLoading || attendanceImportCommitted}
+                  onClick={() => void runAttendanceImport(false)}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-extrabold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {attendanceImportLoading && !attendanceImportPreviewPassed ? (
+                    <Loader2 size={17} className="animate-spin" />
+                  ) : (
+                    <ClipboardList size={17} />
+                  )}
+                  Preview Import
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!attendanceImportPreviewPassed || attendanceImportLoading || attendanceImportCommitted}
+                  onClick={() => void runAttendanceImport(true)}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-extrabold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {attendanceImportLoading && attendanceImportPreviewPassed ? (
+                    <Loader2 size={17} className="animate-spin" />
+                  ) : (
+                    <Upload size={17} />
+                  )}
+                  Import Now
+                </button>
+
+                {attendanceImportCommitted && (
+                  <button
+                    type="button"
+                    onClick={() => window.location.reload()}
+                    className="inline-flex items-center gap-2 rounded-2xl border border-blue-200 bg-blue-50 px-5 py-3 text-sm font-extrabold text-blue-700 hover:bg-blue-100"
+                  >
+                    <RefreshCw size={17} /> Refresh Dashboard
+                  </button>
+                )}
+              </div>
+
+              {attendanceImportMessage && (
+                <div
+                  className={`rounded-2xl border px-4 py-3 text-sm font-bold ${
+                    attendanceImportCommitted || attendanceImportPreviewPassed
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                      : "border-rose-200 bg-rose-50 text-rose-800"
+                  }`}
+                >
+                  {attendanceImportMessage}
+                </div>
+              )}
+
+              {attendanceImportOutput && (
+                <div>
+                  <div className="mb-2 text-xs font-extrabold uppercase tracking-wide text-slate-500">Import report</div>
+                  <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-2xl bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+                    {attendanceImportOutput}
+                  </pre>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

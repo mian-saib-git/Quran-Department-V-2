@@ -10,6 +10,7 @@ from django.db.models import Prefetch, Q
 from django.utils import timezone
 
 from .models import (
+    Attendance,
     ClassSchedule,
     QuranClassCoverage,
     QuranSalaryAdjustment,
@@ -921,9 +922,15 @@ def calculate_department_payrolls(
     year: int,
     month: int,
     actor=None,
+    target_teacher_ids=None,
 ):
     """
-    Recalculate all non-locked Quran payrolls in a department/month.
+    Recalculate Quran payrolls using the complete department/month
+    calculation context.
+
+    When target_teacher_ids is provided, the full department context is
+    still calculated so dynamic class-count rates remain correct, but only
+    the selected teacher payroll rows and ledgers are persisted.
 
     Locked states:
       Pending Super Admin
@@ -972,6 +979,51 @@ def calculate_department_payrolls(
         for row in coverages
     }
 
+    # Salary accrues only through the local calculation date.
+    #
+    # Historical months use month-end. Current months use today.
+    # Future months therefore have no earned salary yet.
+    as_of_date = min(
+        end,
+        timezone.localdate(),
+    )
+
+    student_ids = [
+        student.id
+        for student in context["students"]
+    ]
+
+    student_attendance_map = {
+        (
+            row.student_id,
+            row.date,
+        ): row.status
+        for row in (
+            Attendance.objects
+            .filter(
+                entity_type=(
+                    Attendance.EntityType.STUDENT
+                ),
+                student_id__in=student_ids,
+                date__range=(
+                    start,
+                    as_of_date,
+                ),
+            )
+            .only(
+                "student_id",
+                "date",
+                "status",
+            )
+        )
+    }
+
+    salary_earning_student_statuses = {
+        Attendance.Status.PRESENT,
+        Attendance.Status.ABSENT,
+        Attendance.Status.LEAVE,
+    }
+
     entries = []
 
     # --------------------------------------------------------------
@@ -993,8 +1045,43 @@ def calculate_department_payrolls(
             end,
         )
 
+        earned_payroll_dates = []
+
+        for current in payroll_dates:
+            # Future salary must never be pre-credited.
+            if current > as_of_date:
+                continue
+
+            # Virtual payroll filler dates never earn salary.
+            if not _is_real_scheduled_date(
+                schedule_rows,
+                current,
+            ):
+                continue
+
+            # No Attendance row means Student Not Marked.
+            # Not Marked earns zero for that real scheduled session.
+            student_attendance_status = (
+                student_attendance_map.get(
+                    (
+                        student.id,
+                        current,
+                    )
+                )
+            )
+
+            if (
+                student_attendance_status
+                not in salary_earning_student_statuses
+            ):
+                continue
+
+            earned_payroll_dates.append(
+                current
+            )
+
         for unit_number, current in enumerate(
-            payroll_dates,
+            earned_payroll_dates,
             start=1,
         ):
             state = daily_states.get(current)
@@ -1045,6 +1132,18 @@ def calculate_department_payrolls(
                         ),
                         "real_scheduled_date": (
                             is_real_scheduled_date
+                        ),
+                        "student_attendance_status": (
+                            student_attendance_map.get(
+                                (
+                                    student.id,
+                                    current,
+                                )
+                            )
+                        ),
+                        "attendance_backed_earning": True,
+                        "salary_as_of_date": str(
+                            as_of_date
                         ),
                         "policy_id": policy.id,
                         "policy_effective_from": str(
@@ -1109,22 +1208,18 @@ def calculate_department_payrolls(
                 )
             )
 
-            # If student is also absent/leave, no substitute
-            # payment is allowed even if a substitute was
-            # accidentally assigned.
-            student_unavailable = (
+            # Substitute earning is allowed only when the
+            # student's attendance is explicitly Present.
+            #
+            # Absent, Leave, and Not Marked must never generate
+            # substitute salary, even if stale coverage data says
+            # a substitute was assigned.
+            if (
                 coverage.student_status
-                in {
-                    QuranClassCoverage
-                    .StudentStatus
-                    .ABSENT,
-                    QuranClassCoverage
-                    .StudentStatus
-                    .LEAVE,
-                }
-            )
-
-            if student_unavailable:
+                != QuranClassCoverage
+                .StudentStatus
+                .PRESENT
+            ):
                 continue
 
             if (
@@ -1312,6 +1407,27 @@ def calculate_department_payrolls(
         row.teacher_id
         for row in all_adjustments
     )
+
+    if target_teacher_ids is not None:
+        normalized_target_teacher_ids = set()
+
+        for value in target_teacher_ids:
+            try:
+                teacher_id = int(value)
+            except (
+                TypeError,
+                ValueError,
+            ):
+                continue
+
+            if teacher_id > 0:
+                normalized_target_teacher_ids.add(
+                    teacher_id
+                )
+
+        teacher_ids.intersection_update(
+            normalized_target_teacher_ids
+        )
 
     teachers = {
         teacher.id: teacher
@@ -1757,6 +1873,9 @@ def calculate_teacher_payroll(
         year,
         month,
         actor,
+        target_teacher_ids={
+            teacher.id,
+        },
     )
 
     return QuranTeacherMonthlyPayroll.objects.get(
@@ -1767,9 +1886,300 @@ def calculate_teacher_payroll(
     )
 
 
+
+def payroll_readiness(payroll):
+    # Live readiness checks for Quran payroll lifecycle transitions.
+    start, end = month_bounds(
+        payroll.year,
+        payroll.month,
+    )
+
+    coverage_rows = (
+        QuranClassCoverage.objects
+        .filter(
+            department=payroll.department,
+            original_teacher=payroll.teacher,
+            date__range=(start, end),
+        )
+    )
+
+    unresolved_coverages = (
+        coverage_rows
+        .filter(
+            coverage_status=(
+                QuranClassCoverage
+                .CoverageStatus
+                .UNRESOLVED
+            ),
+        )
+        .count()
+    )
+
+    not_marked_coverages = (
+        coverage_rows
+        .filter(
+            teacher_status__in=[
+                QuranClassCoverage
+                .TeacherStatus
+                .ABSENT,
+                QuranClassCoverage
+                .TeacherStatus
+                .LEAVE,
+            ],
+            student_status=(
+                QuranClassCoverage
+                .StudentStatus
+                .NOT_MARKED
+            ),
+        )
+        .count()
+    )
+
+    present_without_substitute = (
+        coverage_rows
+        .filter(
+            teacher_status__in=[
+                QuranClassCoverage
+                .TeacherStatus
+                .ABSENT,
+                QuranClassCoverage
+                .TeacherStatus
+                .LEAVE,
+            ],
+            student_status=(
+                QuranClassCoverage
+                .StudentStatus
+                .PRESENT
+            ),
+        )
+        .filter(
+            Q(
+                substitute_teacher__isnull=True
+            )
+            | ~Q(
+                coverage_status=(
+                    QuranClassCoverage
+                    .CoverageStatus
+                    .ASSIGNED
+                )
+            )
+        )
+        .count()
+    )
+
+    invalid_nonpresent_assignments = (
+        coverage_rows
+        .filter(
+            teacher_status__in=[
+                QuranClassCoverage
+                .TeacherStatus
+                .ABSENT,
+                QuranClassCoverage
+                .TeacherStatus
+                .LEAVE,
+            ],
+            student_status__in=[
+                QuranClassCoverage
+                .StudentStatus
+                .ABSENT,
+                QuranClassCoverage
+                .StudentStatus
+                .LEAVE,
+                QuranClassCoverage
+                .StudentStatus
+                .NOT_MARKED,
+            ],
+            coverage_status=(
+                QuranClassCoverage
+                .CoverageStatus
+                .ASSIGNED
+            ),
+            substitute_teacher__isnull=False,
+        )
+        .count()
+    )
+
+    pending_adjustments = (
+        QuranSalaryAdjustment.objects
+        .filter(
+            department=payroll.department,
+            teacher=payroll.teacher,
+            salary_year=payroll.year,
+            salary_month=payroll.month,
+            status=(
+                QuranSalaryAdjustment
+                .Status
+                .PENDING
+            ),
+        )
+        .count()
+    )
+
+    operational_blockers = []
+
+    if not payroll.calculated_at:
+        operational_blockers.append({
+            "code": "not_calculated",
+            "count": 1,
+            "message": (
+                "Payroll must be calculated before "
+                "it can be submitted."
+            ),
+        })
+
+    if unresolved_coverages:
+        operational_blockers.append({
+            "code": "unresolved_coverages",
+            "count": unresolved_coverages,
+            "message": (
+                "Teacher absence/leave sessions still "
+                "have unresolved substitute coverage."
+            ),
+        })
+
+    if not_marked_coverages:
+        operational_blockers.append({
+            "code": "not_marked_student_attendance",
+            "count": not_marked_coverages,
+            "message": (
+                "Student attendance is still Not Marked "
+                "for teacher absence/leave sessions."
+            ),
+        })
+
+    if present_without_substitute:
+        operational_blockers.append({
+            "code": "present_without_substitute",
+            "count": present_without_substitute,
+            "message": (
+                "Present students under teacher "
+                "absence/leave are missing a valid "
+                "substitute assignment."
+            ),
+        })
+
+    if invalid_nonpresent_assignments:
+        operational_blockers.append({
+            "code": "invalid_substitute_assignment",
+            "count": invalid_nonpresent_assignments,
+            "message": (
+                "A substitute is assigned to a student "
+                "who is Absent, Leave, or Not Marked."
+            ),
+        })
+
+    approval_blockers = list(
+        operational_blockers
+    )
+
+    if pending_adjustments:
+        approval_blockers.append({
+            "code": "pending_adjustments",
+            "count": pending_adjustments,
+            "message": (
+                "Pending salary adjustments must be "
+                "approved or rejected before payroll "
+                "approval."
+            ),
+        })
+
+    return {
+        "department_submission_ready": (
+            len(operational_blockers) == 0
+        ),
+        "super_admin_approval_ready": (
+            len(approval_blockers) == 0
+        ),
+        "operational_blockers": (
+            operational_blockers
+        ),
+        "approval_blockers": (
+            approval_blockers
+        ),
+        "counts": {
+            "unresolved_coverages": (
+                unresolved_coverages
+            ),
+            "not_marked_student_attendance": (
+                not_marked_coverages
+            ),
+            "present_without_substitute": (
+                present_without_substitute
+            ),
+            "invalid_substitute_assignments": (
+                invalid_nonpresent_assignments
+            ),
+            "pending_adjustments": (
+                pending_adjustments
+            ),
+        },
+    }
+
+
+def adjustment_payload(adjustment):
+    return {
+        "id": adjustment.id,
+        "payroll_id": adjustment.payroll_id,
+        "teacher_id": adjustment.teacher_id,
+        "teacher_name": str(
+            adjustment.teacher
+        ),
+        "salary_month": (
+            adjustment.salary_month
+        ),
+        "salary_year": (
+            adjustment.salary_year
+        ),
+        "adjustment_type": (
+            adjustment.adjustment_type
+        ),
+        "effect": adjustment.effect,
+        "amount": decimal_text(
+            adjustment.amount
+        ),
+        "reason": adjustment.reason,
+        "source_month": (
+            adjustment.source_month
+        ),
+        "source_year": (
+            adjustment.source_year
+        ),
+        "student_id": (
+            adjustment.student_id
+        ),
+        "status": adjustment.status,
+        "requested_by_id": (
+            adjustment.requested_by_id
+        ),
+        "requested_at": (
+            adjustment.requested_at.isoformat()
+            if adjustment.requested_at
+            else None
+        ),
+        "reviewed_by_id": (
+            adjustment.reviewed_by_id
+        ),
+        "reviewed_at": (
+            adjustment.reviewed_at.isoformat()
+            if adjustment.reviewed_at
+            else None
+        ),
+        "review_note": (
+            adjustment.review_note
+        ),
+    }
+
+
 def payroll_payload(payroll):
     return {
         "id": payroll.id,
+        "adjustments": [
+            adjustment_payload(
+                adjustment
+            )
+            for adjustment
+            in payroll.adjustments.all()
+        ],
         "teacher_id": payroll.teacher_id,
         "teacher_name": str(payroll.teacher),
         "teacher_username": (
@@ -1848,6 +2258,9 @@ def payroll_payload(payroll):
         ),
         "calculation_snapshot": (
             payroll.calculation_snapshot or {}
+        ),
+        "readiness": payroll_readiness(
+            payroll
         ),
     }
 

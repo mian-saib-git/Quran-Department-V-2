@@ -2,6 +2,11 @@ from django.urls import path
 
 from .attendance_v2_api import QuranTeacherSessionAttendanceView
 
+from .salary_v2_api import (
+    QuranSalaryV2PayrollView,
+    QuranSalaryV2ProofView,
+)
+
 from .quran_management_api import (
     DroppedLeaveStudentsView,
     QuranSalaryAuditView,
@@ -19,6 +24,7 @@ from .views import (
     DailyLessonReportListCreateView,
     AcademyStateView,
     AttendanceListCreateView,
+    AttendanceMonthlyImportView,
     AttendanceDeleteView,
     MonthlyLessonPlanListCreateView,
     MonthlyLessonPlanDetailView,
@@ -29,6 +35,16 @@ LessonAccessRequestDetailView,
 )
 
 urlpatterns = [
+    path(
+        "teacher-salary-v2/",
+        QuranSalaryV2PayrollView.as_view(),
+        name="academy_teacher_salary_v2",
+    ),
+    path(
+        "teacher-salary-v2/proof/",
+        QuranSalaryV2ProofView.as_view(),
+        name="academy_teacher_salary_v2_proof",
+    ),
     path("dropped-leave/", DroppedLeaveStudentsView.as_view(), name="academy_dropped_leave"),
     path("teacher-salary/", QuranSalaryDashboardView.as_view(), name="academy_teacher_salary"),
     path("teacher-salary/settings/", QuranSalarySettingsView.as_view(), name="academy_teacher_salary_settings"),
@@ -69,6 +85,7 @@ path("lesson-access-requests/<int:pk>/", LessonAccessRequestDetailView.as_view()
         name="academy_teacher_session_attendance_v2",
     ),
     path("attendance/", AttendanceListCreateView.as_view(), name="academy_attendance"),
+    path("attendance/import-monthly/", AttendanceMonthlyImportView.as_view(), name="academy_attendance_import_monthly"),
     path("attendance/<int:pk>/", AttendanceDeleteView.as_view(), name="academy_attendance_delete"),
 
     # Monthly Lesson Plan API

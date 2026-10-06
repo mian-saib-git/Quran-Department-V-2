@@ -67,3 +67,45 @@ refine_locked_feature_ui.py
 *.bak
 *_diagnostic.txt
 !backend/.vscode/settings.json
+
+# ============================================================
+# Local secrets / environments
+# ============================================================
+.env
+.env.*
+!.env.example
+
+venv/
+.venv/
+node_modules/
+dist/
+build/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local database / dumps
+*.dump
+*.sql
+
+# Local development/update backups
+_update_backups/
+_update_work/
+*.backup
+*.before
+*.before_*
+*.before-*
+
+# Temporary review artifacts
+current-source-for-review/
+current-source-for-review.zip
+dashboard-performance-partial.diff.txt
+
+# Temporary stage patch scripts
+backend/stage*_apply.ps1
+
+# Local hotfix backups
+*.dashboard-hotfix-backup-*

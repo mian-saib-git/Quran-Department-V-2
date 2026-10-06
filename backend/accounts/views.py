@@ -29,6 +29,7 @@ from .serializers import (
 )
 from academy.models import TeacherProfile, StudentProfile, StudentSubject, ClassSchedule
 from academy.ws_notify import notify_global
+from academy.payroll_source_locks import PayrollSourceLockedError
 
 
 COORDINATOR_TAB_DEFINITIONS = {
@@ -929,7 +930,13 @@ class CoordinatorAccountDetailView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        account = serializer.save()
+        try:
+            account = serializer.save()
+        except PayrollSourceLockedError as exc:
+            return Response(
+                exc.payload,
+                status=status.HTTP_409_CONFLICT,
+            )
 
         notify_global("academy_update", {
             "event": "account_updated",

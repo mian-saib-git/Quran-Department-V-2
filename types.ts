@@ -68,7 +68,11 @@ export interface AttendanceRecord {
   entityId: string;
   entityType: EntityType;
   date: string; // YYYY-MM-DD
-  classKey: string; // teacher: timeSlot, student: "" (or keep empty)
+  classKey: string; // historical class/session time when available
+  teacherId?: string;
+  teacherName?: string;
+  studentId?: string;
+  studentName?: string;
   status: AttendanceStatus;
   timestamp: number;
   markedById?: string;
@@ -81,6 +85,7 @@ export interface AppState {
   teachers: Teacher[];
   students: Student[];
   attendance: AttendanceRecord[];
+  isPartial?: boolean;
 }
 
 export interface TimeSlotData {

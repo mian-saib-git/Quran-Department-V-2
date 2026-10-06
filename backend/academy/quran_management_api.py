@@ -35,6 +35,7 @@ from .salary_service import (
     salary_slip_payload,
 )
 from .ws_notify import notify_global
+from .salary_v2_models import QuranStudentDropEvent
 
 
 def _user_department(user):
@@ -119,6 +120,30 @@ class DroppedLeaveStudentsView(APIView):
 
         students = list(_scoped_students(request.user))
         student_ids = [item.id for item in students]
+
+        active_drop_rows = (
+            QuranStudentDropEvent.objects
+            .filter(
+                department=department,
+                student_id__in=student_ids,
+                status=QuranStudentDropEvent.Status.DROPPED,
+                rejoined_date__isnull=True,
+            )
+            .order_by(
+                "student_id",
+                "-drop_effective_date",
+                "-id",
+            )
+        )
+
+        active_drop_by_student = {}
+
+        for drop_event in active_drop_rows:
+            active_drop_by_student.setdefault(
+                drop_event.student_id,
+                drop_event,
+            )
+
         attendance_rows = Attendance.objects.filter(
             entity_type=Attendance.EntityType.STUDENT,
             student_id__in=student_ids,
@@ -136,19 +161,62 @@ class DroppedLeaveStudentsView(APIView):
         results = []
         for student in students:
             rows = grouped.get(student.id, [])
-            if not rows:
-                continue
-            latest_status = rows[0].status
-            if latest_status not in {Attendance.Status.LEAVE, Attendance.Status.ABSENT}:
-                continue
+            active_drop = active_drop_by_student.get(
+                student.id
+            )
+
+            latest_status = (
+                rows[0].status
+                if rows
+                else ""
+            )
 
             streak_rows = []
-            for row in rows:
-                if row.status != latest_status:
-                    break
-                streak_rows.append(row)
-            if len(streak_rows) < 2:
-                continue
+
+            if active_drop is None:
+                if not rows:
+                    continue
+
+                if latest_status not in {
+                    Attendance.Status.LEAVE,
+                    Attendance.Status.ABSENT,
+                }:
+                    continue
+
+                for row in rows:
+                    if row.status != latest_status:
+                        break
+                    streak_rows.append(row)
+
+                if len(streak_rows) < 2:
+                    continue
+
+                flag_type = (
+                    "leave"
+                    if latest_status == Attendance.Status.LEAVE
+                    else "dropped"
+                )
+                attendance_status = latest_status
+                days_count = len(streak_rows)
+                streak_start = str(streak_rows[-1].date)
+                last_marked_date = str(streak_rows[0].date)
+            else:
+                flag_type = "dropped"
+                attendance_status = (
+                    latest_status
+                    if latest_status in {
+                        Attendance.Status.LEAVE,
+                        Attendance.Status.ABSENT,
+                    }
+                    else Attendance.Status.ABSENT
+                )
+                days_count = 3
+                streak_start = str(
+                    active_drop.streak_start_date
+                )
+                last_marked_date = str(
+                    active_drop.streak_end_date
+                )
 
             schedule = _student_schedule_summary(student)
             results.append({
@@ -157,15 +225,27 @@ class DroppedLeaveStudentsView(APIView):
                 "username": student.user.username,
                 "teacher_id": student.teacher_id,
                 "teacher_name": str(student.teacher),
-                "flag_type": "leave" if latest_status == Attendance.Status.LEAVE else "dropped",
-                "attendance_status": latest_status,
-                "days_count": len(streak_rows),
-                "streak_start": str(streak_rows[-1].date),
-                "last_marked_date": str(streak_rows[0].date),
+                "flag_type": flag_type,
+                "attendance_status": attendance_status,
+                "days_count": days_count,
+                "streak_start": streak_start,
+                "last_marked_date": last_marked_date,
                 "student_type": student.student_type,
                 "student_type_label": student.get_student_type_display(),
                 "class_status": student.class_status,
                 "class_status_label": student.get_class_status_display(),
+                "active_drop_event": active_drop is not None,
+                "drop_event_id": (
+                    active_drop.id
+                    if active_drop is not None
+                    else None
+                ),
+                "drop_effective_date": (
+                    str(active_drop.drop_effective_date)
+                    if active_drop is not None
+                    else ""
+                ),
+                "can_rejoin": active_drop is not None,
                 **schedule,
             })
 

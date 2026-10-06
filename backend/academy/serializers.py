@@ -108,6 +108,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "student_id",
             "student_name",
             "date",
+            "class_key",
             "status",
             "marked_by_username",
             "created_at",
