@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
+import re
 
 from django.db import transaction
 from django.db.models import Prefetch, Q
@@ -31,7 +32,6 @@ DEFAULT_RATE_16_TO_19 = Decimal("90.00")
 DEFAULT_RATE_20_PLUS = Decimal("100.00")
 DEFAULT_MONTHLY_CAP = 20
 
-PAYROLL_WEEKS = 4
 PAYROLL_UNITS_PER_WEEK = 5
 
 WEEKDAY_NUMBERS = {
@@ -445,30 +445,25 @@ def _payroll_dates_for_student(
     schedule_rows,
     month_start: date,
     month_end: date,
+    confirmed_session_dates=None,
 ):
     """
-    Build the maximum 20 salary-unit dates.
+    Build candidate salary dates from every day of the calendar month.
 
-    Salary uses four seven-day payroll blocks with a maximum of five
-    salary units in each block.
+    Seven-day payroll blocks start on the 1st, 8th, 15th, 22nd and,
+    when present, 29th. Each block supplies at most five candidates.
+    Real scheduled/corroborated sessions are preferred over virtual
+    payroll filler dates. No fake Attendance records are created.
 
-    Real scheduled dates are selected first according to the schedule
-    version that was effective on that exact date.
-
-    A 2-day or 3-day class still receives the same 5-unit weekly salary
-    basis. Missing financial units are represented only inside payroll
-    as virtual dates. No fake Attendance records are created.
+    This function does NOT apply the monthly 20-unit cap: virtual dates
+    and unmarked attendance must first be removed so eligible sessions
+    on days 29-31 can fill an earlier shortfall.
     """
     selected = []
+    confirmed_session_dates = set(confirmed_session_dates or ())
 
-    for week_index in range(PAYROLL_WEEKS):
-        block_start = month_start + timedelta(
-            days=week_index * 7
-        )
-
-        if block_start > month_end:
-            break
-
+    for week_index in range(((month_end - month_start).days // 7) + 1):
+        block_start = month_start + timedelta(days=week_index * 7)
         block_end = min(
             block_start + timedelta(days=6),
             month_end,
@@ -482,10 +477,10 @@ def _payroll_dates_for_student(
             if not state:
                 continue
 
-            if not state["enrolled"]:
+            if not state["enrolled"] and current not in confirmed_session_dates:
                 continue
 
-            if not state["teacher_id"]:
+            if not state["teacher_id"] and current not in confirmed_session_dates:
                 continue
 
             if not _base_status_is_salary_active(
@@ -501,10 +496,10 @@ def _payroll_dates_for_student(
         actual = [
             current
             for current in candidates
-            if _is_real_scheduled_date(
+            if (_is_real_scheduled_date(
                 schedule_rows,
                 current,
-            )
+            ) or current in confirmed_session_dates)
         ]
 
         # A class may technically contain more than five schedule rows
@@ -542,10 +537,46 @@ def _payroll_dates_for_student(
 
         chosen = sorted(set(chosen))
 
-        for current in chosen:
-            selected.append(current)
+        selected.extend(chosen)
 
-    return selected[:DEFAULT_MONTHLY_CAP]
+    return selected
+
+
+def _earned_payroll_dates_for_student(
+    payroll_dates,
+    schedule_rows,
+    corroborated_dates,
+    attendance_status_by_date,
+    as_of_date,
+):
+    """Enforce the monthly cap *after* eligibility has been verified.
+
+    A weekly candidate with no marked attendance never uses up one of
+    the 20 paid units. The input has already been limited to at most five
+    candidate dates for each seven-day block. This function is shared
+    by payroll and the diagnostic to avoid inconsistent unit counts.
+    """
+    earning_statuses = {
+        Attendance.Status.PRESENT,
+        Attendance.Status.ABSENT,
+        Attendance.Status.LEAVE,
+    }
+    confirmed = set(corroborated_dates or ())
+    earned = []
+    for current in payroll_dates:
+        if current > as_of_date:
+            continue
+        if not (
+            _is_real_scheduled_date(schedule_rows, current)
+            or current in confirmed
+        ):
+            continue
+        if attendance_status_by_date.get(current) not in earning_statuses:
+            continue
+        earned.append(current)
+        if len(earned) >= DEFAULT_MONTHLY_CAP:
+            break
+    return earned
 
 
 def build_department_month_context(
@@ -993,36 +1024,76 @@ def calculate_department_payrolls(
         for student in context["students"]
     ]
 
+    # Imported historical student rows may predate schedule history.  Only a
+    # matching teacher-session row (same teacher/date/HH:MM) corroborates a
+    # real class when there is no effective ClassSchedule for that date.
+    # This is deliberately NOT a blanket "any student attendance = salary"
+    # fallback; unmatched, blank-time and teacher-only imports cannot earn.
+    student_attendance_rows = list(
+        Attendance.objects.filter(
+            entity_type=Attendance.EntityType.STUDENT,
+            student_id__in=student_ids,
+            date__range=(start, as_of_date),
+        ).only("student_id", "teacher_id", "date", "class_key", "status")
+    )
     student_attendance_map = {
-        (
-            row.student_id,
-            row.date,
-        ): row.status
-        for row in (
-            Attendance.objects
-            .filter(
-                entity_type=(
-                    Attendance.EntityType.STUDENT
-                ),
-                student_id__in=student_ids,
-                date__range=(
-                    start,
-                    as_of_date,
-                ),
-            )
-            .only(
-                "student_id",
-                "date",
-                "status",
-            )
+        (row.student_id, row.date): row.status
+        for row in student_attendance_rows
+    }
+    scoped_teacher_ids = set(
+        TeacherProfile.objects.filter(
+            Q(department=department) | Q(user__department=department)
+        ).values_list("id", flat=True)
+    )
+    session_keys = {
+        (row.teacher_id, row.date, row.class_key)
+        for row in student_attendance_rows
+        if row.teacher_id in scoped_teacher_ids
+        and re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", row.class_key or "")
+    }
+    teacher_sessions = {
+        (row.teacher_id, row.date, row.class_key): row
+        for row in Attendance.objects.filter(
+            entity_type=Attendance.EntityType.TEACHER,
+            teacher_id__in={key[0] for key in session_keys},
+            date__range=(start, as_of_date),
+        ).only("teacher_id", "date", "class_key", "status")
+        if (row.teacher_id, row.date, row.class_key) in session_keys
+    } if session_keys else {}
+    verified_sessions = {
+        (row.student_id, row.date): row
+        for row in student_attendance_rows
+        if (
+            (row.teacher_id, row.date, row.class_key) in teacher_sessions
+            and row.status in {
+                Attendance.Status.PRESENT,
+                Attendance.Status.ABSENT,
+                Attendance.Status.LEAVE,
+            }
         )
     }
 
-    salary_earning_student_statuses = {
-        Attendance.Status.PRESENT,
-        Attendance.Status.ABSENT,
-        Attendance.Status.LEAVE,
-    }
+    # The date-based class-count tier must also reflect a confirmed
+    # historical transfer/enrollment. Otherwise the fallback earning would
+    # be credited to the historical teacher at an incorrect rate tier.
+    for (student_id, session_date), attendance in verified_sessions.items():
+        if student_id not in context["states_by_student"]:
+            continue
+        state = context["states_by_student"][student_id].get(session_date)
+        schedules = context["schedule_rows_by_student"][student_id]
+        if not state or _is_real_scheduled_date(schedules, session_date):
+            continue
+        if not _base_status_is_salary_active(state.get("class_status")):
+            continue
+        if _drop_active_on_date(context["drop_events_by_student"][student_id], session_date):
+            continue
+        current_teacher_id = state.get("teacher_id")
+        originally_counted = bool(state.get("enrolled") and current_teacher_id)
+        if originally_counted and current_teacher_id != attendance.teacher_id:
+            key = (current_teacher_id, session_date)
+            context["class_counts"][key] = max(0, context["class_counts"][key] - 1)
+        if not originally_counted or current_teacher_id != attendance.teacher_id:
+            context["class_counts"][(attendance.teacher_id, session_date)] += 1
 
     entries = []
 
@@ -1038,47 +1109,30 @@ def calculate_department_payrolls(
             "schedule_rows_by_student"
         ][student.id]
 
+        corroborated_dates = {
+            session_date
+            for (student_id, session_date) in verified_sessions
+            if student_id == student.id
+        }
         payroll_dates = _payroll_dates_for_student(
             daily_states,
             schedule_rows,
             start,
             end,
+            confirmed_session_dates=corroborated_dates,
         )
 
-        earned_payroll_dates = []
-
-        for current in payroll_dates:
-            # Future salary must never be pre-credited.
-            if current > as_of_date:
-                continue
-
-            # Virtual payroll filler dates never earn salary.
-            if not _is_real_scheduled_date(
-                schedule_rows,
-                current,
-            ):
-                continue
-
-            # No Attendance row means Student Not Marked.
-            # Not Marked earns zero for that real scheduled session.
-            student_attendance_status = (
-                student_attendance_map.get(
-                    (
-                        student.id,
-                        current,
-                    )
-                )
-            )
-
-            if (
-                student_attendance_status
-                not in salary_earning_student_statuses
-            ):
-                continue
-
-            earned_payroll_dates.append(
-                current
-            )
+        student_status_by_date = {
+            current: student_attendance_map.get((student.id, current))
+            for current in payroll_dates
+        }
+        earned_payroll_dates = _earned_payroll_dates_for_student(
+            payroll_dates,
+            schedule_rows,
+            corroborated_dates,
+            student_status_by_date,
+            as_of_date,
+        )
 
         for unit_number, current in enumerate(
             earned_payroll_dates,
@@ -1089,7 +1143,15 @@ def calculate_department_payrolls(
             if not state:
                 continue
 
-            teacher_id = state.get("teacher_id")
+            historical_session = verified_sessions.get((student.id, current))
+            effective_schedule = _is_real_scheduled_date(schedule_rows, current)
+            # A corroborated historical session may predate imported schedule
+            # history, including a transfer not recorded in profile history.
+            teacher_id = (
+                historical_session.teacher_id
+                if historical_session and not effective_schedule
+                else state.get("teacher_id")
+            )
 
             if not teacher_id:
                 continue
@@ -1103,10 +1165,7 @@ def calculate_department_payrolls(
             )
 
             is_real_scheduled_date = (
-                _is_real_scheduled_date(
-                    schedule_rows,
-                    current,
-                )
+                effective_schedule or historical_session is not None
             )
 
             entries.append(
@@ -1142,6 +1201,9 @@ def calculate_department_payrolls(
                             )
                         ),
                         "attendance_backed_earning": True,
+                        "verified_historical_session": bool(
+                            historical_session and not effective_schedule
+                        ),
                         "salary_as_of_date": str(
                             as_of_date
                         ),
@@ -1167,6 +1229,33 @@ def calculate_department_payrolls(
             )
 
             if not coverage:
+                # Historical CSVs do not automatically create coverage rows.
+                # A matched teacher absence still deducts the original class
+                # rate, but cannot invent an unrecorded substitute payment.
+                teacher_attendance = teacher_sessions.get((
+                    teacher_id,
+                    current,
+                    historical_session.class_key if historical_session else "",
+                )) if historical_session else None
+                if teacher_attendance and teacher_attendance.status in {
+                    Attendance.Status.ABSENT, Attendance.Status.LEAVE,
+                }:
+                    entries.append(_entry(
+                        teacher_id=teacher_id,
+                        student_id=student.id,
+                        entry_type=QuranSalaryLedgerEntry.EntryType.TEACHER_ABSENCE_DEDUCTION,
+                        effective_date=current,
+                        salary_unit_number=unit_number,
+                        class_count_at_time=class_count,
+                        rate=rate,
+                        amount=-rate,
+                        description="Teacher absent/leave in corroborated historical attendance (no substitute inferred).",
+                        metadata={
+                            "teacher_status": teacher_attendance.status,
+                            "verified_historical_session": True,
+                            "coverage_missing": True,
+                        },
+                    ))
                 continue
 
             if coverage.teacher_status not in {
@@ -1751,9 +1840,9 @@ def calculate_department_payrolls(
         payroll.calculation_snapshot = {
             "version": 2,
             "salary_rule": (
-                "4 payroll weeks x maximum "
-                "5 salary units = maximum 20 "
-                "salary units per active class"
+                "Full calendar month in consecutive seven-day payroll "
+                "blocks (including days 29-31): maximum 5 eligible "
+                "units per block and maximum 20 earned units per student"
             ),
             "month_start": str(start),
             "month_end": str(end),
@@ -1915,6 +2004,38 @@ def payroll_readiness(payroll):
         .count()
     )
 
+    # CSV historical teacher absences can predate V2 coverage tracking.
+    # Never permit approval when a real matched absence session has no
+    # coverage record: the original teacher is deducted, but a substitute
+    # still needs an explicit, auditable assignment (never inferred).
+    absent_sessions = {
+        (row.date, row.class_key)
+        for row in Attendance.objects.filter(
+            entity_type=Attendance.EntityType.TEACHER,
+            teacher=payroll.teacher,
+            date__range=(start, end),
+            status__in=[Attendance.Status.ABSENT, Attendance.Status.LEAVE],
+        ).only("date", "class_key")
+        if row.class_key
+    }
+    known_coverage_pairs = set(
+        coverage_rows.exclude(
+            coverage_status=QuranClassCoverage.CoverageStatus.CANCELLED
+        ).values_list("student_id", "date")
+    )
+    missing_absence_coverages = (
+        sum(
+            1 for row in Attendance.objects.filter(
+                entity_type=Attendance.EntityType.STUDENT,
+                teacher=payroll.teacher,
+                date__range=(start, end),
+            ).only("student_id", "date", "class_key")
+            if row.student_id
+            and (row.date, row.class_key) in absent_sessions
+            and (row.student_id, row.date) not in known_coverage_pairs
+        ) if absent_sessions else 0
+    )
+
     not_marked_coverages = (
         coverage_rows
         .filter(
@@ -2027,6 +2148,16 @@ def payroll_readiness(payroll):
             ),
         })
 
+    if missing_absence_coverages:
+        operational_blockers.append({
+            "code": "historical_absence_missing_coverage",
+            "count": missing_absence_coverages,
+            "message": (
+                "Imported teacher absence/leave sessions require an explicit "
+                "coverage decision before this payroll can be submitted."
+            ),
+        })
+
     if unresolved_coverages:
         operational_blockers.append({
             "code": "unresolved_coverages",
@@ -2097,6 +2228,7 @@ def payroll_readiness(payroll):
             approval_blockers
         ),
         "counts": {
+            "historical_absence_missing_coverage": missing_absence_coverages,
             "unresolved_coverages": (
                 unresolved_coverages
             ),

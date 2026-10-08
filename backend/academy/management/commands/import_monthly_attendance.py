@@ -16,6 +16,7 @@ from academy.attendance_import import (
     strip_leading_teacher_number,
 )
 from academy.models import Attendance, ClassSchedule, StudentProfile, TeacherProfile
+from academy.attendance_import_payroll import assert_import_unlocked, import_scope, AttendanceImportPayrollLocked
 
 
 class Command(BaseCommand):
@@ -105,7 +106,8 @@ class Command(BaseCommand):
                     warnings.append(
                         f"Student {parsed_student.student_name}: no safe database match. "
                         "Student attendance for this CSV row will be skipped, but teacher/session "
-                        "attendance from the row will still be processed."
+                        "attendance from the row will still be processed. "
+                        "Unmatched student attendance CANNOT produce teacher salary."
                     )
                     continue
                 errors.append(match_error)
@@ -205,7 +207,10 @@ class Command(BaseCommand):
 
             for key, (student, status_value, cell) in student_intents.items():
                 existing = existing_students.get(key)
+                department, institution = import_scope(teacher, student)
                 if existing is None:
+                    assert_import_unlocked(teacher=teacher, target_date=cell.attendance_date,
+                                           class_key=cell.class_time, student=student)
                     Attendance.objects.create(
                         entity_type=Attendance.EntityType.STUDENT,
                         teacher=teacher,
@@ -214,6 +219,8 @@ class Command(BaseCommand):
                         class_key=cell.class_time,
                         status=status_value,
                         marked_by=actor,
+                        department=department,
+                        institution=institution,
                     )
                     continue
 
@@ -225,7 +232,13 @@ class Command(BaseCommand):
                 if existing.status != status_value:
                     changes["status"] = status_value
 
+                if existing.department_id is None and department is not None:
+                    changes["department_id"] = department.id
+                if existing.institution_id is None and institution is not None:
+                    changes["institution_id"] = institution.id
                 if changes:
+                    assert_import_unlocked(teacher=teacher, target_date=cell.attendance_date,
+                                           class_key=cell.class_time, student=student)
                     # Metadata backfills intentionally use QuerySet.update() so
                     # the original marked_by and updated_at audit values are not
                     # rewritten merely because historical relationships are added.
@@ -257,7 +270,10 @@ class Command(BaseCommand):
                 )
                 existing = existing_teachers.get(key)
 
+                department, institution = import_scope(teacher)
                 if existing is None:
+                    assert_import_unlocked(teacher=teacher, target_date=attendance_date,
+                                           class_key=class_time)
                     Attendance.objects.create(
                         entity_type=Attendance.EntityType.TEACHER,
                         teacher=teacher,
@@ -266,6 +282,8 @@ class Command(BaseCommand):
                         class_key=class_time,
                         status=intent["status"],
                         marked_by=actor,
+                        department=department,
+                        institution=institution,
                     )
                     continue
 
@@ -276,7 +294,13 @@ class Command(BaseCommand):
                 if existing.status != intent["status"]:
                     changes["status"] = intent["status"]
 
+                if existing.department_id is None and department is not None:
+                    changes["department_id"] = department.id
+                if existing.institution_id is None and institution is not None:
+                    changes["institution_id"] = institution.id
                 if changes:
+                    assert_import_unlocked(teacher=teacher, target_date=attendance_date,
+                                           class_key=class_time)
                     Attendance.objects.filter(pk=existing.pk).update(**changes)
 
         self.stdout.write(self.style.SUCCESS("IMPORT COMMITTED SUCCESSFULLY."))

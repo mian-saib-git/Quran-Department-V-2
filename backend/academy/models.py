@@ -625,11 +625,13 @@ class Attendance(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["entity_type", "teacher", "date", "class_key"],
+                fields=["teacher", "date", "class_key"],
+                condition=models.Q(entity_type="teacher"),
                 name="unique_teacher_attendance_per_class",
             ),
             models.UniqueConstraint(
-                fields=["entity_type", "student", "date"],
+                fields=["student", "date"],
+                condition=models.Q(entity_type="student"),
                 name="unique_student_attendance_per_day",
             ),
         ]

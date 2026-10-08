@@ -129,12 +129,14 @@ export default function TuitionAttendance({ departmentId, features }: Props) {
     }
   }, [departmentId]);
 
-  const loadAttendanceOnly = useCallback(async () => {
+  const loadAttendanceOnly = useCallback(async (): Promise<boolean> => {
     try {
       const payload = await getTuitionAttendance({ department_id: departmentId });
       setAttendance(payload.results || []);
+      return true;
     } catch (error: any) {
       setMessage(error?.message || "Unable to refresh Tuition attendance.");
+      return false;
     }
   }, [departmentId]);
 
@@ -157,72 +159,72 @@ export default function TuitionAttendance({ departmentId, features }: Props) {
     return map;
   }, [attendance]);
 
-  const handleUpsert = useCallback((args: {
+  const handleUpsert = useCallback(async (args: {
     entityId: string;
     entityType: EntityType;
     date: string;
     status: AttendanceStatus;
     classKey?: string;
-  }) => {
-    void (async () => {
-      if (features.tuition_mark_attendance !== true) {
-        setMessage("Tuition attendance marking is disabled from SaaS settings.");
-        return;
+  }): Promise<boolean> => {
+    if (features.tuition_mark_attendance !== true) {
+      setMessage("Tuition attendance marking is disabled from SaaS settings.");
+      return false;
+    }
+
+    setMessage("");
+    try {
+      if (args.entityType === EntityType.STUDENT) {
+        await markTuitionAttendance({
+          department_id: departmentId,
+          entity_type: "student",
+          schedule_id: Number(args.entityId),
+          date: args.date,
+          status: statusToApi(args.status),
+          class_key: args.classKey || "",
+        });
+      } else {
+        const scheduleMatch = String(args.classKey || "").match(/^schedule:(\d+)$/);
+        await markTuitionAttendance({
+          department_id: departmentId,
+          entity_type: "teacher",
+          schedule_id: scheduleMatch ? Number(scheduleMatch[1]) : undefined,
+          teacher_id: Number(args.entityId),
+          date: args.date,
+          status: statusToApi(args.status),
+          class_key: args.classKey || "",
+        });
       }
 
-      try {
-        if (args.entityType === EntityType.STUDENT) {
-          await markTuitionAttendance({
-            department_id: departmentId,
-            entity_type: "student",
-            schedule_id: Number(args.entityId),
-            date: args.date,
-            status: statusToApi(args.status),
-            class_key: args.classKey || "",
-          });
-        } else {
-          const scheduleMatch = String(args.classKey || "").match(/^schedule:(\d+)$/);
-          await markTuitionAttendance({
-            department_id: departmentId,
-            entity_type: "teacher",
-            schedule_id: scheduleMatch ? Number(scheduleMatch[1]) : undefined,
-            teacher_id: Number(args.entityId),
-            date: args.date,
-            status: statusToApi(args.status),
-            class_key: args.classKey || "",
-          });
-        }
-
-        await loadAttendanceOnly();
-      } catch (error: any) {
-        setMessage(error?.message || "Unable to save attendance.");
-      }
-    })();
+      return await loadAttendanceOnly();
+    } catch (error: any) {
+      setMessage(error?.message || "Unable to save attendance.");
+      return false;
+    }
   }, [departmentId, features.tuition_mark_attendance, loadAttendanceOnly]);
 
-  const handleDelete = useCallback((args: {
+  const handleDelete = useCallback(async (args: {
     entityId: string;
     entityType: EntityType;
     date: string;
     classKey?: string;
-  }) => {
-    void (async () => {
-      if (features.tuition_mark_attendance !== true) {
-        setMessage("Tuition attendance clearing is disabled from SaaS settings.");
-        return;
-      }
+  }): Promise<boolean> => {
+    if (features.tuition_mark_attendance !== true) {
+      setMessage("Tuition attendance clearing is disabled from SaaS settings.");
+      return false;
+    }
 
-      try {
-        const entityType = args.entityType === EntityType.TEACHER ? "teacher" : "student";
-        const key = `${entityType}:${args.entityId}:${args.date}:${args.classKey || ""}`;
-        const existing = attendanceByKey.get(key);
-        if (!existing) return;
-        await deleteTuitionAttendance(existing.id, departmentId);
-        await loadAttendanceOnly();
-      } catch (error: any) {
-        setMessage(error?.message || "Unable to clear attendance.");
-      }
-    })();
+    setMessage("");
+    try {
+      const entityType = args.entityType === EntityType.TEACHER ? "teacher" : "student";
+      const key = `${entityType}:${args.entityId}:${args.date}:${args.classKey || ""}`;
+      const existing = attendanceByKey.get(key);
+      if (!existing) return false;
+      await deleteTuitionAttendance(existing.id, departmentId);
+      return await loadAttendanceOnly();
+    } catch (error: any) {
+      setMessage(error?.message || "Unable to clear attendance.");
+      return false;
+    }
   }, [attendanceByKey, departmentId, features.tuition_mark_attendance, loadAttendanceOnly]);
 
   return (

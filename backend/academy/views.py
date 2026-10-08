@@ -54,6 +54,7 @@ from .attendance_report_import import (
     parse_attendance_report_csv,
 )
 from .attendance_v2_api import reconcile_student_coverage
+from .attendance_import_payroll import AttendanceImportPayrollLocked
 from .payroll_source_locks import (
     PayrollSourceLockedError,
     student_attendance_payroll_lock_payload,
@@ -2517,14 +2518,18 @@ class AttendanceMonthlyImportView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-                report_result = import_attendance_report_csv(
-                    parsed_report,
-                    allowed_teachers=teachers,
-                    allowed_students=students,
-                    actor=request.user,
-                    commit=commit,
-                    allow_unmatched_students=allow_unmatched,
-                )
+                try:
+                    report_result = import_attendance_report_csv(
+                        parsed_report,
+                        allowed_teachers=teachers,
+                        allowed_students=students,
+                        actor=request.user,
+                        commit=commit,
+                        allow_unmatched_students=allow_unmatched,
+                    )
+                except AttendanceImportPayrollLocked as exc:
+                    return Response({"success": False, "detail": str(exc),
+                                     "code": "payroll_source_locked"}, status=status.HTTP_409_CONFLICT)
                 return Response(
                     {
                         **report_result,
@@ -2598,7 +2603,7 @@ class AttendanceMonthlyImportView(APIView):
                     if commit
                     else "Preview passed. No database changes were made."
                 )
-            except CommandError as exc:
+            except (CommandError, AttendanceImportPayrollLocked) as exc:
                 success = False
                 detail = str(exc)
                 output.write(f"\n{detail}\n")

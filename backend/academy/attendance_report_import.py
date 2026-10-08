@@ -12,6 +12,7 @@ from django.db import transaction
 
 from .attendance_import import normalize_name, normalize_time, strip_leading_teacher_number
 from .models import Attendance, StudentProfile, TeacherProfile
+from .attendance_import_payroll import assert_import_unlocked, import_scope, AttendanceImportPayrollLocked
 
 
 REPORT_REQUIRED_COLUMNS = {
@@ -590,6 +591,7 @@ def import_attendance_report_csv(
 
     if unmatched_names:
         output_lines.append("")
+        output_lines.append("PAYROLL WARNING: unmatched students have NO student-side attendance and cannot earn salary from those rows.")
         output_lines.append(f"Unmatched historical students ({len(unmatched_names)}):")
         for name in sorted(unmatched_names):
             output_lines.append(f"  - {name}")
@@ -633,7 +635,10 @@ def import_attendance_report_csv(
     with transaction.atomic():
         for key, intent in student_intents.items():
             existing = existing_students.get(key)
+            department, institution = import_scope(intent["teacher"], intent["student"])
             if existing is None:
+                assert_import_unlocked(teacher=intent["teacher"], target_date=key[1],
+                                       class_key=intent["class_time"], student=intent["student"])
                 Attendance.objects.create(
                     entity_type=Attendance.EntityType.STUDENT,
                     teacher=intent["teacher"],
@@ -642,6 +647,8 @@ def import_attendance_report_csv(
                     class_key=intent["class_time"] or "",
                     status=intent["status"],
                     marked_by=actor,
+                    department=department,
+                    institution=institution,
                 )
                 continue
 
@@ -652,13 +659,21 @@ def import_attendance_report_csv(
                 changes["class_key"] = intent["class_time"] or ""
             if existing.status != intent["status"]:
                 changes["status"] = intent["status"]
+            if existing.department_id is None and department is not None:
+                changes["department_id"] = department.id
+            if existing.institution_id is None and institution is not None:
+                changes["institution_id"] = institution.id
             if changes:
+                assert_import_unlocked(teacher=intent["teacher"], target_date=key[1],
+                                       class_key=intent["class_time"], student=intent["student"])
                 Attendance.objects.filter(pk=existing.pk).update(**changes)
 
         for key, intent in teacher_intents.items():
             existing = existing_teachers.get(key)
             desired_student_id = direct_student_id(intent)
+            department, institution = import_scope(intent["teacher"])
             if existing is None:
+                assert_import_unlocked(teacher=intent["teacher"], target_date=key[1], class_key=key[2])
                 Attendance.objects.create(
                     entity_type=Attendance.EntityType.TEACHER,
                     teacher=intent["teacher"],
@@ -667,6 +682,8 @@ def import_attendance_report_csv(
                     class_key=key[2] or "",
                     status=intent["status"],
                     marked_by=actor,
+                    department=department,
+                    institution=institution,
                 )
                 continue
 
@@ -675,7 +692,12 @@ def import_attendance_report_csv(
                 changes["student_id"] = desired_student_id
             if existing.status != intent["status"]:
                 changes["status"] = intent["status"]
+            if existing.department_id is None and department is not None:
+                changes["department_id"] = department.id
+            if existing.institution_id is None and institution is not None:
+                changes["institution_id"] = institution.id
             if changes:
+                assert_import_unlocked(teacher=intent["teacher"], target_date=key[1], class_key=key[2])
                 Attendance.objects.filter(pk=existing.pk).update(**changes)
 
     output_lines.append("")
