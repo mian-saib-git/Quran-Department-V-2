@@ -1130,7 +1130,9 @@ export default function App() {
 
   const isSuperAdmin = Boolean((session as any)?.user?.is_superuser);
   const sessionUsername = String((session as any)?.user?.username || (session as any)?.username || "").toLowerCase();
-  const isPlatformAdmin = session?.role === "platform_admin" || sessionUsername === "mian";
+  const isPlatformAdmin =
+    isSuperAdmin ||
+    session?.role === "platform_admin";
 
   // Quran navigation guards must never run inside the separate Tuition portal.
   // The permission map is refreshed when the browser regains focus, so without
@@ -3484,6 +3486,7 @@ export default function App() {
 
   if (
     session &&
+    !isPlatformAdmin &&
     isTuitionDepartment &&
     effectiveDepartmentRole === "student"
   ) {
@@ -3510,6 +3513,7 @@ export default function App() {
 
   if (
     session &&
+    !isPlatformAdmin &&
     isTuitionDepartment &&
     effectiveDepartmentRole === "teacher"
   ) {
@@ -3535,7 +3539,7 @@ export default function App() {
   }
 
   // ---------------- Separate role portals ----------------
-  if (effectiveDepartmentRole === "teacher") {
+  if (!isPlatformAdmin && effectiveDepartmentRole === "teacher") {
     return (
       <>
         <Suspense fallback={<TabLoading />}>
@@ -3554,7 +3558,7 @@ export default function App() {
     );
   }
 
-  if (effectiveDepartmentRole === "student") {
+  if (!isPlatformAdmin && effectiveDepartmentRole === "student") {
     return (
       <>
         <Suspense fallback={<TabLoading />}>
