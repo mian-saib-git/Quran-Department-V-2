@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Iterable
 
 from django.db import transaction
+from django.db.models import Q
 
 from .attendance_import import normalize_name, normalize_time, strip_leading_teacher_number
-from .models import Attendance, StudentProfile, TeacherProfile
+from .models import Attendance, ClassSchedule, StudentProfile, TeacherProfile
 from .attendance_import_payroll import assert_import_unlocked, import_scope, AttendanceImportPayrollLocked
 
 
@@ -302,11 +303,47 @@ def _student_exact_matches(name_target: str, pool: Iterable[StudentProfile]):
     return matches
 
 
+def _resolve_schedule_match(
+    candidates: list[StudentProfile],
+    teacher: TeacherProfile,
+    attendance_date: date,
+    class_time: str,
+):
+    """Resolve same-name candidates only from an exact, date-valid schedule.
+
+    Never infer identity from merely sharing a name or teacher attendance.
+    Inactive schedules count only when they have an explicit historical window.
+    """
+    if not class_time or not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", class_time):
+        return None
+    matching_time = datetime.strptime(class_time, "%H:%M").time()
+    rows = (
+        ClassSchedule.objects.filter(
+            student_id__in=[student.id for student in candidates],
+            teacher_id=teacher.id,
+            time_slot=matching_time,
+        )
+        .filter(Q(effective_from__isnull=True) | Q(effective_from__lte=attendance_date))
+        .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=attendance_date))
+        .only("student_id", "effective_from", "effective_to", "is_active")
+    )
+    matched_ids = {
+        row.student_id
+        for row in rows
+        if row.is_active or (row.effective_from is not None and row.effective_to is not None)
+    }
+    if len(matched_ids) == 1:
+        return next((student for student in candidates if student.id in matched_ids), None)
+    return None
+
+
 def _resolve_student(
     student_name: str,
     teacher: TeacherProfile,
     teacher_students: list[StudentProfile],
     all_students: list[StudentProfile],
+    attendance_date: date,
+    class_time: str,
 ):
     if not student_name:
         return None, None, None
@@ -317,8 +354,14 @@ def _resolve_student(
     if len(local_exact) == 1:
         return local_exact[0], None, None
     if len(local_exact) > 1:
+        scheduled = _resolve_schedule_match(local_exact, teacher, attendance_date, class_time)
+        if scheduled is not None:
+            return scheduled, None, None
         ids = ", ".join(str(item.id) for item in local_exact)
-        return None, f"Student {student_name!r} matched multiple students under {teacher} ({ids}).", None
+        return None, (
+            f"Student {student_name!r} matched multiple students under {teacher} ({ids}); "
+            f"no unique historical schedule matches {attendance_date} at {class_time or '(blank time)'}."
+        ), None
 
     # Same safe convenience used by the monthly importer: allow one shorter
     # current name fully contained in the exported historical name.
@@ -347,6 +390,9 @@ def _resolve_student(
             )
         return student, None, warning
     if len(global_exact) > 1:
+        scheduled = _resolve_schedule_match(global_exact, teacher, attendance_date, class_time)
+        if scheduled is not None:
+            return scheduled, None, None
         ids = ", ".join(str(item.id) for item in global_exact)
         return None, f"Student {student_name!r} matched multiple students globally ({ids}).", None
 
@@ -372,14 +418,46 @@ def import_attendance_report_csv(
     warnings = list(parsed.warnings)
 
     teacher_cache: dict[str, TeacherProfile] = {}
-    student_cache: dict[tuple[int, str], StudentProfile | None] = {}
+    student_cache: dict[tuple[int, str, date, str], StudentProfile | None] = {}
     unmatched_names: set[str] = set()
 
     student_intents = {}
     teacher_intents = {}
     source_counts = Counter()
 
+    # Individual Student rows can corroborate combined names
+    # written on a single Teacher attendance row.
+    student_names_by_session = defaultdict(set)
+    for item in parsed.rows:
+        if item.entity_type == "student" and item.student_name:
+            session = (
+                normalize_name(item.teacher_name),
+                item.attendance_date,
+                item.class_time,
+            )
+            student_names_by_session[session].add(
+                normalize_name(item.student_name)
+            )
+
     for row in parsed.rows:
+        parts = (
+            [p.strip() for p in row.student_name.split(",") if p.strip()]
+            if row.entity_type == "teacher" else []
+        )
+        session = (
+            normalize_name(row.teacher_name),
+            row.attendance_date,
+            row.class_time,
+        )
+        combined_names_covered = (
+            len(parts) >= 2
+            and all(
+                normalize_name(p) in student_names_by_session.get(
+                    session, set()
+                )
+                for p in parts
+            )
+        )
         teacher_key_name = normalize_name(row.teacher_name)
         teacher = teacher_cache.get(teacher_key_name)
         if teacher is None:
@@ -392,8 +470,8 @@ def import_attendance_report_csv(
         source_counts[f"{row.entity_type}_{row.status}"] += 1
 
         student = None
-        if row.student_name:
-            student_cache_key = (teacher.id, normalize_name(row.student_name))
+        if row.student_name and not combined_names_covered:
+            student_cache_key = (teacher.id, normalize_name(row.student_name), row.attendance_date, row.class_time)
             if student_cache_key in student_cache:
                 student = student_cache[student_cache_key]
             else:
@@ -402,6 +480,8 @@ def import_attendance_report_csv(
                     teacher,
                     students_by_teacher.get(teacher.id, []),
                     students,
+                    row.attendance_date,
+                    row.class_time,
                 )
                 if student_warning:
                     warnings.append(student_warning)
@@ -480,8 +560,69 @@ def import_attendance_report_csv(
         intent["row_numbers"].append(row.row_number)
         if student:
             intent["student_ids"].add(student.id)
-        elif row.student_name:
+        elif row.student_name and not combined_names_covered:
             intent["unmatched_names"].add(row.student_name)
+
+
+    # A combined Teacher-row label is safe only if all its separate
+    # Student rows actually resolved to real student attendance intents.
+    accepted_rows = {
+        intent["row_number"]
+        for intent in student_intents.values()
+    }
+    resolved_names = defaultdict(set)
+
+    for source_row in parsed.rows:
+        if (
+            source_row.entity_type == "student"
+            and source_row.row_number in accepted_rows
+        ):
+            session = (
+                normalize_name(source_row.teacher_name),
+                source_row.attendance_date,
+                source_row.class_time,
+            )
+            resolved_names[session].add(
+                normalize_name(source_row.student_name)
+            )
+
+    for source_row in parsed.rows:
+        if source_row.entity_type != "teacher":
+            continue
+
+        parts = [
+            normalize_name(part.strip())
+            for part in source_row.student_name.split(",")
+            if part.strip()
+        ]
+        session = (
+            normalize_name(source_row.teacher_name),
+            source_row.attendance_date,
+            source_row.class_time,
+        )
+
+        if len(parts) < 2:
+            continue
+
+        # The normal unmatched-name handling already covers rows
+        # without all corresponding Student source rows.
+        if not all(
+            part in student_names_by_session.get(session, set())
+            for part in parts
+        ):
+            continue
+
+        missing = [
+            part for part in parts
+            if part not in resolved_names.get(session, set())
+        ]
+        if missing:
+            errors.append(
+                f"CSV row {source_row.row_number}: "
+                "Combined-name Teacher session has Student rows "
+                "that did not resolve to real student profiles: "
+                + ", ".join(missing)
+            )
 
     # If a teacher row did not name its student, use matching historical student
     # rows at the same teacher/date/time to recover the relationship safely.
@@ -530,30 +671,11 @@ def import_attendance_report_csv(
 
     for key, intent in student_intents.items():
         existing = existing_students.get(key)
-        if existing is None:
-            counts["student_create"] += 1
-            continue
-        desired = (
-            intent["teacher"].id,
-            intent["class_time"] or "",
-            intent["status"],
-        )
-        current = (
-            existing.teacher_id,
-            existing.class_key or "",
-            existing.status,
-        )
-        counts["student_unchanged" if desired == current else "student_update"] += 1
+        counts["student_create" if existing is None else "student_unchanged"] += 1
 
     for key, intent in teacher_intents.items():
         existing = existing_teachers.get(key)
-        desired_student_id = direct_student_id(intent)
-        if existing is None:
-            counts["teacher_create"] += 1
-            continue
-        desired = (intent["status"], desired_student_id)
-        current = (existing.status, existing.student_id)
-        counts["teacher_unchanged" if desired == current else "teacher_update"] += 1
+        counts["teacher_create" if existing is None else "teacher_unchanged"] += 1
 
     output_lines = []
     output_lines.append("")
@@ -569,7 +691,7 @@ def import_attendance_report_csv(
     output_lines.append(f"Unique student/date records: {len(student_intents)}")
     output_lines.append(f"Unique teacher/date/time records: {len(teacher_intents)}")
     output_lines.append("")
-    output_lines.append("Database actions:")
+    output_lines.append("Database actions (existing rows are skipped, never updated):")
     output_lines.append(
         f"  Student create={counts['student_create']} update={counts['student_update']} "
         f"unchanged={counts['student_unchanged']}"
@@ -632,74 +754,59 @@ def import_attendance_report_csv(
             "teacher_count": len(teacher_cache),
         }
 
+    created_students = 0
+    created_teacher_sessions = 0
     with transaction.atomic():
         for key, intent in student_intents.items():
-            existing = existing_students.get(key)
-            department, institution = import_scope(intent["teacher"], intent["student"])
-            if existing is None:
-                assert_import_unlocked(teacher=intent["teacher"], target_date=key[1],
-                                       class_key=intent["class_time"], student=intent["student"])
-                Attendance.objects.create(
-                    entity_type=Attendance.EntityType.STUDENT,
-                    teacher=intent["teacher"],
-                    student=intent["student"],
-                    date=key[1],
-                    class_key=intent["class_time"] or "",
-                    status=intent["status"],
-                    marked_by=actor,
-                    department=department,
-                    institution=institution,
-                )
+            if existing_students.get(key) is not None:
                 continue
-
-            changes = {}
-            if existing.teacher_id != intent["teacher"].id:
-                changes["teacher_id"] = intent["teacher"].id
-            if (existing.class_key or "") != (intent["class_time"] or ""):
-                changes["class_key"] = intent["class_time"] or ""
-            if existing.status != intent["status"]:
-                changes["status"] = intent["status"]
-            if existing.department_id is None and department is not None:
-                changes["department_id"] = department.id
-            if existing.institution_id is None and institution is not None:
-                changes["institution_id"] = institution.id
-            if changes:
-                assert_import_unlocked(teacher=intent["teacher"], target_date=key[1],
-                                       class_key=intent["class_time"], student=intent["student"])
-                Attendance.objects.filter(pk=existing.pk).update(**changes)
+            department, institution = import_scope(intent["teacher"], intent["student"])
+            assert_import_unlocked(
+                teacher=intent["teacher"], target_date=key[1],
+                class_key=intent["class_time"], student=intent["student"],
+            )
+            _object, created = Attendance.objects.get_or_create(
+                entity_type=Attendance.EntityType.STUDENT,
+                student=intent["student"],
+                date=key[1],
+                defaults={
+                    "teacher": intent["teacher"],
+                    "class_key": intent["class_time"] or "",
+                    "status": intent["status"],
+                    "marked_by": actor,
+                    "department": department,
+                    "institution": institution,
+                },
+            )
+            created_students += int(created)
 
         for key, intent in teacher_intents.items():
-            existing = existing_teachers.get(key)
+            if existing_teachers.get(key) is not None:
+                continue
             desired_student_id = direct_student_id(intent)
             department, institution = import_scope(intent["teacher"])
-            if existing is None:
-                assert_import_unlocked(teacher=intent["teacher"], target_date=key[1], class_key=key[2])
-                Attendance.objects.create(
-                    entity_type=Attendance.EntityType.TEACHER,
-                    teacher=intent["teacher"],
-                    student=students_by_id.get(desired_student_id) if desired_student_id else None,
-                    date=key[1],
-                    class_key=key[2] or "",
-                    status=intent["status"],
-                    marked_by=actor,
-                    department=department,
-                    institution=institution,
-                )
-                continue
+            assert_import_unlocked(
+                teacher=intent["teacher"], target_date=key[1], class_key=key[2],
+            )
+            _object, created = Attendance.objects.get_or_create(
+                entity_type=Attendance.EntityType.TEACHER,
+                teacher=intent["teacher"],
+                date=key[1],
+                class_key=key[2] or "",
+                defaults={
+                    "student": students_by_id.get(desired_student_id) if desired_student_id else None,
+                    "status": intent["status"],
+                    "marked_by": actor,
+                    "department": department,
+                    "institution": institution,
+                },
+            )
+            created_teacher_sessions += int(created)
 
-            changes = {}
-            if existing.student_id != desired_student_id:
-                changes["student_id"] = desired_student_id
-            if existing.status != intent["status"]:
-                changes["status"] = intent["status"]
-            if existing.department_id is None and department is not None:
-                changes["department_id"] = department.id
-            if existing.institution_id is None and institution is not None:
-                changes["institution_id"] = institution.id
-            if changes:
-                assert_import_unlocked(teacher=intent["teacher"], target_date=key[1], class_key=key[2])
-                Attendance.objects.filter(pk=existing.pk).update(**changes)
-
+    output_lines.append(
+        f"Actual inserted: student={created_students}, "
+        f"teacher/session={created_teacher_sessions}. Existing rows were not updated."
+    )
     output_lines.append("")
     output_lines.append("IMPORT COMMITTED SUCCESSFULLY.")
     output_lines.append(

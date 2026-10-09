@@ -574,8 +574,6 @@ def _earned_payroll_dates_for_student(
         if attendance_status_by_date.get(current) not in earning_statuses:
             continue
         earned.append(current)
-        if len(earned) >= DEFAULT_MONTHLY_CAP:
-            break
     return earned
 
 
@@ -646,6 +644,64 @@ def build_department_month_context(
 
             class_counts[(teacher_id, current)] += 1
 
+
+    # Attendance imported after the month can establish a historical
+    # monthly student-count minimum without rewriting enrollment history.
+    monthly_attendance_students = defaultdict(set)
+
+    # Preserve verified historical enrollment, including students
+    # without attendance during the selected month.
+    # Never infer historical membership from today's roster alone.
+    for student in students:
+        student_states = states_by_student[student.id]
+        student_drop_events = drop_events_by_student[student.id]
+
+        for current, state in student_states.items():
+            teacher_id = state.get("teacher_id")
+
+            if not state.get("enrolled") or not teacher_id:
+                continue
+
+            if not _base_status_is_salary_active(
+                state.get("class_status")
+            ):
+                continue
+
+            if _drop_active_on_date(
+                student_drop_events, current
+            ):
+                continue
+
+            monthly_attendance_students[
+                teacher_id
+            ].add(student.id)
+
+
+    for observed_teacher_id, observed_student_id in (
+        Attendance.objects.filter(
+            student_id__in=[student.id for student in students],
+            entity_type="student",
+            date__range=(start, end),
+            status__in=(
+                Attendance.Status.PRESENT,
+                Attendance.Status.ABSENT,
+                Attendance.Status.LEAVE,
+            ),
+            teacher_id__isnull=False,
+        )
+        .values_list("teacher_id", "student_id")
+        .distinct()
+    ):
+        monthly_attendance_students[observed_teacher_id].add(
+            observed_student_id
+        )
+
+    monthly_attendance_counts = {
+        teacher_id: len(student_ids)
+        for teacher_id, student_ids
+        in monthly_attendance_students.items()
+    }
+
     policies = list(
         QuranSalaryPolicy.objects
         .filter(
@@ -675,6 +731,7 @@ def build_department_month_context(
         ),
         "drop_events_by_student": drop_events_by_student,
         "class_counts": class_counts,
+        "monthly_attendance_counts": monthly_attendance_counts,
         "policies": policies,
     }
 
@@ -704,6 +761,13 @@ def _rate_for_teacher_date(
             (teacher_id, target_date),
             0,
         )
+    )
+
+    class_count = max(
+        class_count,
+        context.get("monthly_attendance_counts", {}).get(
+            teacher_id, 0
+        ),
     )
 
     policy = _context_policy_for_date(
@@ -849,6 +913,13 @@ def _rate_timeline_for_teacher(
                 (teacher_id, current),
                 0,
             )
+        )
+
+        count = max(
+            count,
+            int(context.get(
+                "monthly_attendance_counts", {}
+            ).get(teacher_id, 0)),
         )
 
         policy = _context_policy_for_date(
@@ -1842,13 +1913,12 @@ def calculate_department_payrolls(
             "salary_rule": (
                 "Full calendar month in consecutive seven-day payroll "
                 "blocks (including days 29-31): maximum 5 eligible "
-                "units per block and maximum 20 earned units per student"
+                "units per block with no monthly earned-unit limit"
             ),
             "month_start": str(start),
             "month_end": str(end),
-            "monthly_salary_day_cap": (
-                DEFAULT_MONTHLY_CAP
-            ),
+            "monthly_salary_day_cap": None,
+            "monthly_cap_enforced": False,
             "weekly_salary_unit_cap": (
                 PAYROLL_UNITS_PER_WEEK
             ),
