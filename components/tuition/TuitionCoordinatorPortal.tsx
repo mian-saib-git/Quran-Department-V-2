@@ -1,3 +1,4 @@
+import { getAllTuitionAttendance } from "../../services/tuitionApiService";
 // IVS_COMPACT_INDEPENDENT_LIVE_COLUMNS_V19
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -696,13 +697,13 @@ export default function TuitionCoordinatorPortal({
     if (activeTab !== "dashboard" || features.tab_tuition_dashboard !== true) return;
     let mounted = true;
 
-    getTuitionAttendance({
+    getAllTuitionAttendance({
       department_id: department.id,
       date: tuitionDashboardDate(),
     })
       .then((payload) => {
         if (!mounted) return;
-        setDashboardAttendance(payload.results || []);
+        setDashboardAttendance(payload);
         setDashboardAttendanceMessage("");
       })
       .catch((error: any) => {

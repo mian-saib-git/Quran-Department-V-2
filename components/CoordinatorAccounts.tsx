@@ -1,3 +1,6 @@
+import { beginImport, isImportActive } from "../services/importActivity";
+import { runSequentialImport, importSummaryText } from "../services/importWorkflow";
+import { ApiRequestError } from "../services/authenticatedRequest";
 // IVS_LIVE_CLASS_ACCOUNT_LINKS_V15
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -372,16 +375,6 @@ const CSV_EXAMPLE = `teacher_name,student_name,time_slot,class_days,teacher_user
 01 Ustadh Ali,Yusuf Khan,16:00,Mon-Fri,teacher_ali,123456,S100001,123456,+920000000000,+920000000001
 02 Ustadh Hamza,Ahmed Khan,17:30,Mon Wed Fri,teacher_hamza,123456,S100002,123456,+920000000002,+920000000003`;
 
-const cleanUsername = (value: string, fallbackPrefix: string) => {
-  const cleaned = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-
-  return cleaned || `${fallbackPrefix}_${Date.now()}`;
-};
-
 const splitName = (fullName: string) => {
   const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean);
   const first = parts.shift() || "";
@@ -581,15 +574,14 @@ const parseAccountsCsv = (csvText: string) => {
     parsedRows.push({
       teacher_name: teacherName,
       teacher_username:
-        get(row, "teacher_username") || cleanUsername(teacherName, "teacher"),
+        get(row, "teacher_username"),
       teacher_password: get(row, "teacher_password") || "123456",
       teacher_phone: get(row, "teacher_phone"),
 
       student_name: studentName,
       student_username:
         get(row, "student_username") ||
-        get(row, "student_id") ||
-        cleanUsername(studentName, "student"),
+        get(row, "student_id"),
       student_password: get(row, "student_password") || "123456",
       student_phone: get(row, "student_phone"),
 
@@ -710,6 +702,24 @@ export default function CoordinatorAccounts({
     void load();
   }, []);
 
+  const accountRefreshTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const accountRefreshRunning = React.useRef(false);
+  const scheduleAccountRefresh = () => {
+    if (isImportActive()) return;
+    if (accountRefreshTimer.current) clearTimeout(accountRefreshTimer.current);
+    accountRefreshTimer.current = setTimeout(async () => {
+      if (isImportActive() || accountRefreshRunning.current) return;
+      accountRefreshRunning.current = true;
+      try { await load(); } finally { accountRefreshRunning.current = false; }
+    }, 500);
+  };
+  useEffect(() => {
+    window.addEventListener("ivs-import-finished", scheduleAccountRefresh);
+    return () => {
+      window.removeEventListener("ivs-import-finished", scheduleAccountRefresh);
+      if (accountRefreshTimer.current) clearTimeout(accountRefreshTimer.current);
+    };
+  }, []);
   useAcademyWS((event) => {
     const type = String(event?.type || "");
     const name = String((event as any)?.event || "");
@@ -720,7 +730,7 @@ export default function CoordinatorAccounts({
       name === "account_updated" ||
       name === "account_deleted"
     ) {
-      void load();
+      scheduleAccountRefresh();
     }
   });
 
@@ -1190,113 +1200,59 @@ export default function CoordinatorAccounts({
     setCsvImporting(true);
     setMessage("");
 
-    const existingTeacherByName = new Map(
-      data.teachers.map((teacher) => [
-        String(teacher.full_name || teacher.username).trim().toLowerCase(),
-        teacher,
-      ])
-    );
-
-    const existingUsernameSet = new Set([
-      ...data.teachers.map((teacher) => teacher.username.toLowerCase()),
-      ...data.students.map((student) => student.username.toLowerCase()),
-    ]);
-
-    const createdTeacherByName = new Map<string, CoordinatorTeacherAccount>();
-
-    let teachersCreated = 0;
-    let studentsCreated = 0;
-    const warnings: string[] = [];
-
+    const finishImport = beginImport();
     try {
-      for (const row of csvRows) {
-        const teacherKey = row.teacher_name.trim().toLowerCase();
-
-        let teacher =
-          existingTeacherByName.get(teacherKey) ||
-          createdTeacherByName.get(teacherKey);
-
+      // Refresh the stable identifier lookup before processing a repeated upload.
+      const current = await getCoordinatorAccounts();
+      const teacherByUsername = new Map(current.teachers.map(t => [t.username.toLowerCase(), t]));
+      const existingUsernames = new Set([
+        ...current.teachers.map(account => account.username.toLowerCase()),
+        ...current.students.map(account => account.username.toLowerCase()),
+      ]);
+      let teachersCreated = 0;
+      const result = await runSequentialImport(csvRows, async row => {
+        const teacherKey = row.teacher_username.trim().toLowerCase();
+        const studentKey = row.student_username.trim().toLowerCase();
+        if (!teacherKey || !studentKey) {
+          throw new ApiRequestError("Explicit teacher_username and student_username/student_id are required. Review identity; names are not identifiers.", 409);
+        }
+        // A CSV identity may not collide with any existing account or with its
+        // own teacher identity. Never infer a replacement from a display name.
+        if (studentKey === teacherKey || existingUsernames.has(studentKey)) {
+          throw new ApiRequestError("Student identifier already exists or conflicts with the teacher identifier. Review this row; no changes made.", 409);
+        }
+        let teacher = teacherByUsername.get(teacherKey);
         if (!teacher) {
-          let teacherUsername = cleanUsername(row.teacher_username, "teacher");
-          let bump = 1;
-
-          while (existingUsernameSet.has(teacherUsername.toLowerCase())) {
-            teacherUsername = `${cleanUsername(row.teacher_username, "teacher")}_${bump}`;
-            bump += 1;
+          if (existingUsernames.has(teacherKey)) {
+            throw new ApiRequestError("Teacher identifier belongs to a different account. Review this row; no changes made.", 409);
           }
-
-          const teacherName = splitName(row.teacher_name);
-
-          const created = await createCoordinatorAccount({
-            role: "teacher",
-            username: teacherUsername,
-            password: row.teacher_password || "123456",
-            first_name: teacherName.first_name,
-            last_name: teacherName.last_name,
-            phone: row.teacher_phone,
-            notes: "Imported via CSV",
-          });
-
-          teacher = created as CoordinatorTeacherAccount;
-
-          if (!teacher.teacher_profile?.id) {
-            warnings.push(`Teacher created but profile ID missing: ${row.teacher_name}`);
-            continue;
-          }
-
-          existingUsernameSet.add(teacherUsername.toLowerCase());
-          createdTeacherByName.set(teacherKey, teacher);
+          teacher = await createCoordinatorAccount({
+            role: "teacher", bulk_import: true, username: teacherKey,
+            password: row.teacher_password, ...splitName(row.teacher_name),
+            phone: row.teacher_phone, notes: "Imported via CSV",
+          }) as CoordinatorTeacherAccount;
+          teacherByUsername.set(teacherKey, teacher);
+          existingUsernames.add(teacherKey);
           teachersCreated += 1;
         }
-
-        if (!teacher.teacher_profile?.id) {
-          warnings.push(`Skipped student ${row.student_name}: teacher profile missing.`);
-          continue;
-        }
-
-        let studentUsername = cleanUsername(row.student_username, "student");
-        let bump = 1;
-
-        while (existingUsernameSet.has(studentUsername.toLowerCase())) {
-          studentUsername = `${cleanUsername(row.student_username, "student")}_${bump}`;
-          bump += 1;
-        }
-
-        const studentName = splitName(row.student_name);
-
-        await createCoordinatorAccount({
-          role: "student",
-          username: studentUsername,
-          password: row.student_password || "123456",
-          first_name: studentName.first_name,
-          last_name: studentName.last_name,
-          phone: row.student_phone,
-          notes: "Imported via CSV",
-          teacher_id: teacher.teacher_profile.id,
-          time_slot: row.time_slot,
-          class_days: row.class_days,
+        if (!teacher.teacher_profile?.id) throw new ApiRequestError("Teacher profile missing; review required.", 409);
+        const created = await createCoordinatorAccount({
+          role: "student", bulk_import: true, username: studentKey,
+          password: row.student_password, ...splitName(row.student_name),
+          phone: row.student_phone, notes: "Imported via CSV",
+          teacher_id: teacher.teacher_profile.id, time_slot: row.time_slot, class_days: row.class_days,
         });
-
-        existingUsernameSet.add(studentUsername.toLowerCase());
-        studentsCreated += 1;
-      }
-
-      setCsvRows([]);
-      setCsvWarnings(warnings);
-      setCsvFileName("");
-
-      window.dispatchEvent(
-        new CustomEvent("ivs-toast", {
-          detail: `Imported ${teachersCreated} teacher(s), ${studentsCreated} student(s)`,
-        })
-      );
-
-      closeModal();
-      void load();
+        current.students.push(created as CoordinatorStudentAccount);
+        existingUsernames.add(studentKey);
+      });
+      setCsvWarnings(result.details);
+      setMessage(`${importSummaryText(result)} Teachers created: ${teachersCreated}.`);
+      // Keep the modal and file available for review after partial completion.
     } catch (err: any) {
-      setMessage(err?.message || "CSV import failed.");
+      setMessage(err?.message || "Could not prepare import. No rows were submitted.");
     } finally {
       setCsvImporting(false);
+      finishImport();
     }
   };
 

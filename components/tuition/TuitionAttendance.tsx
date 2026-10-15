@@ -4,6 +4,7 @@ import { AttendanceEditor } from "../AttendanceEditor";
 import { AppState, AttendanceRecord, AttendanceStatus, ClassType, EntityType, Student, Teacher } from "../../types";
 import {
   getTuitionAttendance,
+  getAllTuitionAttendance,
   getTuitionSchedulingMatrix,
   markTuitionAttendance,
   deleteTuitionAttendance,
@@ -109,6 +110,7 @@ function tuitionMatrixToAppState(matrix: TuitionSchedulingMatrix, attendance: Tu
 export default function TuitionAttendance({ departmentId, features }: Props) {
   const [matrix, setMatrix] = useState<TuitionSchedulingMatrix>(emptyMatrix);
   const [attendance, setAttendance] = useState<TuitionAttendanceRecord[]>([]);
+  const selectedDate = React.useRef("");
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
 
@@ -118,7 +120,7 @@ export default function TuitionAttendance({ departmentId, features }: Props) {
     try {
       const [matrixPayload, attendancePayload] = await Promise.all([
         getTuitionSchedulingMatrix({ department_id: departmentId }),
-        getTuitionAttendance({ department_id: departmentId }),
+        Promise.resolve({ results: [] as TuitionAttendanceRecord[] }),
       ]);
       setMatrix(matrixPayload);
       setAttendance(attendancePayload.results || []);
@@ -130,9 +132,12 @@ export default function TuitionAttendance({ departmentId, features }: Props) {
   }, [departmentId]);
 
   const loadAttendanceOnly = useCallback(async (): Promise<boolean> => {
+    // The editor selects a date before it requests attendance.  Do not turn an
+    // initial render into an unbounded historical read while that date is empty.
+    if (!selectedDate.current) return true;
     try {
-      const payload = await getTuitionAttendance({ department_id: departmentId });
-      setAttendance(payload.results || []);
+      const rows = await getAllTuitionAttendance({ department_id: departmentId, date: selectedDate.current });
+      setAttendance(rows);
       return true;
     } catch (error: any) {
       setMessage(error?.message || "Unable to refresh Tuition attendance.");
@@ -143,6 +148,13 @@ export default function TuitionAttendance({ departmentId, features }: Props) {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  const loadEditorAttendance = useCallback(async (date: string) => {
+    selectedDate.current = date;
+    const rows = await getAllTuitionAttendance({ department_id: departmentId, date });
+    if (selectedDate.current === date) setAttendance(rows);
+    return tuitionMatrixToAppState(matrix, rows).attendance;
+  }, [departmentId, matrix]);
 
   const appState = useMemo(() => tuitionMatrixToAppState(matrix, attendance), [matrix, attendance]);
   const tuitionTeacherClassKeyForStudent = useCallback(
@@ -252,6 +264,7 @@ export default function TuitionAttendance({ departmentId, features }: Props) {
           <div className={features.tuition_mark_attendance === true ? "" : "pointer-events-none grayscale opacity-65"}>
             <AttendanceEditor
               appState={appState}
+              loadAttendanceForDate={loadEditorAttendance}
               onUpsert={handleUpsert}
               onDelete={handleDelete}
               dedupeStudentLabels

@@ -1,3 +1,4 @@
+from academy.attendance_pagination import attendance_page, filter_attendance
 import json
 from datetime import datetime, time, timedelta
 
@@ -452,6 +453,11 @@ class TuitionAccountListCreateView(
         )
         if blocked:
             return blocked
+        if is_bulk_import:
+            identifier = str((request.data).get("username", "")).strip()
+            if User.objects.filter(username__iexact=identifier).exists():
+                return Response({"detail": "Username already exists. Review this row; no account was changed.", "code": "import_conflict"}, status=409)
+
 
         serializer = (
             TuitionAccountCreateSerializer(
@@ -2231,6 +2237,11 @@ class TuitionStudentBundleView(APIView):
         )
         if blocked:
             return blocked
+        if is_bulk_import:
+            identifier = str((request.data.get("account") or {}).get("username", "")).strip()
+            if User.objects.filter(username__iexact=identifier).exists():
+                return Response({"detail": "Username already exists. Review this row; no account was changed.", "code": "import_conflict"}, status=409)
+
         rows = self._rows(request.data)
 
         if (
@@ -3978,31 +3989,12 @@ class TuitionAttendanceListCreateView(APIView):
 
     def get(self, request):
         department = request.tuition_department
-        date_value = str(request.query_params.get("date", "")).strip()
-        student_id = str(request.query_params.get("student_id", "")).strip()
-        teacher_id = str(request.query_params.get("teacher_id", "")).strip()
-        schedule_id = str(request.query_params.get("schedule_id", "")).strip()
-
         attendance = TuitionAttendance.objects.filter(department=department).select_related(
-            "schedule",
-            "enrollment",
-            "teacher__user",
-            "student__user",
-            "marked_by",
+            "schedule", "enrollment", "teacher__user", "student__user", "marked_by"
         )
-
-        if date_value:
-            attendance = attendance.filter(date=date_value)
-        if student_id.isdigit():
-            attendance = attendance.filter(student_id=int(student_id))
-        if teacher_id.isdigit():
-            attendance = attendance.filter(teacher_id=int(teacher_id))
-        if schedule_id.isdigit():
-            attendance = attendance.filter(schedule_id=int(schedule_id))
-
-        total = attendance.count()
-        rows = list(attendance.order_by("-date", "-updated_at", "-id")[:3000])
-        return Response({"count": total, "results": [tuition_attendance_payload(item) for item in rows]})
+        attendance = filter_attendance(attendance, request.query_params)
+        rows, metadata = attendance_page(attendance, request.query_params)
+        return Response({**metadata, "results": [tuition_attendance_payload(item) for item in rows]})
 
     def post(self, request):
         department = request.tuition_department
@@ -4214,7 +4206,7 @@ class TuitionStudentPortalView(APIView):
             .order_by("weekday", "start_time", "id")
         )
 
-        attendance = list(
+        attendance_qs = (
             TuitionAttendance.objects
             .filter(
                 department=department,
@@ -4230,8 +4222,11 @@ class TuitionStudentPortalView(APIView):
                 "enrollment__teacher__user",
                 "marked_by",
             )
-            .order_by("-date", "-updated_at", "-id")[:2000]
+            .order_by("-date", "-updated_at", "-id")
         )
+
+        attendance_qs = filter_attendance(attendance_qs, request.query_params)
+        attendance, attendance_metadata = attendance_page(attendance_qs, request.query_params)
 
         def user_name(user):
             if not user:
@@ -4309,9 +4304,9 @@ class TuitionStudentPortalView(APIView):
                 "updated_at": item.updated_at.isoformat() if item.updated_at else None,
             })
 
-        present_count = sum(1 for item in attendance if item.status == "present")
-        absent_count = sum(1 for item in attendance if item.status == "absent")
-        leave_count = sum(1 for item in attendance if item.status == "leave")
+        present_count = attendance_metadata["status_counts"].get("present", 0)
+        absent_count = attendance_metadata["status_counts"].get("absent", 0)
+        leave_count = attendance_metadata["status_counts"].get("leave", 0)
         teacher_names = []
         for enrollment in enrollments:
             name = user_name(enrollment.teacher.user)
@@ -4340,7 +4335,7 @@ class TuitionStudentPortalView(APIView):
                 "subjects": len(subject_rows),
                 "active_enrollments": len(enrollments),
                 "scheduled_classes": len(schedule_rows),
-                "attendance_records": len(attendance_rows),
+                "attendance_records": attendance_metadata["count"],
                 "present": present_count,
                 "absent": absent_count,
                 "leave": leave_count,
@@ -4349,6 +4344,7 @@ class TuitionStudentPortalView(APIView):
             "subjects": subject_rows,
             "schedules": schedule_rows,
             "attendance": attendance_rows,
+            "attendance_pagination": attendance_metadata,
             "assignments": [],
         })
 
@@ -4406,7 +4402,7 @@ class TuitionTeacherPortalView(APIView):
             .order_by("weekday", "start_time", "student__user__first_name", "id")
         )
 
-        attendance = list(
+        attendance_qs = (
             TuitionTeacherPortalAttendanceModel.objects
             .filter(
                 department=department,
@@ -4422,8 +4418,11 @@ class TuitionTeacherPortalView(APIView):
                 "enrollment__student__user",
                 "marked_by",
             )
-            .order_by("-date", "-updated_at", "-id")[:2500]
+            .order_by("-date", "-updated_at", "-id")
         )
+
+        attendance_qs = filter_attendance(attendance_qs, request.query_params)
+        attendance, attendance_metadata = attendance_page(attendance_qs, request.query_params)
 
         def user_name(user):
             if not user:
@@ -4480,9 +4479,9 @@ class TuitionTeacherPortalView(APIView):
                 "updated_at": item.updated_at.isoformat() if item.updated_at else None,
             })
 
-        present_count = sum(1 for item in attendance if item.status == "present")
-        absent_count = sum(1 for item in attendance if item.status == "absent")
-        leave_count = sum(1 for item in attendance if item.status == "leave")
+        present_count = attendance_metadata["status_counts"].get("present", 0)
+        absent_count = attendance_metadata["status_counts"].get("absent", 0)
+        leave_count = attendance_metadata["status_counts"].get("leave", 0)
         active_student_ids = {item.student_id for item in schedules if item.student_id}
         subject_names = {
             item.enrollment.display_subject
@@ -4513,11 +4512,12 @@ class TuitionTeacherPortalView(APIView):
                 "total_classes": len(class_rows),
                 "active_students": len(active_student_ids),
                 "subjects": len(subject_names),
-                "attendance_records": len(attendance_rows),
+                "attendance_records": attendance_metadata["count"],
                 "present": present_count,
                 "absent": absent_count,
                 "leave": leave_count,
             },
             "classes": class_rows,
             "attendance": attendance_rows,
+            "attendance_pagination": attendance_metadata,
         })

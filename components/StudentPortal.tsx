@@ -1,3 +1,5 @@
+import { useCompleteAttendance } from "../hooks/useCompleteAttendance";
+import { getAllQuranAttendance } from "../services/djangoApiService";
 // IVS_QURAN_STUDENT_PORTAL_V49_SAFE_CARD_REVEAL_FIX
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -792,7 +794,10 @@ export function StudentPortal({ onLogout, departmentName = "Quran Department" }:
   };
 
   const schedules = dashboard?.schedules || [];
-  const attendance = dashboard?.attendance || [];
+  const historyLoader = React.useCallback(() => getAllQuranAttendance({ scope: "dashboard" }), []);
+  const completeHistory = useCompleteAttendance(String(dashboard?.user?.id || ""), historyLoader, activeTab === "attendance");
+  const attendanceSource = activeTab === "attendance" ? completeHistory.rows : dashboard?.attendance || [];
+  const attendance = attendanceSource;
 const lessons = (dashboard as any)?.lessons || [];
 
   const todayDate = today();
@@ -1213,7 +1218,7 @@ const lessons = (dashboard as any)?.lessons || [];
                   <div className="sp-hero-stat">
                     <div>
                       <p className="sp-hero-label">Attendance Records</p>
-                      <h3 className="sp-hero-number text-emerald-600">{sortedAttendance.length}</h3>
+                      <h3 className="sp-hero-number text-emerald-600">{dashboard?.attendance_count ?? sortedAttendance.length}</h3>
                     </div>
                     <div className="sp-hero-icon bg-emerald-50 text-emerald-600">
                       <CheckCircle2 size={20} />
@@ -1387,7 +1392,11 @@ const lessons = (dashboard as any)?.lessons || [];
             </div>
           )}
 
-          {activeTab === "attendance" && (
+          {activeTab === "attendance" && (completeHistory.loading || completeHistory.error) && <div role="status" className="p-6">
+            <p>{completeHistory.error || "Loading complete attendance history…"}</p>
+            {completeHistory.error && <button onClick={completeHistory.reload}>Retry attendance</button>}
+          </div>}
+          {activeTab === "attendance" && !completeHistory.loading && !completeHistory.error && (
             <div className="space-y-5">
               <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <MiniAttendanceStat label="Present" value={filteredPresentCount} tone="emerald" large />

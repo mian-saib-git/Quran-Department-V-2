@@ -1,5 +1,7 @@
 import type {
   QuranSalaryV2Adjustment,
+  QuranSalaryV2AppliedPerClassRates,
+  QuranSalaryV2AttendanceSummary,
   QuranSalaryV2LedgerEntry,
   QuranSalaryV2ProofResponse,
 } from "../../services/djangoApiService";
@@ -22,6 +24,9 @@ export type StudentSalaryProof = {
   student: StudentMonthlySalary;
   paidDates: string[];
   cuttingDetails: SalaryProofItem[];
+  studentAttendance: QuranSalaryV2AttendanceSummary | null;
+  teacherAttendance: QuranSalaryV2AttendanceSummary | null;
+  appliedPerClassRates: QuranSalaryV2AppliedPerClassRates | null;
 };
 export type WebSalaryProof = {
   summary: SalaryStatementData;
@@ -71,6 +76,9 @@ const byDate = (left: SalaryProofItem, right: SalaryProofItem) =>
 // proof, not in a new salary/attendance calculation.
 export function buildWebSalaryProof(proof: QuranSalaryV2ProofResponse): WebSalaryProof {
   const summary = buildSalaryStatementData(proof);
+  const evidenceByStudent = new Map(
+    (proof.student_attendance_summaries || []).map((row) => [row.student_id, row]),
+  );
   const perStudent = new Map<number, { dates: string[]; cutting: SalaryProofItem[] }>();
   const get = (id: number) => {
     const existing = perStudent.get(id);
@@ -119,11 +127,15 @@ export function buildWebSalaryProof(proof: QuranSalaryV2ProofResponse): WebSalar
 
   const students = summary.students.map((student) => {
     const raw = perStudent.get(student.studentId);
+    const evidence = evidenceByStudent.get(student.studentId);
     const cuttingDetails = [...(raw?.cutting || [])].sort(byDate);
     return {
       student,
       paidDates: [...(raw?.dates || [])].sort(),
       cuttingDetails,
+      studentAttendance: evidence?.student_attendance || null,
+      teacherAttendance: evidence?.teacher_attendance || null,
+      appliedPerClassRates: evidence?.applied_per_class_rates || null,
     };
   });
 

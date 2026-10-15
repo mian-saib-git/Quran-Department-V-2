@@ -489,6 +489,9 @@ class CreateAccountSerializer(serializers.Serializer):
             request_user = self.context.get("request_user")
             department = getattr(request_user, "department", None) if request_user else None
 
+            if not department or not TeacherProfile.objects.filter(id=teacher_id, department=department).exists():
+                raise serializers.ValidationError({"teacher_id": "Selected teacher is outside your department."})
+
             referral_student_id = attrs.get("referral_student_id")
             if referral_student_id:
                 referral_students = StudentProfile.objects.select_related("teacher", "user").filter(
@@ -541,6 +544,7 @@ class CreateAccountSerializer(serializers.Serializer):
 
         return attrs
 
+    @transaction.atomic
     def create(self, validated_data):
         role = validated_data["role"]
 

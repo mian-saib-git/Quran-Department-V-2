@@ -1,3 +1,5 @@
+import { useCompleteAttendance } from "../../hooks/useCompleteAttendance";
+import { getAllTuitionAttendance } from "../../services/tuitionApiService";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
@@ -348,18 +350,15 @@ function getRangeForPeriod(period: Period, anchorDate: string, customStart: stri
   return clampRange(customStart, customEnd);
 }
 
-function dateListInclusive(start: string, end: string, maxDays = 370): string[] {
+function dateListInclusive(start: string, end: string): string[] {
   if (!start || !end) return [];
   const { start: s, end: e } = clampRange(start, end);
   const out: string[] = [];
   let cur = toDate(s);
   const last = toDate(e);
-  let guard = 0;
-
-  while (cur <= last && guard < maxDays) {
+  while (cur <= last) {
     out.push(fmt(cur));
     cur = addDays(cur, 1);
-    guard += 1;
   }
 
   return out;
@@ -1414,7 +1413,7 @@ export default function TuitionReports({ departmentId, features, generatedBy = "
   const canExportPdf = features.tuition_pdf_reports === true;
 
   const [matrix, setMatrix] = useState<TuitionSchedulingMatrix>(emptyMatrix);
-  const [attendance, setAttendance] = useState<TuitionAttendanceRecord[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [period, setPeriod] = useState<Period>("weekly");
@@ -1441,10 +1440,10 @@ export default function TuitionReports({ departmentId, features, generatedBy = "
     try {
       const [matrixPayload, attendancePayload] = await Promise.all([
         getTuitionSchedulingMatrix({ department_id: departmentId }),
-        getTuitionAttendance({ department_id: departmentId }),
+        Promise.resolve(null),
       ]);
       setMatrix(matrixPayload);
-      setAttendance(attendancePayload.results || []);
+
     } catch (error: any) {
       setMessage(error?.message || "Unable to load Tuition reports.");
     } finally {
@@ -1481,6 +1480,13 @@ export default function TuitionReports({ departmentId, features, generatedBy = "
     () => getRangeForPeriod(period, anchor, start, end),
     [period, anchor, start, end]
   );
+
+  const reportLoader = React.useCallback(() => getAllTuitionAttendance({
+    department_id: departmentId, date_from: effectiveRange.start, date_to: effectiveRange.end,
+    date_basis: dateFilterBasis === "last_updated" ? "either" : "attendance",
+  }), [departmentId, effectiveRange.start, effectiveRange.end, dateFilterBasis]);
+  const completeAttendance = useCompleteAttendance(`${departmentId}:${effectiveRange.start}:${effectiveRange.end}:${dateFilterBasis}`, reportLoader);
+  const attendance = completeAttendance.rows;
 
   const cappedRange = useMemo(
     () => capRangeToToday(effectiveRange),
@@ -1872,6 +1878,11 @@ export default function TuitionReports({ departmentId, features, generatedBy = "
     setStatusFilter("all");
     setDateFilterBasis("attendance_date");
   };
+
+  if (completeAttendance.loading || completeAttendance.error) return <div role="status" className="p-6">
+    <p>{completeAttendance.error || "Loading all attendance pages for the selected report range…"}</p>
+    {completeAttendance.error && <button onClick={completeAttendance.reload}>Retry report</button>}
+  </div>;
 
   if (loading) {
     return (

@@ -1,3 +1,5 @@
+import { collectAttendancePages, type AttendanceFilters, type AttendancePage } from "./attendancePaging";
+import { AttendanceStatus, EntityType, type AttendanceRecord } from "../types";
 import { clearSession, loadSession, saveSession, type Session } from "./sessionService";
 import { authenticatedRequest } from "./authenticatedRequest";
 
@@ -639,6 +641,8 @@ export type MonthlyLessonSummaryResponse = {
 // ============================================================
 
 export type DashboardResponse = {
+  attendance_count?: number;
+  attendance_status_counts?: Record<string, number>;
   user: DjangoUser;
   dashboard_type: UserRole;
 
@@ -1481,16 +1485,26 @@ export async function generateMonthlyLessonSummary(params: {
   });
 }
 
-export async function getAttendance(params?: {
-  date?: string;
-  student_id?: number;
-  teacher_id?: number;
-}): Promise<{ count: number; results: AttendanceApiResponse[] }> {
-  const suffix = buildQuery(params);
-
-  return request<{ count: number; results: AttendanceApiResponse[] }>(
-    `/api/academy/attendance/${suffix}`
-  );
+export async function getAttendance(params?: AttendanceFilters): Promise<AttendancePage<AttendanceApiResponse>> {
+  return request<AttendancePage<AttendanceApiResponse>>(`/api/academy/attendance/${buildQuery(params)}`);
+}
+export const getAllQuranAttendance = (params: AttendanceFilters = {}) => collectAttendancePages(getAttendance, params);
+export function toAttendanceRecord(row: AttendanceApiResponse): AttendanceRecord {
+  const teacher = row.entity_type === "teacher";
+  return {
+    id: String(row.id), entityId: String(teacher ? row.teacher_id : row.student_id),
+    entityType: teacher ? EntityType.TEACHER : EntityType.STUDENT,
+    date: row.date, classKey: row.class_key || row.classKey || "",
+    teacherId: String(row.teacher_id || ""), studentId: String(row.student_id || ""),
+    teacherName: row.teacher_name || "", studentName: row.student_name || "",
+    status: row.status === "present" ? AttendanceStatus.PRESENT : row.status === "absent" ? AttendanceStatus.ABSENT : AttendanceStatus.LEAVE,
+    timestamp: Date.parse(row.updated_at || row.created_at || "") || 0,
+    markedById: String(row.marked_by_id || ""), markedByName: row.marked_by_name || "",
+    markedByUsername: row.marked_by_username || row.marked_by || "", markedByRole: row.marked_by_role || "",
+  };
+}
+export async function loadQuranAttendanceDate(date: string): Promise<AttendanceRecord[]> {
+  return (await getAllQuranAttendance({ date, scope: "state" })).map(toAttendanceRecord);
 }
 
 export async function markAttendanceInDjango(
@@ -1684,6 +1698,7 @@ export type CoordinatorAccountsResponse = {
 };
 
 export type CreateAccountInput = {
+  bulk_import?: boolean;
   role: "coordinator" | "teacher" | "student";
   username: string;
   password?: string;
@@ -2160,6 +2175,41 @@ export type QuranSalaryV2LedgerEntry = {
   metadata: Record<string, any>;
 };
 
+export type QuranSalaryV2AttendanceCompletenessStatus =
+  | "complete"
+  | "incomplete"
+  | "unavailable";
+
+export type QuranSalaryV2AttendanceSummary = {
+  present: number;
+  leave: number;
+  absent: number;
+  not_marked: number;
+  status: QuranSalaryV2AttendanceCompletenessStatus;
+  unavailable_reasons: string[];
+};
+
+export type QuranSalaryV2AppliedRateEntry = {
+  date: string | null;
+  rate: SalaryMoney;
+  amount: SalaryMoney;
+  class_count_at_time: number | null;
+};
+
+export type QuranSalaryV2AppliedPerClassRates = {
+  status: "single" | "multiple" | "unavailable";
+  rates: SalaryMoney[];
+  entries: QuranSalaryV2AppliedRateEntry[];
+};
+
+export type QuranSalaryV2StudentAttendanceSummary = {
+  student_id: number;
+  student_name: string;
+  student_attendance: QuranSalaryV2AttendanceSummary;
+  teacher_attendance: QuranSalaryV2AttendanceSummary;
+  applied_per_class_rates: QuranSalaryV2AppliedPerClassRates;
+};
+
 export type QuranSalaryV2ProofResponse = {
   department: {
     id: number;
@@ -2168,6 +2218,7 @@ export type QuranSalaryV2ProofResponse = {
   payroll: QuranSalaryV2Payroll;
   ledger: QuranSalaryV2LedgerEntry[];
   ledger_count: number;
+  student_attendance_summaries: QuranSalaryV2StudentAttendanceSummary[];
 };
 
 

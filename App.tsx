@@ -1,3 +1,5 @@
+import { loadQuranAttendanceDate } from "./services/djangoApiService";
+import { isImportActive } from "./services/importActivity";
 // IVS_QURAN_PORTAL_ROLE_RECOVERY_V31
 // IVS_PERMANENT_FEATURE_CONTEXT_FIX_V23
 // IVS_ATTENDANCE_FRONTEND_RESPONSIVENESS_V16
@@ -480,6 +482,13 @@ export default function App() {
   // ✅ Session state MUST be defined first
   const [session, setSession] = useState<Session | null>(() => loadSession());
   const [appState, setAppState] = useState<AppState>(INITIAL_STATE);
+  const loadEditorAttendance = React.useCallback(async (date: string) => {
+    const records = await loadQuranAttendanceDate(date);
+    setAppState(previous => ({ ...previous, attendance: [
+      ...previous.attendance.filter(row => row.date !== date), ...records,
+    ] }));
+    return records;
+  }, []);
   const attendanceRef = useRef<AttendanceRecord[]>(INITIAL_STATE.attendance);
   const attendanceMutationVersionRef = useRef<Map<string, number>>(new Map());
   const attendanceMutationQueueRef = useRef<Map<string, Promise<unknown>>>(new Map());
@@ -499,6 +508,27 @@ export default function App() {
       }
     }
   }, [appState.attendance]);
+
+  const accountStateRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const accountStateRefreshRunning = useRef(false);
+  const scheduleAccountStateRefresh = React.useCallback(() => {
+    if (isImportActive()) return;
+    if (accountStateRefreshTimer.current) clearTimeout(accountStateRefreshTimer.current);
+    accountStateRefreshTimer.current = setTimeout(async () => {
+      if (isImportActive() || accountStateRefreshRunning.current) return;
+      accountStateRefreshRunning.current = true;
+      try { setAppState(await loadState()); }
+      catch (error) { console.error("Could not refresh academy state", error); }
+      finally { accountStateRefreshRunning.current = false; }
+    }, 500);
+  }, []);
+  useEffect(() => {
+    window.addEventListener("ivs-import-finished", scheduleAccountStateRefresh);
+    return () => {
+      window.removeEventListener("ivs-import-finished", scheduleAccountStateRefresh);
+      if (accountStateRefreshTimer.current) clearTimeout(accountStateRefreshTimer.current);
+    };
+  }, [scheduleAccountStateRefresh]);
 
   // WebSocket listener - auto-refresh state when accounts are created/updated
   useAcademyWS(React.useCallback((data: Record<string, unknown>) => {
@@ -524,12 +554,7 @@ export default function App() {
       event === "account_updated" ||
       event === "account_deleted"
     ) {
-      // Reload state after short delay to ensure DB commit
-      setTimeout(() => {
-        loadState().then(loaded => {
-          setAppState(loaded);
-        }).catch(console.error);
-      }, 800);
+      scheduleAccountStateRefresh();
     }
   }, []));
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
@@ -4599,6 +4624,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
                   <Suspense fallback={<TabLoading />}>
                     <AttendanceEditor
                       appState={viewAppState}
+                      loadAttendanceForDate={loadEditorAttendance}
                       onUpsert={upsertAttendance}
                       onDelete={deleteAttendance}
                     />

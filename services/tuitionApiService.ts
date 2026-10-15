@@ -1,3 +1,4 @@
+import { collectAttendancePages, type AttendanceFilters, type AttendancePage } from "./attendancePaging";
 import { authenticatedRequest } from "./authenticatedRequest";
 
 
@@ -632,17 +633,10 @@ export type TuitionAttendanceInput = {
   classKey?: string;
 };
 
-export async function getTuitionAttendance(params?: {
-  department_id?: number;
-  date?: string;
-  student_id?: number | string;
-  teacher_id?: number | string;
-  schedule_id?: number | string;
-}) {
-  return request<{ count: number; results: TuitionAttendanceRecord[] }>(
-    `/api/tuition/attendance/${query(params)}`
-  );
+export async function getTuitionAttendance(params?: AttendanceFilters) {
+  return request<AttendancePage<TuitionAttendanceRecord>>(`/api/tuition/attendance/${query(params)}`);
 }
+export const getAllTuitionAttendance = (params: AttendanceFilters = {}) => collectAttendancePages(getTuitionAttendance, params);
 
 export async function markTuitionAttendance(input: TuitionAttendanceInput) {
   return request<TuitionAttendanceRecord>("/api/tuition/attendance/", {
@@ -712,6 +706,7 @@ export type TuitionStudentPortalAttendance = {
 };
 
 export type TuitionStudentPortalResponse = {
+  attendance_pagination: Omit<AttendancePage<TuitionStudentPortalAttendance>, "results">;
   department: {
     id: number;
     name: string;
@@ -745,9 +740,9 @@ export type TuitionStudentPortalResponse = {
   assignments: unknown[];
 };
 
-export async function getTuitionStudentPortal(departmentId?: number) {
+export async function getTuitionStudentPortal(departmentId?: number, params: AttendanceFilters = {}) {
   return request<TuitionStudentPortalResponse>(
-    `/api/tuition/student-portal/${query({ department_id: departmentId })}`
+    `/api/tuition/student-portal/${query({ ...params, department_id: departmentId })}`
   );
 }
 
@@ -791,6 +786,7 @@ export type TuitionTeacherPortalAttendance = {
 };
 
 export type TuitionTeacherPortalResponse = {
+  attendance_pagination: Omit<AttendancePage<TuitionTeacherPortalAttendance>, "results">;
   department: {
     id: number;
     name: string;
@@ -822,8 +818,20 @@ export type TuitionTeacherPortalResponse = {
   attendance: TuitionTeacherPortalAttendance[];
 };
 
-export async function getTuitionTeacherPortal(departmentId?: number) {
+export async function getTuitionTeacherPortal(departmentId?: number, params: AttendanceFilters = {}) {
   return request<TuitionTeacherPortalResponse>(
-    `/api/tuition/teacher-portal/${query({ department_id: departmentId })}`
+    `/api/tuition/teacher-portal/${query({ ...params, department_id: departmentId })}`
   );
 }
+
+export const getAllTuitionStudentAttendance = (departmentId?: number, filters: AttendanceFilters = {}) =>
+  collectAttendancePages(async params => {
+    const payload = await getTuitionStudentPortal(departmentId, params);
+    return { ...payload.attendance_pagination, results: payload.attendance };
+  }, filters);
+
+export const getAllTuitionTeacherAttendance = (departmentId?: number, filters: AttendanceFilters = {}) =>
+  collectAttendancePages(async params => {
+    const payload = await getTuitionTeacherPortal(departmentId, params);
+    return { ...payload.attendance_pagination, results: payload.attendance };
+  }, filters);

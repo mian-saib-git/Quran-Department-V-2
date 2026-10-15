@@ -24,6 +24,7 @@ from .salary_v2_service import (
     payroll_payload,
     payroll_readiness,
 )
+from .salary_v2_proof_service import student_attendance_summaries
 
 from datetime import date
 from .models import StudentProfile
@@ -2481,6 +2482,7 @@ class QuranSalaryV2ProofView(APIView):
             )
 
         ledger = ledger_payload(payroll)
+        student_summaries = student_attendance_summaries(payroll)
 
         return Response(
             {
@@ -2491,6 +2493,7 @@ class QuranSalaryV2ProofView(APIView):
                 "payroll": payroll_payload(payroll),
                 "ledger": ledger,
                 "ledger_count": len(ledger),
+                "student_attendance_summaries": student_summaries,
             },
             status=status.HTTP_200_OK,
         )

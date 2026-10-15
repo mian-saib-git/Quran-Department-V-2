@@ -1,10 +1,9 @@
+import { authenticatedRequest } from "./authenticatedRequest";
 import { AppState, AttendanceStatus, ClassType, EntityType, Student, Teacher } from "../types";
 import { loadSession } from "./sessionService";
 
-const CACHE_KEY = "quran_academy_cache_v4";
-
-const DJANGO_API_BASE =
-  (import.meta as any).env?.VITE_DJANGO_API_BASE_URL || "http://127.0.0.1:8000";
+const CACHE_KEY = "quran_academy_cache_v5";
+const cacheKey = () => `${CACHE_KEY}:${loadSession()?.user?.id || "anonymous"}`;
 
 const EMPTY_STATE: AppState = {
   teachers: [],
@@ -52,20 +51,6 @@ const getSavedAccessToken = (): string => {
   } catch {
     return "";
   }
-};
-
-const getAuthHeaders = (): Record<string, string> => {
-  const token = getSavedAccessToken();
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  return headers;
 };
 
 const hasAuthToken = () => Boolean(getSavedAccessToken());
@@ -179,17 +164,17 @@ const saveCache = (state: AppState) => {
   if (isDemoState(state)) return;
 
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(state));
+    localStorage.setItem(cacheKey(), JSON.stringify(state));
   } catch {
     // ignore
   }
 };
 
 const readCache = (): AppState | null => {
-  const cached = normalizeState(safeParse(localStorage.getItem(CACHE_KEY)));
+  const cached = normalizeState(safeParse(localStorage.getItem(cacheKey())));
 
   if (isDemoState(cached)) {
-    localStorage.removeItem(CACHE_KEY);
+    localStorage.removeItem(cacheKey());
     return null;
   }
 
@@ -205,20 +190,9 @@ const fetchAcademyState = async (dashboardOnly = false): Promise<AppState> => {
     throw new Error("No auth token found. Please login again.");
   }
 
-  const url = `${DJANGO_API_BASE}/api/academy/state/${dashboardOnly ? "?dashboard=true" : ""}`;
-  const response = await withTimeout(
-    fetch(url, {
-      method: "GET",
-      headers: getAuthHeaders(),
-    }),
-    60000
-  );
-
-  if (!response.ok) {
-    throw new Error(`Academy state API failed with status ${response.status}`);
-  }
-
-  const data = await response.json();
+  const data = await withTimeout(authenticatedRequest<AppState>(
+    `/api/academy/state/${dashboardOnly ? "?dashboard=true" : ""}`
+  ), 60000);
   const normalized = normalizeState(data);
   normalized.isPartial = dashboardOnly;
 
@@ -246,7 +220,7 @@ export const loadState = async (dashboardOnly = false): Promise<AppState> => {
         console.warn("Academy state not available yet:", err);
       }
 
-      return cached || EMPTY_STATE;
+      throw err;
     }
   }
 

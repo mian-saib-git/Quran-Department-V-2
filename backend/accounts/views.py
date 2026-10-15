@@ -1,7 +1,7 @@
 # IVS_PERMANENT_FEATURE_CONTEXT_FIX_V23
 from django.contrib.auth import authenticate
 from django.core.paginator import Paginator
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from django.db.models import Q, Prefetch
 from django.utils.text import slugify
 from rest_framework import status
@@ -836,33 +836,29 @@ class CoordinatorAccountListCreateView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        serializer = CreateAccountSerializer(data=request.data, context={"request_user": request.user})
-
+        input_data = request.data.copy()
+        is_import = str(input_data.get("bulk_import", "")).strip().lower() in {
+            "true", "1", "yes", "on",
+        }
+        if is_import:
+            input_data["username"] = str(input_data.get("username", "")).strip().lower()
+            if User.objects.filter(username__iexact=input_data["username"]).exists():
+                return Response({"detail": "Username already exists. Review this row; no account was changed.", "code": "import_conflict"}, status=409)
+        serializer = CreateAccountSerializer(data=input_data, context={"request_user": request.user})
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        account = serializer.save()
-
-        from academy.ws_notify import notify_role
-        notify_global("academy_update", {
-            "event": "account_created",
-            "message": "Account created",
-            "account_id": account.get("id") if isinstance(account, dict) else None,
-            "role": account.get("role") if isinstance(account, dict) else requested_role,
-        })
-        # Notify teacher role so their dashboard refreshes
-        # Using threading to add slight delay ensuring DB commit is complete
-        import threading
-        def _notify():
-            import time
-            time.sleep(0.8)
-            notify_role("teacher", "academy_update", {
-                "event": "account_created",
-                "role": account.get("role") if isinstance(account, dict) else requested_role,
-            })
-        threading.Thread(target=_notify, daemon=True).start()
-
+        try:
+            with transaction.atomic():
+                account = serializer.save()
+                # The global group already includes teachers. Send once, after commit.
+                transaction.on_commit(lambda: notify_global("academy_update", {
+                    "event": "account_created", "message": "Account created",
+                    "account_id": account.get("id"), "role": requested_role,
+                }))
+        except IntegrityError:
+            return Response({"detail": "Account conflicts with existing data. Review this row; no partial account was saved.", "code": "import_conflict"}, status=409)
         return Response(account, status=status.HTTP_201_CREATED)
+
 
 
 class CoordinatorAccountDetailView(APIView):
@@ -1810,4 +1806,3 @@ class PlatformDepartmentFeatureView(APIView):
             "department": department_payload(department),
             "feature": feature_payload(feature, setting),
         })
-

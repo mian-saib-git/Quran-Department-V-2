@@ -1,3 +1,5 @@
+import { useCompleteAttendance } from "../../hooks/useCompleteAttendance";
+import { getAllTuitionStudentAttendance } from "../../services/tuitionApiService";
 // IVS_STUDENT_PORTALS_V48_PHYSICS_DROP_DATE_FORMAT
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
@@ -643,7 +645,9 @@ export default function TuitionStudentPortal({
   const studentName = data?.student.name || data?.user.full_name || data?.user.username || "Student";
   const subjects = data?.subjects || [];
   const schedules = data?.schedules || [];
-  const attendance = data?.attendance || [];
+  const historyLoader = React.useCallback(() => getAllTuitionStudentAttendance(departmentId), [departmentId]);
+  const completeHistory = useCompleteAttendance(`${departmentId}:${data?.user?.id || ""}`, historyLoader, activeTab === "attendance");
+  const attendance = activeTab === "attendance" ? completeHistory.rows : data?.attendance || [];
 
   const subjectNames = useMemo(
     () => Array.from(new Set(subjects.map((item) => item.subject_name).filter(Boolean))).sort(),
@@ -723,10 +727,10 @@ export default function TuitionStudentPortal({
   }, [filteredAttendance]);
 
   const allAttendanceRate = useMemo(() => {
-    const present = attendance.filter((item) => item.status === "present").length;
-    const absent = attendance.filter((item) => item.status === "absent").length;
+    const present = data?.counts.present || 0;
+    const absent = data?.counts.absent || 0;
     return present + absent > 0 ? Math.round((present / (present + absent)) * 100) : 0;
-  }, [attendance]);
+  }, [data?.counts]);
 
   const cardStudentId = data?.student.id || data?.user.id || "000";
   const cardDepartmentName = data?.department.name || "Tuition Department";
@@ -998,7 +1002,11 @@ export default function TuitionStudentPortal({
                 />
               )}
 
-              {activeTab === "attendance" && (
+              {activeTab === "attendance" && (completeHistory.loading || completeHistory.error) && <div role="status" className="p-6">
+                  <p>{completeHistory.error || "Loading complete attendance history…"}</p>
+                  {completeHistory.error && <button onClick={completeHistory.reload}>Retry attendance</button>}
+                </div>}
+                {activeTab === "attendance" && !completeHistory.loading && !completeHistory.error && (
                 <AttendanceTab
                   rows={attendancePagination.rows}
                   totalRows={filteredAttendance.length}

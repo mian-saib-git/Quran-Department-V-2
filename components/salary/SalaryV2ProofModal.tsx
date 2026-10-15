@@ -13,13 +13,16 @@ import {
   Users,
   X,
 } from "lucide-react";
+import AttendanceBadges, { AttendanceLegend } from "./AttendanceBadges";
 import {
   getQuranSalaryV2Proof,
+  type QuranSalaryV2AppliedPerClassRates,
+  type QuranSalaryV2AttendanceSummary,
   type QuranSalaryV2ProofResponse,
 } from "../../services/djangoApiService";
 import { downloadSalaryV2Pdf } from "./salaryV2Pdf";
 import { buildWebSalaryProof, type SalaryProofItem } from "./salaryV2WebProofData";
-import { formatPkr } from "./salaryV2PdfData";
+import { cents, formatPkr } from "./salaryV2PdfData";
 
 const cash = formatPkr;
 function statusLabel(value: string) {
@@ -58,9 +61,60 @@ function ProofItems({ items, empty }: { items: SalaryProofItem[]; empty: string 
 
 function ValueCard({ label, value, emphasis = false, negative = false }: { label: string; value: number; emphasis?: boolean; negative?: boolean }) {
   return (
-    <div className={`rounded-2xl border px-4 py-3 ${emphasis ? "border-indigo-800 bg-indigo-950 text-white" : negative ? "border-rose-100 bg-rose-50" : "border-slate-200 bg-white"}`}>
+      <div className={`rounded-2xl border px-4 py-3 ${emphasis ? "border-indigo-800 bg-indigo-950 text-white" : negative ? "border-rose-100 bg-rose-50" : "border-slate-200 bg-white"}`}>
       <div className={`text-[11px] font-semibold ${emphasis ? "text-indigo-200" : "text-slate-500"}`}>{label}</div>
-      <div className={`mt-1 text-xl font-extrabold tracking-tight ${emphasis ? "text-white" : negative ? "text-rose-800" : "text-slate-950"}`}>{cash(value)}</div>
+      <div className={`mt-1 whitespace-nowrap text-xl font-extrabold tracking-tight ${emphasis ? "text-white" : negative ? "text-rose-800" : "text-slate-950"}`}>{cash(value)}</div>
+    </div>
+  );
+}
+
+function RateDisplay({ rates }: { rates: QuranSalaryV2AppliedPerClassRates | null }) {
+  if (!rates || rates.status === "unavailable" || rates.rates.length === 0) {
+    return <span className="text-xs font-semibold text-slate-500">Not available</span>;
+  }
+  if (rates.status === "single") {
+    return <span className="inline-flex whitespace-nowrap rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-extrabold text-sky-900">{cash(cents(rates.rates[0]))}</span>;
+  }
+  return (
+    <details className="inline-block text-left">
+      <summary aria-label={`Mixed recorded per-class rates: ${rates.rates.map((rate) => cash(cents(rate))).join(", ")}`} className="cursor-pointer list-none rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-extrabold text-sky-900 marker:hidden">
+        Mixed
+      </summary>
+      <div className="mt-2 min-w-44 rounded-lg border border-sky-100 bg-white p-2 text-xs shadow-sm">
+        <div className="mb-1 font-bold text-slate-900">Recorded rates</div>
+        {rates.rates.map((rate) => <div key={rate} className="text-slate-700">{cash(cents(rate))}</div>)}
+      </div>
+    </details>
+  );
+}
+
+function AttendanceDetails({ label, attendance }: { label: string; attendance: QuranSalaryV2AttendanceSummary | null }) {
+  const reasons = attendance?.unavailable_reasons?.filter(Boolean) || [];
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-3">
+      <div className="text-xs font-extrabold text-slate-900">{label} attendance</div>
+      <div className="mt-2 flex items-center gap-2">
+        <AttendanceBadges attendance={attendance} subject={label === "Teacher" ? "teacher" : "student"} className="justify-start" />
+        {attendance?.status === "incomplete" && <span className="text-[11px] font-bold text-amber-800">Incomplete</span>}
+      </div>
+      {reasons.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-relaxed text-slate-600">{reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>}
+    </div>
+  );
+}
+
+function RecordedRateHistory({ rates }: { rates: QuranSalaryV2AppliedPerClassRates | null }) {
+  if (!rates || rates.status === "unavailable" || rates.entries.length === 0) {
+    return <p className="mt-2 text-xs text-slate-500">No saved normal-earning rate is available for this student.</p>;
+  }
+  return (
+    <div className="mt-2 space-y-1.5">
+      {rates.entries.map((entry, index) => (
+        <div key={`${entry.date || "undated"}-${entry.rate}-${index}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-sky-50 px-2.5 py-2 text-[11px]">
+          <span className="font-semibold text-slate-700">{friendlyDate(entry.date)}</span>
+          <span className="whitespace-nowrap font-extrabold text-sky-950">{cash(cents(entry.rate))}</span>
+          <span className="text-slate-500">Class count: {entry.class_count_at_time ?? "Not available"}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -114,19 +168,19 @@ export default function SalaryV2ProofModal({ payrollId, departmentId, onClose }:
     <div className="fixed inset-0 z-[150] flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-sm sm:items-center sm:p-4">
       <div className="flex max-h-[95vh] w-full flex-col overflow-hidden rounded-t-[28px] border border-slate-200 bg-slate-50 shadow-2xl sm:max-w-6xl sm:rounded-[28px]">
         <header className="shrink-0 border-b border-slate-200 bg-white p-4 sm:px-6 sm:py-5">
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 sm:flex sm:items-center">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-700"><ReceiptText size={21} /></div>
             <div className="min-w-0 flex-1">
               <div className="text-xs font-bold text-indigo-700">Salary calculation details</div>
-              <h3 className="mt-0.5 truncate text-xl font-extrabold text-slate-950 sm:text-2xl">{payroll?.teacher_name || "Monthly salary"}</h3>
+              <h3 className="mt-0.5 break-words text-xl font-extrabold leading-tight text-slate-950 sm:truncate sm:text-2xl">{payroll?.teacher_name || "Monthly salary"}</h3>
               <p className="mt-0.5 text-xs font-medium text-slate-500">
                 {payroll ? `${data?.department.name || "Quran Department"} · ${new Date(payroll.year, payroll.month - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" })} · ${statusLabel(payroll.status)}` : "Loading saved payroll..."}
               </p>
             </div>
-            <button type="button" onClick={download} disabled={!data || pdfBusy} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 text-xs font-extrabold text-white shadow-sm transition hover:bg-indigo-700 disabled:opacity-50">
+            <button type="button" onClick={onClose} aria-label="Close salary details" className="col-start-3 row-start-1 flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 sm:order-4"><X size={19} /></button>
+            <button type="button" onClick={download} disabled={!data || pdfBusy} className="col-span-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 text-xs font-extrabold text-white shadow-sm transition hover:bg-indigo-700 disabled:opacity-50 sm:order-3 sm:ml-auto sm:w-auto">
               <FileText size={16} />{pdfBusy ? "Preparing PDF..." : "Download salary PDF"}
             </button>
-            <button type="button" onClick={onClose} aria-label="Close salary details" className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600"><X size={19} /></button>
           </div>
           {pdfError && <p role="alert" className="mt-2 text-right text-xs font-semibold text-rose-700">{pdfError}</p>}
         </header>
@@ -137,7 +191,7 @@ export default function SalaryV2ProofModal({ payrollId, departmentId, onClose }:
           {!loading && payroll && data && (
             <div className="space-y-4">
               <div className="rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-xs leading-relaxed text-indigo-900">
-                <span className="font-extrabold">How to read this:</span> Each row shows a student's monthly paid classes, total earnings, any cutting and the remaining amount. Open a student to see the dates and the recorded reason for every cut. Amounts come from the saved payroll, not a new calculation.
+                <span className="font-extrabold">How to read this:</span> Student and Teacher attendance are shown separately: P means Present, L means Leave and A means Absent. Paid classes are the saved payroll entries. Rate / class shows the actual saved per-class rate; Mixed opens the recorded historical rates. Earned shows saved class earnings, Cutting shows saved deductions, and Net amount is the saved remaining amount. Amounts come from saved payroll records, not a new calculation.
               </div>
               <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
                 <ValueCard label="Class earnings" value={items?.classEarnings ?? Number(payroll.normal_earnings || 0) * 100} />
@@ -156,31 +210,41 @@ export default function SalaryV2ProofModal({ payrollId, departmentId, onClose }:
               {proof && (
                 <>
                   <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                    <div className="flex flex-wrap items-center justify-between gap-2 p-4 sm:px-5">
+                    <div className="flex flex-wrap items-center justify-between gap-3 p-4 sm:px-5">
                       <div>
                         <div className="flex items-center gap-2 text-base font-extrabold text-slate-950"><Users size={18} className="text-indigo-600" /> Student monthly salary</div>
                         <p className="mt-1 text-xs text-slate-500">{proof.students.length} students · {items!.classCount} paid classes · Select a student for full proof</p>
                       </div>
-                      <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-bold text-slate-600">Read-only</span>
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        <AttendanceLegend />
+                        <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-bold text-slate-600">Read-only</span>
+                      </div>
                     </div>
+                    <p className="px-4 pb-3 text-[11px] font-semibold text-slate-500 sm:hidden">Swipe the table horizontally to view all salary columns.</p>
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[660px] border-collapse text-left text-sm">
+                      <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
                         <thead className="bg-slate-900 text-xs text-white"><tr>
                           <th scope="col" className="px-5 py-3 font-semibold">Student</th>
+                          <th scope="col" className="px-3 py-3 text-center font-semibold">Student attendance</th>
+                          <th scope="col" className="px-3 py-3 text-center font-semibold">Teacher attendance</th>
                           <th scope="col" className="px-3 py-3 text-center font-semibold">Paid classes</th>
+                          <th scope="col" className="px-3 py-3 text-center font-semibold">Rate / class</th>
                           <th scope="col" className="px-3 py-3 text-right font-semibold">Earned</th>
                           <th scope="col" className="px-3 py-3 text-right font-semibold">Cutting</th>
                           <th scope="col" className="px-3 py-3 text-right font-semibold">Net amount</th>
                           <th scope="col" className="px-4 py-3 text-right font-semibold">Proof</th>
                         </tr></thead>
                         <tbody>
-                          {proof.students.map(({ student, paidDates, cuttingDetails }) => {
+                          {proof.students.map(({ student, paidDates, cuttingDetails, studentAttendance, teacherAttendance, appliedPerClassRates }) => {
                             const expanded = openStudent === student.studentId;
                             return (
                               <React.Fragment key={student.studentId}>
                                 <tr className={`border-b border-slate-100 ${expanded ? "bg-indigo-50/60" : "hover:bg-slate-50"}`}>
                                   <td className="px-5 py-3 font-bold text-slate-900">{student.studentName}</td>
+                                  <td className="px-3 py-3 text-center"><AttendanceBadges attendance={studentAttendance} subject="student" /></td>
+                                  <td className="px-3 py-3 text-center"><AttendanceBadges attendance={teacherAttendance} subject="teacher" /></td>
                                   <td className="px-3 py-3 text-center font-medium text-slate-700">{student.paidClasses}</td>
+                                  <td className="px-3 py-3 text-center"><RateDisplay rates={appliedPerClassRates} /></td>
                                   <td className="whitespace-nowrap px-3 py-3 text-right font-medium text-slate-800">{cash(student.classEarnings)}</td>
                                   <td className="whitespace-nowrap px-3 py-3 text-right font-semibold text-rose-700">{student.cutting ? `− ${cash(student.cutting)}` : "None"}</td>
                                   <td className="whitespace-nowrap px-3 py-3 text-right font-extrabold text-indigo-950">{cash(student.net)}</td>
@@ -191,8 +255,8 @@ export default function SalaryV2ProofModal({ payrollId, departmentId, onClose }:
                                   </td>
                                 </tr>
                                 {expanded && (
-                                  <tr className="bg-slate-50"><td colSpan={6} className="px-4 pb-4 pt-3 sm:px-6">
-                                    <div className="grid gap-3 lg:grid-cols-2">
+                                  <tr className="bg-slate-50"><td colSpan={9} className="px-4 pb-4 pt-3 sm:px-6">
+                                    <div className="grid gap-3 xl:grid-cols-3">
                                       <div className="rounded-xl border border-slate-200 bg-white p-3">
                                         <div className="flex items-center gap-2 text-xs font-extrabold text-slate-900"><CalendarDays size={15} className="text-indigo-600" /> Paid class dates ({student.paidClasses})</div>
                                         <p className="mt-1 text-[11px] text-slate-500">Recorded dates behind this student's monthly class earnings.</p>
@@ -200,6 +264,14 @@ export default function SalaryV2ProofModal({ payrollId, departmentId, onClose }:
                                           {paidDates.length ? paidDates.map((date, i) => <span key={`${date}-${i}`} className="rounded-lg bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-800">{friendlyDate(date)}</span>) : <span className="text-xs text-slate-500">No dated class entries recorded.</span>}
                                         </div>
                                         <p className="mt-3 text-xs font-bold text-slate-900">Total class earnings: {cash(student.classEarnings)}</p>
+                                        <div className="mt-4 border-t border-slate-100 pt-3">
+                                          <div className="text-xs font-extrabold text-slate-900">Saved rate history</div>
+                                          <RecordedRateHistory rates={appliedPerClassRates} />
+                                        </div>
+                                      </div>
+                                      <div className="space-y-3">
+                                        <AttendanceDetails label="Student" attendance={studentAttendance} />
+                                        <AttendanceDetails label="Teacher" attendance={teacherAttendance} />
                                       </div>
                                       <div className="rounded-xl border border-slate-200 bg-white p-3">
                                         <div className="flex items-center justify-between gap-3 text-xs font-extrabold text-slate-900"><span>Cutting and reasons</span><span className="text-rose-700">{cash(student.cutting)}</span></div>
@@ -217,10 +289,13 @@ export default function SalaryV2ProofModal({ payrollId, departmentId, onClose }:
                         </tbody>
                         <tfoot className="bg-indigo-50 text-sm font-extrabold text-indigo-950"><tr>
                           <td className="px-5 py-3">Student totals</td>
+                          <td className="px-3 py-3" aria-label="Student attendance totals are not combined" />
+                          <td className="px-3 py-3" aria-label="Teacher attendance totals are not combined to avoid duplicate session counts" />
                           <td className="px-3 py-3 text-center">{items!.classCount}</td>
-                          <td className="px-3 py-3 text-right">{cash(items!.classEarnings)}</td>
-                          <td className="px-3 py-3 text-right">{cash(items!.studentCutting)}</td>
-                          <td className="px-3 py-3 text-right">{cash(items!.studentNet)}</td>
+                          <td className="px-3 py-3" />
+                          <td className="whitespace-nowrap px-3 py-3 text-right">{cash(items!.classEarnings)}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-right">{cash(items!.studentCutting)}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-right">{cash(items!.studentNet)}</td>
                           <td className="px-4 py-3" />
                         </tr></tfoot>
                       </table>

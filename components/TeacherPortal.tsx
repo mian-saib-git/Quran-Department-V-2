@@ -1,3 +1,5 @@
+import { useCompleteAttendance } from "../hooks/useCompleteAttendance";
+import { getAllQuranAttendance } from "../services/djangoApiService";
 // IVS_ATTENDANCE_TIME_CLASS_BASED_V24
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -1482,9 +1484,12 @@ const handleSaveLesson = async (event: React.FormEvent) => {
 
   // ─── Derived attendance ────────────────────────────────────────────────────
 
+  const historyLoader = React.useCallback(() => getAllQuranAttendance({ scope: "dashboard" }), []);
+  const completeHistory = useCompleteAttendance(String(dashboard?.user?.id || ""), historyLoader, activeTab === "attendance");
+  const attendanceSource = activeTab === "attendance" ? completeHistory.rows : dashboard?.attendance || [];
   const attendance = useMemo(() => {
     const latest = new Map<string, any>();
-    for (const raw of dashboard?.attendance || []) {
+    for (const raw of attendanceSource) {
       const type = String(raw.entity_type || "").trim().toLowerCase();
       if (type !== "student" && type !== "teacher") continue;
       const normalized = { ...raw, entity_type: type, status: normalizeAttendanceStatus(raw.status) };
@@ -1496,7 +1501,7 @@ const handleSaveLesson = async (event: React.FormEvent) => {
       const dc = String(b.date || "").localeCompare(String(a.date || ""));
       return dc !== 0 ? dc : attendanceTimeValue(b) - attendanceTimeValue(a);
     });
-  }, [dashboard?.attendance]);
+  }, [attendanceSource]);
 
   const todaySchedules = useMemo(() => {
     return schedules.filter(row => normalizeDay(row.weekday) === todayWeekday)
@@ -3645,7 +3650,11 @@ const historyGroups = useMemo(() => {
           )}
 
           {/* ── Attendance Tab ── */}
-          {activeTab === "attendance" && (
+          {activeTab === "attendance" && (completeHistory.loading || completeHistory.error) && <div role="status" className="p-6">
+            <p>{completeHistory.error || "Loading complete attendance history…"}</p>
+            {completeHistory.error && <button onClick={completeHistory.reload}>Retry attendance</button>}
+          </div>}
+          {activeTab === "attendance" && !completeHistory.loading && !completeHistory.error && (
             <div className="space-y-5">
               <div className="tp-card">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

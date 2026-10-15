@@ -1,3 +1,4 @@
+from django.db import transaction
 from accounts.models import (
     User,
     UserDepartmentRole,
@@ -57,8 +58,4 @@ def notify_tuition_update(
     recipient_ids.update(linked_manager_ids)
 
     for user_id in recipient_ids:
-        notify_user(
-            user_id,
-            "academy_update",
-            message,
-        )
+        transaction.on_commit(lambda recipient=user_id: notify_user(recipient, "academy_update", message))

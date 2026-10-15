@@ -1,3 +1,6 @@
+import { beginImport } from "../../services/importActivity";
+import { runSequentialImport, importSummaryText } from "../../services/importWorkflow";
+import { ApiRequestError } from "../../services/authenticatedRequest";
 import React, { useMemo, useState } from "react";
 import {
   AlertCircle,
@@ -84,16 +87,6 @@ function normalizeLoose(value: unknown) {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "");
-}
-
-function cleanUsername(value: string, fallbackPrefix: string) {
-  const cleaned = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-
-  return cleaned || `${fallbackPrefix}_${Date.now()}`;
 }
 
 function splitName(fullName: string) {
@@ -298,12 +291,12 @@ function parseTuitionCsv(csvText: string, options: TuitionOptions) {
     parsedRows.push({
       rowNumber,
       teacher_name: teacherName,
-      teacher_username: get(row, ["teacher_username", "teacher_login", "teacher_id"]) || cleanUsername(teacherName, "teacher"),
+      teacher_username: get(row, ["teacher_username", "teacher_login", "teacher_id"]),
       teacher_password: get(row, ["teacher_password", "teacher_pass"]) || "123456",
       teacher_email: get(row, ["teacher_email"]),
       teacher_phone: get(row, ["teacher_phone", "teacher_mobile"]),
       student_name: studentName,
-      student_username: get(row, ["student_username", "student_login", "student_id"]) || cleanUsername(studentName, "student"),
+      student_username: get(row, ["student_username", "student_login", "student_id"]),
       student_password: get(row, ["student_password", "student_pass"]) || "123456",
       student_email: get(row, ["student_email", "email"]),
       student_phone: get(row, ["student_phone", "student_mobile", "phone"]),
@@ -408,13 +401,12 @@ export default function TuitionCsvImportModal({
     }
 
     setImporting(true);
+    const finishImport = beginImport();
     const liveTeachers = [...existingTeachers];
     const teacherByUsername = new Map<string, TuitionAccount>();
-    const teacherByName = new Map<string, TuitionAccount>();
 
     liveTeachers.forEach((teacher) => {
       teacherByUsername.set(String(teacher.username || "").toLowerCase(), teacher);
-      teacherByName.set(normalizeLoose(teacher.full_name), teacher);
     });
 
     let teachersCreated = 0;
@@ -425,12 +417,14 @@ export default function TuitionCsvImportModal({
       const teacherIdByUsername = new Map<string, number>();
 
       for (const row of rows) {
-        const teacherKey = row.teacher_username.toLowerCase();
+        const teacherKey = row.teacher_username.trim().toLowerCase();
+        if (!teacherKey || !row.student_username.trim()) {
+          throw new ApiRequestError("Explicit teacher and student usernames/IDs are required. Review rows with missing identifiers.", 409);
+        }
         if (teacherIdByUsername.has(teacherKey)) continue;
 
         const existing =
-          teacherByUsername.get(teacherKey) ||
-          teacherByName.get(normalizeLoose(row.teacher_name));
+          teacherByUsername.get(teacherKey);
 
         if (existing?.teacher_profile?.id) {
           teacherIdByUsername.set(teacherKey, existing.teacher_profile.id);
@@ -468,7 +462,7 @@ export default function TuitionCsvImportModal({
         studentGroups.set(key, [...(studentGroups.get(key) || []), row]);
       });
 
-      for (const groupRows of studentGroups.values()) {
+      const result = await runSequentialImport(Array.from(studentGroups.values()), async groupRows => {
         const first = groupRows[0];
         const name = splitName(first.student_name);
         const seenSubjects = new Set<string>();
@@ -513,7 +507,7 @@ export default function TuitionCsvImportModal({
 
         if (!enrollments.length) {
           importWarnings.push(`Student '${first.student_name}' was skipped because no valid enrollment was found.`);
-          continue;
+          throw new ApiRequestError("No valid enrollment; review this student group.", 400);
         }
 
         await createTuitionStudentBundle({
@@ -532,23 +526,16 @@ export default function TuitionCsvImportModal({
           enrollments,
         });
         studentsCreated += 1;
-      }
+      });
 
-      const details = [
-        `Imported ${teachersCreated} new teacher(s)`,
-        `created ${studentsCreated} student workspace(s)`,
-        `processed ${rows.length} subject row(s).`,
-      ].join(", ");
-
-      if (importWarnings.length) {
-        setWarnings(importWarnings);
-      }
-
-      await onImported(importWarnings.length ? `${details} Check import notes for skipped rows.` : details);
+      const details = `${importSummaryText(result)} Teachers created: ${teachersCreated}.`;
+      setWarnings([details, ...importWarnings, ...result.details]);
+      if (!result.conflicts && !result.invalid && !result.uncertain) await onImported(details);
     } catch (error: any) {
-      setWarnings([error?.message || "CSV import failed."]);
+      setWarnings([`Stopped. Teachers created: ${teachersCreated}; students created: ${studentsCreated}. Review the failed row before reuploading.`, error?.message || "CSV import failed."]);
     } finally {
       setImporting(false);
+      finishImport();
     }
   };
 

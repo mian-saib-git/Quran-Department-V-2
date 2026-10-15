@@ -1,3 +1,4 @@
+from .attendance_pagination import attendance_page, filter_attendance
 from .student_drop_service import (
     StudentDropDetectionError,
     reconcile_student_drop_from_attendance,
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import transaction
-from django.db.models import Q, Prefetch
+from django.db.models import Q, Prefetch, Count
 from django.utils import timezone
 
 from rest_framework import status
@@ -996,7 +997,10 @@ class DashboardView(APIView):
             ).filter(department=department).filter(
                 Q(entity_type=Attendance.EntityType.STUDENT, student__teacher=teacher)
                 | Q(entity_type=Attendance.EntityType.TEACHER, teacher=teacher)
-            ).order_by("-date", "-updated_at", "-id")[:300]
+            ).order_by("-date", "-updated_at", "-id")
+            attendance_total = attendance.count()
+            attendance_status_counts = dict(attendance.order_by().values_list("status").annotate(total=Count("id")))
+            attendance = attendance[:50]
 
             lessons = Lesson.objects.select_related(
                 "teacher__user",
@@ -1033,6 +1037,8 @@ class DashboardView(APIView):
                 "students": [student_payload(item) for item in students],
                 "schedules": [schedule_payload(item) for item in schedules],
                 "attendance": [attendance_payload(item) for item in attendance],
+                "attendance_count": attendance_total,
+                "attendance_status_counts": attendance_status_counts,
                 "lessons": [lesson_payload(item) for item in lessons],
                 "monthly_lesson_plans": [monthly_plan_payload(item) for item in monthly_plans],
                 "lesson_access_permissions": [lesson_permission_payload(item) for item in lesson_permissions],
@@ -1078,7 +1084,10 @@ class DashboardView(APIView):
                 department=department,
                 entity_type=Attendance.EntityType.STUDENT,
                 student=student,
-            ).order_by("-date", "-updated_at", "-id")[:100]
+            ).order_by("-date", "-updated_at", "-id")
+            attendance_total = attendance.count()
+            attendance_status_counts = dict(attendance.order_by().values_list("status").annotate(total=Count("id")))
+            attendance = attendance[:50]
 
             daily_reports = DailyLessonReport.objects.select_related(
                 "teacher__user",
@@ -1104,6 +1113,8 @@ class DashboardView(APIView):
                 "student": student_payload(student),
                 "schedules": [schedule_payload(item) for item in schedules],
                 "attendance": [attendance_payload(item) for item in attendance],
+                "attendance_count": attendance_total,
+                "attendance_status_counts": attendance_status_counts,
                 "lessons": [
                     {
                         "id": entry.id,
@@ -2640,68 +2651,12 @@ class AttendanceListCreateView(APIView):
     def get(self, request):
         user = request.user
 
-        date_value = str(
-            request.query_params.get(
-                "date",
-                "",
-            )
-        ).strip()
-
-        student_id = str(
-            request.query_params.get(
-                "student_id",
-                "",
-            )
-        ).strip()
-
-        teacher_id = str(
-            request.query_params.get(
-                "teacher_id",
-                "",
-            )
-        ).strip()
-
-        attendance = (
-            Attendance.objects
-            .select_related(
-                "teacher__user",
-                "student__user",
-                "marked_by",
-                "department",
-                "institution",
-            )
+        attendance = Attendance.objects.select_related(
+            "teacher__user", "student__user", "marked_by", "department", "institution"
         )
-
-        if date_value:
-            attendance = (
-                attendance.filter(
-                    date=date_value
-                )
-            )
-
-        if (
-            student_id
-            and student_id.isdigit()
-        ):
-            attendance = (
-                attendance.filter(
-                    student_id=int(
-                        student_id
-                    )
-                )
-            )
-
-        if (
-            teacher_id
-            and teacher_id.isdigit()
-        ):
-            attendance = (
-                attendance.filter(
-                    teacher_id=int(
-                        teacher_id
-                    )
-                )
-            )
+        if request.query_params.get("schedule_id"):
+            return Response({"detail": "Use class_key for Quran attendance."}, status=400)
+        attendance = filter_attendance(attendance, request.query_params)
 
         if is_department_manager(
             user
@@ -2808,28 +2763,24 @@ class AttendanceListCreateView(APIView):
                 ),
             )
 
-        total_count = (
-            attendance.count()
-        )
-
-        rows = list(
-            attendance
-            .order_by(
-                "-date",
-                "-updated_at",
-                "-id",
-            )[:1000]
-        )
-
-        return Response({
-            "count": total_count,
-            "results": [
-                attendance_payload(
-                    item
+        # State/dashboard consumers retain their stricter department boundary.
+        scope = request.query_params.get("scope", "authorized")
+        if scope not in {"authorized", "state", "dashboard"}:
+            return Response({"detail": "Invalid attendance scope."}, status=400)
+        if scope in {"state", "dashboard"}:
+            department = quran_department_for_user(user)
+            if not department:
+                return Response({"detail": "Quran department assignment is required."}, status=403)
+            attendance = attendance.filter(department=department)
+            if scope == "dashboard" and is_teacher_role(user):
+                attendance = attendance.filter(
+                    Q(entity_type="student", student__teacher=teacher)
+                    | Q(entity_type="teacher", teacher=teacher)
                 )
-                for item in rows
-            ],
-        })
+            if scope == "dashboard" and is_student_role(user):
+                attendance = attendance.filter(entity_type="student")
+        rows, metadata = attendance_page(attendance, request.query_params)
+        return Response({**metadata, "results": [attendance_payload(item) for item in rows]})
 
 
     @transaction.atomic
@@ -4475,21 +4426,9 @@ class AcademyStateView(APIView):
             return Response({"detail": "Invalid role."}, status=status.HTTP_403_FORBIDDEN)
 
         is_dashboard = request.query_params.get("dashboard") == "true"
-        if is_dashboard:
-            today = timezone.localdate()
-            if is_department_manager(user):
-                attendance_qs = attendance_qs.filter(date=today).order_by("-date", "-id")
-            elif is_teacher_role(user):
-                attendance_qs = attendance_qs.filter(date=today).order_by("-date", "-id")
-            elif is_student_role(user):
-                attendance_qs = attendance_qs.filter(date=today).order_by("-date", "-id")
-        else:
-            if is_department_manager(user):
-                attendance_qs = attendance_qs.order_by("-date", "-id")[:2000]
-            elif is_teacher_role(user):
-                attendance_qs = attendance_qs.order_by("-date", "-id")[:1000]
-            elif is_student_role(user):
-                attendance_qs = attendance_qs.order_by("-date", "-id")[:500]
+        attendance_total = attendance_qs.count()
+        # Bootstrap only today's state. Historical reads use the paginated API.
+        attendance_qs = attendance_qs.filter(date=timezone.localdate()).order_by("-date", "-id")
 
         weekday_label = {
             "monday": "Monday",
@@ -4664,6 +4603,8 @@ class AcademyStateView(APIView):
             "teachers": teacher_rows,
             "students": student_rows,
             "attendance": attendance_rows,
+            "attendance_count": attendance_total,
+            "attendance_date": str(timezone.localdate()),
         })
 
     @transaction.atomic

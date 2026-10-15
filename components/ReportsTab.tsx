@@ -1,3 +1,5 @@
+import { useCompleteAttendance } from "../hooks/useCompleteAttendance";
+import { getAllQuranAttendance, toAttendanceRecord } from "../services/djangoApiService";
 // IVS_ATTENDANCE_TIME_CLASS_BASED_V24
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { showFeatureLocked } from "../services/featureAccess";
@@ -816,7 +818,7 @@ type ReportsTabProps = {
 };
 
 export function ReportsTab({
-  appState,
+  appState: sourceState,
   departmentName = "Quran Department",
   generatedBy = "Coordinator",
   canExportPdf = true,
@@ -855,6 +857,18 @@ export function ReportsTab({
   const [attendanceImportOutput, setAttendanceImportOutput] = useState("");
   const [attendanceImportMessage, setAttendanceImportMessage] = useState("");
 
+
+  const effectiveRange = useMemo(() => {
+    if (period === "custom") return clampRange(start, end);
+    return getRangeForPeriod(period, anchor);
+  }, [period, anchor, start, end]);
+
+  const reportLoader = React.useCallback(async () => (
+    await getAllQuranAttendance({ scope: "state", date_from: effectiveRange.start, date_to: effectiveRange.end,
+      date_basis: dateFilterBasis === "last_updated" ? "either" : "attendance" })
+  ).map(toAttendanceRecord), [effectiveRange.start, effectiveRange.end, dateFilterBasis, attendanceImportCommitted]);
+  const completeAttendance = useCompleteAttendance(`${effectiveRange.start}:${effectiveRange.end}:${dateFilterBasis}:${attendanceImportCommitted}`, reportLoader);
+  const appState = { ...sourceState, attendance: completeAttendance.rows };
 
   const resetAttendanceImport = () => {
     setAttendanceImportFile(null);
@@ -1147,11 +1161,6 @@ export function ReportsTab({
     [studentsSorted, teacherById]
   );
 
-  const effectiveRange = useMemo(() => {
-    if (period === "custom") return clampRange(start, end);
-    return getRangeForPeriod(period, anchor);
-  }, [period, anchor, start, end]);
-
   const filteredLessons = useMemo(() => {
     const s = effectiveRange.start;
     const e = effectiveRange.end;
@@ -1275,7 +1284,7 @@ export function ReportsTab({
 
     if (!s || !e) return [] as Row[];
 
-    const dates = dateListInclusive(s, e, 400);
+    const dates = dateListInclusive(s, e, Math.ceil((Date.parse(e) - Date.parse(s)) / 86400000) + 1);
     const hasEntitySelection =
       selectedTeacherIds.length > 0 || selectedStudentIds.length > 0;
     const wantsUnmarked =
@@ -2782,6 +2791,10 @@ const pagedTeachers = useMemo(
     setDateFilterBasis("attendance_date");
   };
 
+  if (completeAttendance.loading || completeAttendance.error) return <div role="status" className="p-6">
+    <p>{completeAttendance.error || "Loading all attendance pages for the selected report range…"}</p>
+    {completeAttendance.error && <button onClick={completeAttendance.reload}>Retry report</button>}
+  </div>;
   return (
     <div className="w-full max-w-none mx-auto space-y-6">
       <div className="relative overflow-hidden rounded-[34px] border border-slate-200/70 bg-white/75 backdrop-blur-xl shadow-[0_24px_70px_rgba(15,23,42,0.09)] p-6">

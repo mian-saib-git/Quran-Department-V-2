@@ -169,6 +169,10 @@ function responseErrorMessage(data: any, status: number): string {
   );
 }
 
+export class ApiRequestError extends Error {
+  constructor(message: string, public status: number) { super(message); }
+}
+
 export async function authenticatedRequest<T>(
   path: string,
   options: RequestInit = {},
@@ -230,7 +234,7 @@ export async function authenticatedRequest<T>(
   }
 
   if (!response.ok) {
-    throw new Error(responseErrorMessage(data, response.status));
+    throw new ApiRequestError(responseErrorMessage(data, response.status), response.status);
   }
 
   return data as T;

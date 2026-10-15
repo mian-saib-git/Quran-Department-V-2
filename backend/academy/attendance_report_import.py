@@ -354,6 +354,26 @@ def _resolve_student(
     if len(local_exact) == 1:
         return local_exact[0], None, None
     if len(local_exact) > 1:
+        # CSV_DUPLICATE_MAP_UBAID_202609
+        # Use confirmed CSV identity, not dashboard schedule time.
+        if (
+            teacher.id == 45
+            and normalize_name(student_name) == "naminata cisse"
+            and attendance_date.year == 2026
+            and attendance_date.month == 9
+        ):
+            csv_student_id = {
+                "02:30": 610,
+                "03:00": 611,
+            }.get(class_time)
+
+            if csv_student_id is not None:
+                matches = [
+                    student for student in local_exact
+                    if student.id == csv_student_id
+                ]
+                if len(matches) == 1:
+                    return matches[0], None, None
         scheduled = _resolve_schedule_match(local_exact, teacher, attendance_date, class_time)
         if scheduled is not None:
             return scheduled, None, None
@@ -690,6 +710,39 @@ def import_attendance_report_csv(
     output_lines.append(f"Unmarked rows ignored: {parsed.unmarked_rows}")
     output_lines.append(f"Unique student/date records: {len(student_intents)}")
     output_lines.append(f"Unique teacher/date/time records: {len(teacher_intents)}")
+
+    # One teacher session may cover multiple student attendances.
+    # Count one teacher attendance credit per linked student.
+    teacher_credit_counts = Counter(
+        (
+            intent["teacher"].id,
+            attendance_date,
+            intent["class_time"],
+        )
+        for (_student_id, attendance_date), intent
+        in student_intents.items()
+        if teacher_intents.get(
+            (
+                intent["teacher"].id,
+                attendance_date,
+                intent["class_time"],
+            ),
+            {},
+        ).get("status") == "present"
+    )
+
+    teacher_credits = sum(teacher_credit_counts.values())
+    shared_extra = sum(
+        max(0, count - 1)
+        for count in teacher_credit_counts.values()
+    )
+
+    output_lines.append(
+        f"Teacher attendance credits (per student): {teacher_credits}"
+    )
+    output_lines.append(
+        f"Additional shared-session credits: {shared_extra}"
+    )
     output_lines.append("")
     output_lines.append("Database actions (existing rows are skipped, never updated):")
     output_lines.append(

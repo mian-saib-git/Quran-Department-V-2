@@ -1,3 +1,5 @@
+import { useCompleteAttendance } from "../../hooks/useCompleteAttendance";
+import { getAllTuitionTeacherAttendance } from "../../services/tuitionApiService";
 // IVS_TUITION_TEACHER_PORTAL_V53_DAILY_CLASSES_MOBILE_POLISH
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -338,7 +340,9 @@ export default function TuitionTeacherPortal({
   );
 
   const classes = data?.classes || [];
-  const attendance = data?.attendance || [];
+  const historyLoader = React.useCallback(() => getAllTuitionTeacherAttendance(departmentId), [departmentId]);
+  const completeHistory = useCompleteAttendance(`${departmentId}:${data?.user?.id || ""}`, historyLoader, activeTab === "attendance");
+  const attendance = activeTab === "attendance" ? completeHistory.rows : data?.attendance || [];
   const teacherName = data?.teacher.name || data?.user.full_name || data?.user.username || "Teacher";
   const subjectNames = useMemo(
     () => Array.from(new Set(classes.map((item) => item.subject_name).filter(Boolean))).sort(),
@@ -627,7 +631,11 @@ export default function TuitionTeacherPortal({
                 />
               )}
 
-              {activeTab === "attendance" && (
+              {activeTab === "attendance" && (completeHistory.loading || completeHistory.error) && <div role="status" className="p-6">
+                  <p>{completeHistory.error || "Loading complete attendance history…"}</p>
+                  {completeHistory.error && <button onClick={completeHistory.reload}>Retry attendance</button>}
+                </div>}
+                {activeTab === "attendance" && !completeHistory.loading && !completeHistory.error && (
                 <AttendanceTab
                   day={activeAttendanceDay}
                   totalRows={filteredAttendance.length}
@@ -723,10 +731,10 @@ function OverviewTab({
   onOpenClasses: () => void;
   onOpenAttendance: () => void;
 }) {
-  const rate = attendanceRate(attendance);
-  const present = attendance.filter((item) => item.status === "present").length;
-  const absent = attendance.filter((item) => item.status === "absent").length;
-  const leave = attendance.filter((item) => item.status === "leave").length;
+  const present = data?.counts.present || 0;
+  const absent = data?.counts.absent || 0;
+  const leave = data?.counts.leave || 0;
+  const rate = present + absent > 0 ? Math.round(present / (present + absent) * 100) : 0;
 
   return (
     <div className="space-y-6">

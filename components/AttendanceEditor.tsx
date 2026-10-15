@@ -1,3 +1,5 @@
+import { useCompleteAttendance } from "../hooks/useCompleteAttendance";
+import { loadQuranAttendanceDate } from "../services/djangoApiService";
 // IVS_ATTENDANCE_FILTER_LAYOUT_V25
 import ReactDOM from "react-dom";
 import React, { useMemo, useState } from "react";
@@ -922,15 +924,17 @@ function TeacherAttendanceModal({
 
 
 export function AttendanceEditor({
-  appState,
-  onUpsert,
-  onDelete,
+  appState: sourceState,
+  onUpsert: saveUpsert,
+  onDelete: saveDelete,
+  loadAttendanceForDate = loadQuranAttendanceDate,
   dedupeStudentLabels = false,
   fixedScheduleLabel = "",
   operationalWeekdays,
   teacherClassKeyForStudent = defaultTeacherClassKeyForStudent,
 }: {
   appState: AppState;
+  loadAttendanceForDate?: (date: string) => Promise<AttendanceRecord[]>;
   onUpsert: UpsertFn;
   onDelete: DeleteFn;
   dedupeStudentLabels?: boolean;
@@ -942,6 +946,19 @@ export function AttendanceEditor({
   const [date, setDate] = useState<string>(() =>
     latestOperationalAttendanceDate(operationalWeekdays),
   );
+  const dateLoader = React.useCallback(() => loadAttendanceForDate(date), [loadAttendanceForDate, date]);
+  const complete = useCompleteAttendance(date, dateLoader);
+  const appState = { ...sourceState, attendance: complete.rows };
+  const onUpsert: UpsertFn = async args => {
+    const saved = await saveUpsert(args);
+    if (saved) complete.reload();
+    return saved;
+  };
+  const onDelete: DeleteFn = async args => {
+    const saved = await saveDelete(args);
+    if (saved) complete.reload();
+    return saved;
+  };
   const [teacherId, setTeacherId] = useState<string>("all");
   const [entityFilter, setEntityFilter] = useState<"teachers" | "students">("teachers");
   const [timeFrom, setTimeFrom] = useState("");
@@ -1165,6 +1182,11 @@ const pagedStudents = getPagedItems(filteredStudents, page, PAGE_SIZE);
     return teacherCards.find((t) => t.teacherId === openTeacherId) || null;
   }, [openTeacherId, teacherCards]);
 
+if (complete.loading || complete.error) return <div role="status" className="p-6">
+  <input aria-label="Attendance date" type="date" value={date} onChange={event => setDate(event.target.value)} />
+  <p>{complete.error || "Loading complete attendance for this date…"}</p>
+  {complete.error && <button onClick={complete.reload}>Retry attendance</button>}
+</div>;
 return (
   <div className="w-full max-w-none ui-glass ui-card ui-gradient-border ui-card-hover p-4 sm:p-6 anim-fade-up">
       {/* Header */}
