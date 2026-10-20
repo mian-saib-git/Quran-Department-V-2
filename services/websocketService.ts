@@ -10,9 +10,7 @@ type WsEventType =
 
 type WsHandler = (data: any) => void;
 
-const WS_BASE =
-  (import.meta as any).env?.VITE_WS_BASE_URL ||
-  "ws://127.0.0.1:8000";
+const WS_BASE = ((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host);
 
 class AcademyWebSocket {
   private ws: WebSocket | null = null;

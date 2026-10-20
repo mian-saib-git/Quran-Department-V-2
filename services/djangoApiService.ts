@@ -1,8 +1,7 @@
 import { clearSession, loadSession, saveSession, type Session } from "./sessionService";
 import { authenticatedRequest } from "./authenticatedRequest";
 
-const DJANGO_API_BASE =
-  (import.meta as any).env?.VITE_DJANGO_API_BASE_URL || "http://127.0.0.1:8000";
+const DJANGO_API_BASE = window.location.origin;
 
 // ============================================================
 // Shared Types
