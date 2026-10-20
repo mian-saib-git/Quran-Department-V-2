@@ -16,7 +16,7 @@ type InboxNotification = {
 };
 type InboxResponse = { results: InboxNotification[]; unread_count: number; page: number; has_more: boolean };
 
-const WS_BASE = (import.meta as any).env?.VITE_WS_BASE_URL || "ws://127.0.0.1:8000";
+const WS_BASE = ((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host);
 const INBOX_REFRESH_EVENT = "ivs:notification-inbox-changed";
 const ACTION_LABELS: Record<string, string> = {
   lesson_requests: "Open requests",

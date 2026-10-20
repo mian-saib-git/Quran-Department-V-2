@@ -33,44 +33,8 @@ function getToken(): string {
   }
 }
 
-function normalizeWsBase(value: string): string {
-  const clean = String(value || "")
-    .trim()
-    .replace(/\/+$/, "");
-
-  if (!clean) return "";
-
-  if (clean.startsWith("https://")) {
-    return `wss://${clean.slice("https://".length)}`;
-  }
-
-  if (clean.startsWith("http://")) {
-    return `ws://${clean.slice("http://".length)}`;
-  }
-
-  return clean;
-}
-
 function getWsBaseUrl(): string {
-  const env = (import.meta as any).env || {};
-
-  const explicit = normalizeWsBase(
-    env.VITE_WS_BASE_URL || ""
-  );
-
-  if (explicit) return explicit;
-
-  const djangoApi = normalizeWsBase(
-    env.VITE_DJANGO_API_BASE_URL || ""
-  );
-
-  if (djangoApi) return djangoApi;
-
-  const protocol =
-    window.location.protocol === "https:"
-      ? "wss:"
-      : "ws:";
-
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}`;
 }
 
