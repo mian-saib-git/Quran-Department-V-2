@@ -6,9 +6,7 @@ import {
   type Session,
 } from "./sessionService";
 
-const API_BASE =
-  (import.meta as any).env?.VITE_DJANGO_API_BASE_URL ||
-  "http://127.0.0.1:8000";
+const API_BASE = window.location.origin;
 
 const TOKEN_REFRESH_PATH = "/api/auth/refresh/";
 const REFRESH_SKEW_SECONDS = 60;
