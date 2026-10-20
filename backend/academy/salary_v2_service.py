@@ -594,6 +594,10 @@ def build_department_month_context(
 
     students = _department_students(department)
 
+    observed_students_by_id = {
+        student.id: student for student in students
+    }
+
     states_by_student = {}
     schedule_rows_by_student = {}
     drop_events_by_student = {}

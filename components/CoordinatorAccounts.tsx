@@ -1189,7 +1189,6 @@ export default function CoordinatorAccounts({
     setModalMode(null);
     setSaving(false);
     setMessage("");
-    setReferralSearch("");
   };
 
   const openCsvImport = () => {
