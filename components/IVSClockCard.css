@@ -1,0 +1,62 @@
+/* Uploaded ClockCard.jsx adapted for IVS navbar dimensions and theme support. */
+.ivc-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  width: max-content;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 8px 11px 8px 8px;
+  background: linear-gradient(180deg,#fff 0%,#f7f8fe 100%);
+  border: 1px solid rgba(99,102,241,.12);
+  border-radius: 25px;
+  box-shadow: inset 0 1px 0 #fff, 0 10px 28px -14px rgba(79,70,229,.26);
+  font-family: Inter,"Plus Jakarta Sans","Segoe UI",system-ui,sans-serif;
+  isolation: isolate;
+}
+.ivc-dial { flex:none; display:block; width:62px; height:62px; filter:drop-shadow(0 3px 5px rgba(79,70,229,.12)); }
+.ivc-hand-slow,.ivc-hand-second { transition:transform .35s ease-out; }
+.ivc-body { flex:none; min-width:0; display:flex; flex-direction:column; gap:6px; }
+.ivc-time { display:flex; align-items:baseline; gap:7px; white-space:nowrap; line-height:1; font-variant-numeric:tabular-nums; color:#0b1020; }
+.ivc-digits { font-size:29px; font-weight:800; letter-spacing:-.045em; }
+.ivc-colon { color:#6366f1; animation:ivc-blink 2s ease-in-out infinite; }
+.ivc-period { color:#4f46e5; font-size:17px; font-weight:800; letter-spacing:-.025em; }
+.ivc-date { display:flex; align-items:center; gap:9px; white-space:nowrap; font-size:14px; line-height:1.1; }
+.ivc-weekday { color:#3b4660; font-weight:750; }
+.ivc-separator { width:1.5px; height:17px; border-radius:2px; background:#d0d6ec; }
+.ivc-month { color:#8b97b1; font-weight:650; }
+.ivc-card .ivs-clock-bell { flex:none; width:47px; height:47px; margin-left:2px; border-radius:16px; background:#eef0ff; border:1px solid #dbe0ff; color:#4f46e5; box-shadow:0 6px 14px rgba(79,70,229,.1); }
+.ivc-card .ivs-clock-bell:hover { background:#e5e7ff; border-color:#b4b9ff; transform:translateY(-1px); }
+.ivc-card .ivs-clock-bell:active { transform:scale(.96); }
+.ivc-card .ivs-clock-bell:focus-visible { outline:2px solid #4f46e5; outline-offset:3px; }
+.ivc-compact { gap:9px; padding:6px 9px 6px 6px; border-radius:20px; }
+.ivc-compact .ivc-dial { width:50px; height:50px; }
+.ivc-compact .ivc-digits { font-size:23px; }
+.ivc-compact .ivc-period { font-size:13px; }
+.ivc-compact .ivc-date { font-size:11px; gap:6px; }
+.ivc-compact .ivc-separator { height:13px; }
+.ivc-compact .ivs-clock-bell { width:41px; height:41px; border-radius:14px; margin-left:0; }
+@media(max-width:700px) {
+  .ivc-card { gap:8px; padding:6px 8px; border-radius:20px; }
+  .ivc-dial { width:48px; height:48px; }
+  .ivc-digits { font-size:22px; }
+  .ivc-period { font-size:12px; }
+  .ivc-date { font-size:11px; gap:6px; }
+  .ivc-separator { height:13px; }
+  .ivc-card .ivs-clock-bell { width:40px; height:40px; border-radius:13px; margin-left:0; }
+}
+@media(max-width:420px) {
+  .ivc-card { gap:7px; }
+  .ivc-dial { display:none; }
+  .ivc-digits { font-size:21px; }
+  .ivc-date { gap:5px; font-size:10px; }
+}
+@media(max-width:340px) { .ivc-weekday,.ivc-separator { display:none; } }
+@keyframes ivc-blink { 0%,60% { opacity:1; } 80%,100% { opacity:.38; } }
+@media(prefers-reduced-motion:reduce) { .ivc-colon { animation:none; } .ivc-hand-slow,.ivc-hand-second { transition:none; } }
+/* Keep the host portal's dark theme intact. */
+.dark .ivc-card,.tp-dark .ivc-card { background:linear-gradient(180deg,#172238,#101a2e); border-color:rgba(148,163,184,.22); box-shadow:0 8px 22px rgba(0,0,0,.2); }
+.dark .ivc-time,.tp-dark .ivc-time { color:#f8fafc; }
+.dark .ivc-weekday,.tp-dark .ivc-weekday { color:#cbd5e1; }
+.dark .ivc-month,.tp-dark .ivc-month { color:#94a3b8; }
+.dark .ivc-card .ivs-clock-bell,.tp-dark .ivc-card .ivs-clock-bell { background:#2d315e; color:#c7d2fe; border-color:#4f5696; }

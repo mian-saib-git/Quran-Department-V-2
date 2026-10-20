@@ -139,6 +139,14 @@ class User(AbstractUser):
         related_name="users",
     )
 
+    # Logical removal preserves paid payroll and historical teaching evidence.
+    archived_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    archived_effective_date = models.DateField(null=True, blank=True, db_index=True)
+    archived_by = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="archived_accounts",
+    )
+
     def is_platform_admin(self):
         return self.role == self.Role.PLATFORM_ADMIN or self.is_superuser
 
@@ -532,3 +540,33 @@ class PlatformNoticeReceipt(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.notice.title}"
+
+
+class PortalNotification(models.Model):
+    """Private inbox item: one row per authorized recipient and business event."""
+    recipient = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="portal_notifications"
+    )
+    department = models.ForeignKey(
+        Department, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="portal_notifications"
+    )
+    event_key = models.CharField(max_length=190)
+    kind = models.CharField(max_length=48)
+    title = models.CharField(max_length=180)
+    body = models.CharField(max_length=500, blank=True, default="")
+    target = models.CharField(max_length=48, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["recipient", "event_key"],
+                name="ivs_notification_recipient_event_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["recipient", "read_at", "-created_at"], name="ivs_notif_unread_idx"),
+        ]

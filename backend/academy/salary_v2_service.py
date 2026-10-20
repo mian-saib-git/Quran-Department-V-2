@@ -9,6 +9,7 @@ import re
 from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.utils import timezone
+from zoneinfo import ZoneInfo
 
 from .models import (
     Attendance,
@@ -237,7 +238,7 @@ def _student_enrollment_date(student, histories):
 
     return (
         student.status_effective_date
-        or timezone.localdate()
+        or timezone.localdate(timezone=ZoneInfo("Asia/Karachi"))
     )
 
 
@@ -386,6 +387,10 @@ def _is_real_scheduled_date(schedule_rows, target_date: date):
 
 def _base_status_is_salary_active(status):
     return status in BASE_SALARY_ACTIVE_STATUSES
+
+
+def _salary_eligible_on_date(current, *archive_dates):
+    return all(cutoff is None or current <= cutoff for cutoff in archive_dates)
 
 
 def _drop_active_on_date(drop_events, target_date: date):
@@ -615,6 +620,16 @@ def build_department_month_context(
         )
 
     class_counts = defaultdict(int)
+    teacher_ids_in_states = {
+        state.get("teacher_id")
+        for states in states_by_student.values()
+        for state in states.values()
+        if state.get("teacher_id")
+    }
+    teacher_cutoffs = dict(
+        TeacherProfile.objects.filter(id__in=teacher_ids_in_states)
+        .values_list("id", "user__archived_effective_date")
+    )
 
     # Active class count is a true date-based count.
     # It controls 80/90/100 and changes on transfer/drop/rejoin dates.
@@ -629,6 +644,11 @@ def build_department_month_context(
             teacher_id = state.get("teacher_id")
 
             if not teacher_id:
+                continue
+            if not _salary_eligible_on_date(
+                current, student.user.archived_effective_date,
+                teacher_cutoffs.get(teacher_id),
+            ):
                 continue
 
             if not _base_status_is_salary_active(
@@ -661,6 +681,11 @@ def build_department_month_context(
 
             if not state.get("enrolled") or not teacher_id:
                 continue
+            if not _salary_eligible_on_date(
+                current, student.user.archived_effective_date,
+                teacher_cutoffs.get(teacher_id),
+            ):
+                continue
 
             if not _base_status_is_salary_active(
                 state.get("class_status")
@@ -692,9 +717,12 @@ def build_department_month_context(
         .values_list("teacher_id", "student_id")
         .distinct()
     ):
-        monthly_attendance_students[observed_teacher_id].add(
-            observed_student_id
-        )
+        observed_student = observed_students_by_id.get(observed_student_id)
+        if observed_student is not None and _salary_eligible_on_date(
+            start, observed_student.user.archived_effective_date,
+            teacher_cutoffs.get(observed_teacher_id),
+        ):
+            monthly_attendance_students[observed_teacher_id].add(observed_student_id)
 
     monthly_attendance_counts = {
         teacher_id: len(student_ids)
@@ -725,6 +753,8 @@ def build_department_month_context(
         "start": start,
         "end": end,
         "students": students,
+        "students_by_id": observed_students_by_id,
+        "teacher_cutoffs": teacher_cutoffs,
         "states_by_student": states_by_student,
         "schedule_rows_by_student": (
             schedule_rows_by_student
@@ -880,16 +910,20 @@ def _all_adjustments_for_month(
     )
 
 
-def _department_teachers(department):
-    return list(
-        TeacherProfile.objects
-        .select_related("user")
-        .filter(
-            Q(department=department)
-            | Q(user__department=department)
+def _department_teachers(department, month_start=None):
+    queryset = (
+        TeacherProfile.objects.select_related("user")
+        .filter(Q(department=department) | Q(user__department=department))
+    )
+    if month_start is not None:
+        queryset = queryset.filter(
+            (Q(user__archived_effective_date__isnull=True)
+             | Q(user__archived_effective_date__gte=month_start))
+            & (Q(login_deleted_effective_date__isnull=True)
+               | Q(login_deleted_effective_date__gte=month_start))
         )
-        .distinct()
-        .order_by(
+    return list(
+        queryset.distinct().order_by(
             "user__first_name",
             "user__last_name",
             "user__username",
@@ -1087,7 +1121,7 @@ def calculate_department_payrolls(
     # Future months therefore have no earned salary yet.
     as_of_date = min(
         end,
-        timezone.localdate(),
+        timezone.localdate(timezone=ZoneInfo("Asia/Karachi")),
     )
 
     student_ids = [
@@ -1131,6 +1165,18 @@ def calculate_department_payrolls(
         ).only("teacher_id", "date", "class_key", "status")
         if (row.teacher_id, row.date, row.class_key) in session_keys
     } if session_keys else {}
+    extra_teacher_ids = {
+        row.teacher_id for row in student_attendance_rows if row.teacher_id
+    } | {
+        row.substitute_teacher_id for row in coverages if row.substitute_teacher_id
+    } | {
+        row.original_teacher_id for row in coverages if row.original_teacher_id
+    }
+    missing_teacher_ids = extra_teacher_ids.difference(context["teacher_cutoffs"])
+    context["teacher_cutoffs"].update(dict(
+        TeacherProfile.objects.filter(id__in=missing_teacher_ids)
+        .values_list("id", "user__archived_effective_date")
+    ))
     verified_sessions = {
         (row.student_id, row.date): row
         for row in student_attendance_rows
@@ -1155,6 +1201,12 @@ def calculate_department_payrolls(
         if not state or _is_real_scheduled_date(schedules, session_date):
             continue
         if not _base_status_is_salary_active(state.get("class_status")):
+            continue
+        if not _salary_eligible_on_date(
+            session_date,
+            context["students_by_id"][student_id].user.archived_effective_date,
+            context["teacher_cutoffs"].get(attendance.teacher_id),
+        ):
             continue
         if _drop_active_on_date(context["drop_events_by_student"][student_id], session_date):
             continue
@@ -1225,6 +1277,11 @@ def calculate_department_payrolls(
             )
 
             if not teacher_id:
+                continue
+            if not _salary_eligible_on_date(
+                current, student.user.archived_effective_date,
+                context["teacher_cutoffs"].get(teacher_id),
+            ):
                 continue
 
             rate, class_count, policy = (
@@ -1390,6 +1447,11 @@ def calculate_department_payrolls(
 
             if not coverage.substitute_teacher_id:
                 continue
+            if not _salary_eligible_on_date(
+                current, student.user.archived_effective_date,
+                context["teacher_cutoffs"].get(coverage.substitute_teacher_id),
+            ):
+                continue
 
             substitute_rate, substitute_count, sub_policy = (
                 _rate_for_teacher_date(
@@ -1554,7 +1616,7 @@ def calculate_department_payrolls(
     teacher_ids = {
         teacher.id
         for teacher in _department_teachers(
-            department
+            department, start
         )
     }
 
@@ -1566,6 +1628,16 @@ def calculate_department_payrolls(
     teacher_ids.update(
         row.teacher_id
         for row in all_adjustments
+    )
+    # Existing financial history stays readable, but archived teachers
+    # are excluded from new payroll months after their cutoff.
+    teacher_ids = set(
+        TeacherProfile.objects.filter(id__in=teacher_ids).filter(
+            (Q(user__archived_effective_date__isnull=True)
+             | Q(user__archived_effective_date__gte=start))
+            & (Q(login_deleted_effective_date__isnull=True)
+               | Q(login_deleted_effective_date__gte=start))
+        ).values_list("id", flat=True)
     )
 
     if target_teacher_ids is not None:
@@ -2027,6 +2099,9 @@ def calculate_teacher_payroll(
             "Teacher must belong to a department."
         )
 
+    start, _ = month_bounds(year, month)
+    if teacher.salary_end_date and teacher.salary_end_date < start:
+        raise ValueError("Teacher is archived before this salary month; future payroll is disabled.")
     calculate_department_payrolls(
         department,
         year,
@@ -2385,7 +2460,7 @@ def payroll_payload(payroll):
         "teacher_id": payroll.teacher_id,
         "teacher_name": str(payroll.teacher),
         "teacher_username": (
-            payroll.teacher.user.username
+            (payroll.teacher.user.username if payroll.teacher.user_id else "")
         ),
         "month": payroll.month,
         "year": payroll.year,

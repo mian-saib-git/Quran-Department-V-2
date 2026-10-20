@@ -441,8 +441,12 @@ class QuranSalaryDashboardView(APIView):
             total_items = 1
             total_pages = 1
         else:
+            month_start = date(year, month, 1)
             teacher_qs = TeacherProfile.objects.select_related("user").filter(
                 Q(department=department) | Q(user__department=department)
+            ).filter(
+                Q(user__archived_effective_date__isnull=True)
+                | Q(user__archived_effective_date__gte=month_start)
             ).distinct().order_by("user__first_name", "user__last_name", "user__username", "id")
             paginator = Paginator(teacher_qs, page_size)
             try:

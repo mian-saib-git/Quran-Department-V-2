@@ -247,7 +247,9 @@ def _locked_payroll_payload(
     ):
         payrolls = (
             payrolls
-            .select_for_update()
+            .select_for_update(
+                of=("self",)
+            )
         )
 
     payrolls = list(
@@ -589,7 +591,9 @@ def schedule_change_payroll_lock_payload(
     ):
         payrolls = (
             payrolls
-            .select_for_update()
+            .select_for_update(
+                of=("self",)
+            )
         )
 
     payrolls = list(

@@ -1,3 +1,6 @@
+import IVSClockCard from "./IVSClockCard";
+import NotificationBell from "./NotificationBell";
+import { IVS_NOTIFICATION_NAVIGATE_EVENT, type NotificationNavigateDetail } from "./notificationNavigation";
 import { useCompleteAttendance } from "../hooks/useCompleteAttendance";
 import { getAllQuranAttendance } from "../services/djangoApiService";
 // IVS_ATTENDANCE_TIME_CLASS_BASED_V24
@@ -877,6 +880,17 @@ const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [lessonRequests, setLessonRequests] = useState<LessonAccessRequestPayload[]>([]);
   const [requestingPermission, setRequestingPermission] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
+  useEffect(() => {
+    const onNotificationNavigate = (event: Event) => {
+      const detail = (event as CustomEvent<NotificationNavigateDetail>).detail;
+      if (detail?.handled || !detail || !["lessons", "lesson_requests"].includes(detail.target)) return;
+      setActiveTab("lesson");
+      setMobileSidebarOpen(false);
+      detail.handled = true;
+    };
+    window.addEventListener(IVS_NOTIFICATION_NAVIGATE_EVENT, onNotificationNavigate);
+    return () => window.removeEventListener(IVS_NOTIFICATION_NAVIGATE_EVENT, onNotificationNavigate);
+  }, []);
   const [salaryEnabled, setSalaryEnabled] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -2293,7 +2307,7 @@ const historyGroups = useMemo(() => {
             <X size={18} />
           </button>
           <div className="tp-logo-icon">
-            <img src="/ivs-logo.png" alt="Iqra Virtual School" className="tp-sidebar-logo-img" />
+            <img src="/ivs-logo.webp" alt="Iqra Virtual School" className="tp-sidebar-logo-img" />
           </div>
           <div className="min-w-0">
             <div className="text-sm font-bold text-slate-900 leading-tight">Iqra Virtual School</div>
@@ -2352,22 +2366,7 @@ const historyGroups = useMemo(() => {
           </div>
 
           <div className="flex items-center gap-3">
-            <div className="tp-clock-card">
-              <div className="tp-analog-clock">
-                <span className="tp-clock-mark tp-clock-mark-12">XII</span>
-                <span className="tp-clock-mark tp-clock-mark-3">III</span>
-                <span className="tp-clock-mark tp-clock-mark-6">VI</span>
-                <span className="tp-clock-mark tp-clock-mark-9">IX</span>
-                <span className="tp-clock-hand tp-clock-hour" style={{ transform: `translateX(-50%) rotate(${clockAngles.hour}deg)` }} />
-                <span className="tp-clock-hand tp-clock-minute" style={{ transform: `translateX(-50%) rotate(${clockAngles.minute}deg)` }} />
-                <span className="tp-clock-hand tp-clock-second" style={{ transform: `translateX(-50%) rotate(${clockAngles.second}deg)` }} />
-                <span className="tp-clock-center" />
-              </div>
-              <div>
-                <div className="text-sm font-black text-slate-900">{currentTime}</div>
-                <div className="text-[11px] font-bold text-slate-400">{getCurrentDate()}</div>
-              </div>
-            </div>
+            <IVSClockCard now={clockNow} compact />
             <button type="button" onClick={onToggleTheme} className="tp-theme-btn">
               {themeMode === "dark" ? <Sun size={18} /> : <Moon size={18} />}
             </button>

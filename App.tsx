@@ -1,3 +1,6 @@
+import IVSClockCard from "./components/IVSClockCard";
+import NotificationBell from "./components/NotificationBell";
+import { IVS_NOTIFICATION_NAVIGATE_EVENT, type NotificationNavigateDetail } from "./components/notificationNavigation";
 import { loadQuranAttendanceDate } from "./services/djangoApiService";
 import { isImportActive } from "./services/importActivity";
 // IVS_QURAN_PORTAL_ROLE_RECOVERY_V31
@@ -46,6 +49,7 @@ import {
 } from "./types";
 import { INITIAL_STATE, TIME_SLOTS } from "./constants";
 import { loadState, saveState } from "./services/storageService";
+import { getQuranBusinessTime } from "./services/quranBusinessTime";
 import { ClassCard } from "./components/ClassCard";
 // IVS_QURAN_LIVE_CARD_TUITION_UI_V17
 // IVS_QURAN_LIVE_UPNEXT_SPLIT_LAYOUT_V18
@@ -153,6 +157,14 @@ const NAV_META: Record<TabId, { label: string; icon: any }> = {
   },
 };
 
+// Platform administrators have a dedicated API and do not need department academy state.
+function isMainAdminSession(candidate: Session | null | undefined): boolean {
+  return Boolean(
+    candidate &&
+    (candidate.role === "platform_admin" || Boolean((candidate.user as any)?.is_superuser))
+  );
+}
+
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 const uuid = () => {
@@ -162,14 +174,6 @@ const uuid = () => {
   } catch {
     return "id_" + Math.random().toString(16).slice(2) + "_" + Date.now().toString(16);
   }
-};
-
-const getCurrentTimeSlot = (): string => {
-  const now = new Date();
-  const hours = now.getHours();
-  const minutes = now.getMinutes();
-  const slotMinutes = minutes >= 30 ? "30" : "00";
-  return `${hours.toString().padStart(2, "0")}:${slotMinutes}`;
 };
 
 const getNextTimeSlot = (currentSlot: string): string => {
@@ -202,7 +206,6 @@ const minutesUntilStudentClass = (student: Student, nowSlot: string): number => 
 };
 
 
-const getTodayDateString = (): string => new Date().toISOString().split("T")[0];
 
 const formatTime12 = (time24: string): string => {
   const [h, m] = time24.split(":");
@@ -241,46 +244,7 @@ const generateStudentId = () => "S" + String(Math.floor(100000 + Math.random() *
 
 
 function TopbarClock() {
-  const [now, setNow] = useState(new Date());
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  const second = now.getSeconds();
-  const minute = now.getMinutes() + second / 60;
-  const hour = (now.getHours() % 12) + minute / 60;
-  const timeText = now.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  });
-  const dayText = now.toLocaleDateString(undefined, { weekday: "long" });
-  const dateText = now.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-
-  return (
-    <div className="flex h-[54px] items-center gap-3">
-      <div className="relative h-[46px] w-[46px] shrink-0 rounded-full border border-white bg-gradient-to-br from-white to-slate-100 shadow-[0_8px_22px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)]">
-        <span className="absolute left-1/2 top-[2px] -translate-x-1/2 text-[6px] font-black text-slate-400">12</span>
-        <span className="absolute right-[4px] top-1/2 -translate-y-1/2 text-[6px] font-black text-slate-400">3</span>
-        <span className="absolute bottom-[2px] left-1/2 -translate-x-1/2 text-[6px] font-black text-slate-400">6</span>
-        <span className="absolute left-[4px] top-1/2 -translate-y-1/2 text-[6px] font-black text-slate-400">9</span>
-        <span className="absolute left-1/2 top-1/2 h-[13px] w-[3px] origin-bottom rounded-full bg-slate-800" style={{ transform: `translate(-50%, -100%) rotate(${hour * 30}deg)` }} />
-        <span className="absolute left-1/2 top-1/2 h-[17px] w-[2px] origin-bottom rounded-full bg-indigo-600" style={{ transform: `translate(-50%, -100%) rotate(${minute * 6}deg)` }} />
-        <span className="absolute left-1/2 top-1/2 h-[19px] w-px origin-bottom rounded-full bg-rose-500" style={{ transform: `translate(-50%, -100%) rotate(${second * 6}deg)` }} />
-        <span className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-indigo-600 shadow-sm" />
-      </div>
-      <div className="min-w-[150px] leading-tight">
-        <div className="text-[18px] font-black tabular-nums text-slate-950">{timeText}</div>
-        <div className="mt-1 flex items-center gap-2 text-[11px] font-extrabold text-slate-500">
-          <span>{dayText}</span>
-          <span className="h-1 w-1 rounded-full bg-indigo-500" />
-          <span>{dateText}</span>
-        </div>
-      </div>
-    </div>
-  );
+  return <IVSClockCard />;
 }
 
 
@@ -512,7 +476,8 @@ export default function App() {
   const accountStateRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const accountStateRefreshRunning = useRef(false);
   const scheduleAccountStateRefresh = React.useCallback(() => {
-    if (isImportActive()) return;
+    // Superadmin events should not trigger the protected department state endpoint.
+    if (isMainAdminSession(loadSession()) || isImportActive()) return;
     if (accountStateRefreshTimer.current) clearTimeout(accountStateRefreshTimer.current);
     accountStateRefreshTimer.current = setTimeout(async () => {
       if (isImportActive() || accountStateRefreshRunning.current) return;
@@ -558,6 +523,7 @@ export default function App() {
     }
   }, []));
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
+  const [notificationRequestsVersion, setNotificationRequestsVersion] = useState(0);
   const [dashboardAccountEditTarget, setDashboardAccountEditTarget] = useState<{
     role: "teacher" | "student";
     profileId: string;
@@ -633,6 +599,16 @@ export default function App() {
       setPlatformNotices([]);
       setFeatureContextLoaded(false);
       setFeatureContextError("");
+      return;
+    }
+
+    if (isMainAdminSession(currentSession)) {
+      // PlatformAdmin requests its own authorized data. Avoid department-only
+      // auth/context retries (and their unnecessary API traffic).
+      authContextRequestRef.current += 1;
+      setFeatureContextLoaded(false);
+      setFeatureContextError("");
+      setAuthContext(null);
       return;
     }
 
@@ -753,7 +729,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!session?.access) return;
+    if (!session?.access || isMainAdminSession(session)) return;
     const timer = window.setInterval(() => {
       getAuthContext()
         .then((ctx) => setMaintenanceState(ctx.maintenance ?? { active: false }))
@@ -1224,7 +1200,9 @@ export default function App() {
       // Main Admin-disabled tabs stay visible as locked. Department Admin rules
       // hide a tab only while its Main Admin switch is enabled.
       if (!hasFeature(featureKey)) return false;
-      return coordinatorTabAccess[featureKey] === false;
+      // Auth context contains an explicit boolean for each coordinator tab.
+      // A missing key must not silently grant access on a partial response.
+      return coordinatorTabAccess[featureKey] !== true;
     },
     [coordinatorTabAccess, featureContextLoaded, hasFeature, session?.role]
   );
@@ -1435,7 +1413,6 @@ export default function App() {
   }, [searchInput]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarEdgeHover, setSidebarEdgeHover] = useState(false);
-  const [sidebarTextReady, setSidebarTextReady] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const timelineCardRef = useRef<HTMLDivElement | null>(null);
 
@@ -1450,20 +1427,6 @@ export default function App() {
 
 
 
-  useEffect(() => {
-    const open = sidebarEdgeHover || mobileMenuOpen;
-
-    if (!open) {
-      setSidebarTextReady(false);
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      setSidebarTextReady(true);
-    }, 210);
-
-    return () => window.clearTimeout(timer);
-  }, [sidebarEdgeHover, mobileMenuOpen]);
 
 
 
@@ -1511,11 +1474,32 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    if (isPlatformAdmin || isTuitionFeatureContext || !isCoordinator || !featureContextLoaded) return;
+    const onNotificationNavigate = (event: Event) => {
+      const detail = (event as CustomEvent<NotificationNavigateDetail>).detail;
+      if (!detail || detail.handled) return;
+      const tab: TabId | null = detail.target === "lesson_requests" || detail.target === "lessons"
+        ? "lessons" : detail.target === "salary" ? "teacher-salary" : null;
+      if (!tab || !canAccessPortalTab(tab) || isTabLocked(tab)) return;
+      if (tab === "teacher-salary" && session?.role === "coordinator") return;
+      if (detail.target === "lesson_requests") setNotificationRequestsVersion(v => v + 1);
+      navigateToTab(tab);
+      detail.handled = true;
+    };
+    window.addEventListener(IVS_NOTIFICATION_NAVIGATE_EVENT, onNotificationNavigate);
+    return () => window.removeEventListener(IVS_NOTIFICATION_NAVIGATE_EVENT, onNotificationNavigate);
+  }, [isPlatformAdmin, isTuitionFeatureContext, isCoordinator, featureContextLoaded, canAccessPortalTab, isTabLocked, session?.role]);
+
   // IVS_LIVE_CLASS_ACCOUNT_LINKS_V14
   const openDashboardAccountEditor = (
     role: "teacher" | "student",
     profileId: string,
   ) => {
+    if (!canAccessPortalTab("accounts")) {
+      showFeatureLocked("Accounts & Enrollment", "Your Department Admin has not granted access to Accounts & Enrollment.");
+      return;
+    }
     if (!hasFeature("tab_accounts_enrollment")) {
       showFeatureLocked(
         "Accounts & Enrollment",
@@ -1644,7 +1628,8 @@ export default function App() {
 
     const loadInitialState = async () => {
       try {
-        if (!session) {
+        if (!session || isMainAdminSession(session)) {
+          // Dedicated Superadmin portal must not fetch /api/academy/state/.
           setHydrated(true);
           return;
         }
@@ -1708,14 +1693,14 @@ export default function App() {
 
   // Fetch full state when leaving dashboard
   useEffect(() => {
-    if (activeTab !== "dashboard" && appState.isPartial) {
+    if (!isMainAdminSession(session) && activeTab !== "dashboard" && appState.isPartial) {
       loadState(false)
         .then(loaded => {
           setAppState(loaded);
         })
         .catch(console.error);
     }
-  }, [activeTab, appState.isPartial]);
+  }, [activeTab, appState.isPartial, session]);
 
 
   useEffect(() => {
@@ -1736,10 +1721,11 @@ export default function App() {
 
 
   // ---------------- Derived ----------------
-  const currentSlot = getCurrentTimeSlot();
+  const quranBusinessNow = getQuranBusinessTime();
+  const currentSlot = quranBusinessNow.timeSlot;
   const nextSlot = getNextTimeSlot(currentSlot);
-  const todayStr = getTodayDateString();
-  const currentDayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+  const todayStr = quranBusinessNow.date;
+  const currentDayName = quranBusinessNow.weekday;
 
   const todayAttendanceSummary = useMemo(() => {
     const teacherRecs = viewAtt.filter(r => r.date === todayStr && r.entityType === EntityType.TEACHER);
@@ -2749,12 +2735,20 @@ export default function App() {
         .ivs-login-bg {
           position: absolute;
           inset: 0;
-          background-image:
-            linear-gradient(rgba(35, 20, 80, 0.10), rgba(35, 20, 80, 0.10)),
-            url("/login-bg.png");
-          background-size: cover;
-          background-position: center;
-          background-repeat: no-repeat;
+          overflow: hidden;
+          background: #edeaf5;
+        }
+
+        .ivs-login-bg picture,
+        .ivs-login-bg-image {
+          display: block;
+          width: 100%;
+          height: 100%;
+        }
+
+        .ivs-login-bg-image {
+          object-fit: cover;
+          object-position: center;
         }
 
         .ivs-login-bg::after {
@@ -2764,7 +2758,8 @@ export default function App() {
           background:
             radial-gradient(circle at 18% 16%, rgba(139,92,246,0.20), transparent 35%),
             radial-gradient(circle at 84% 88%, rgba(168,85,247,0.18), transparent 34%),
-            linear-gradient(120deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+            linear-gradient(120deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02)),
+            linear-gradient(rgba(35,20,80,0.10), rgba(35,20,80,0.10));
           pointer-events: none;
         }
 
@@ -3180,7 +3175,23 @@ export default function App() {
 
         <div className="ivs-login-root">
           <div className="ivs-login-scene">
-            <div className="ivs-login-bg" />
+            <div className="ivs-login-bg" aria-hidden="true">
+            <picture>
+              <source
+                media="(max-width: 600px) and (orientation: portrait)"
+                srcSet="/login-bg-mobile.webp"
+                type="image/webp"
+              />
+              <img
+                className="ivs-login-bg-image"
+                src="/login-bg.webp"
+                alt=""
+                loading="eager"
+                fetchPriority="high"
+                decoding="async"
+              />
+            </picture>
+          </div>
             <div className="ivs-login-grid" />
 
             <div className="ivs-login-orb ivs-login-orb-1" />
@@ -3191,7 +3202,7 @@ export default function App() {
                 <div className="ivs-login-brand">
                   <div className="ivs-login-logo">
                     <img
-                      src="/ivs-logo.png"
+                      src="/ivs-logo.webp"
                       alt="Iqra Virtual School"
                       className="ivs-login-logo-img"
                     />
@@ -3674,11 +3685,6 @@ export default function App() {
 
       <div className="min-h-screen bg-slate-50">
         <div className="flex">
-          <div
-            className="hidden md:block fixed left-0 top-0 z-[39] h-screen w-5 bg-transparent"
-            onMouseEnter={() => setSidebarEdgeHover(true)}
-          />
-
           {/* ═══════════════════════════════════════════════════════
     SIDEBAR
     Collapsed : logo → admin icon → nav icons → logout icon
@@ -3692,12 +3698,24 @@ export default function App() {
             aria-hidden="true"
           />
 
+          {/* Single mouse hit region includes the left screen edge and the inset sidebar.
+              92px collapsed = 16px gutter + 76px sidebar; 302px expanded = 16px + 286px.
+              Keeping one parent hover target prevents enter/leave flicker at the gutter. */}
+          <div
+            className={`fixed inset-y-0 left-0 z-40 w-0 pointer-events-none md:pointer-events-auto ${sidebarEdgeHover ? "md:w-[302px]" : "md:w-[92px]"}`}
+            onMouseEnter={() => {
+              if (window.matchMedia("(min-width: 768px)").matches) setSidebarEdgeHover(true);
+            }}
+            onMouseLeave={() => {
+              if (window.matchMedia("(min-width: 768px)").matches) {
+                setSidebarEdgeHover(false);
+              }
+            }}
+          >
           <aside
-            onMouseEnter={() => setSidebarEdgeHover(true)}
-            onMouseLeave={() => setSidebarEdgeHover(false)}
             className={`
-    group
-${sidebarEdgeHover ? "is-sidebar-open" : ""}
+    group ivs-quran-sidebar pointer-events-auto
+${sidebarEdgeHover ? "sidebar-content-ready" : ""}
     fixed inset-y-0 left-0 z-40
     transform transition-transform duration-300 ease-in-out
     ${mobileMenuOpen ? "translate-x-0" : "-translate-x-[110%]"}
@@ -3705,7 +3723,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
     shrink-0
     m-3 md:m-4
-  w-[286px] md:w-[76px] md:hover:w-[286px] ${sidebarEdgeHover ? "md:!w-[286px]" : ""}
+  w-[286px] ${sidebarEdgeHover ? "md:w-[286px]" : "md:w-[76px]"}
     rounded-[28px]
     border border-white/70
     bg-white/68 backdrop-blur-2xl
@@ -3713,12 +3731,9 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
     shadow-none md:shadow-[-12px_-12px_28px_rgba(255,255,255,0.90),16px_20px_48px_rgba(15,23,42,0.13),inset_0_1px_0_rgba(255,255,255,0.88)]
 
-    md:transition-[width]
-    md:duration-300
-    md:ease-[cubic-bezier(.2,.8,.2,1)]
+    md:transition-none
   `}
           >
-            <div className="hidden md:block fixed left-0 top-0 h-screen w-5 bg-transparent" />
             <div className="h-full flex flex-col">
 
               {/* ─────────────────────────────────────
@@ -3727,20 +3742,20 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
               <div className="px-3 pt-3 pb-0">
 
                 {/* Collapsed */}
-                <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-2">
+                <div className="hidden md:flex ivs-sidebar-collapsed items-center justify-center py-2">
                   <div className="w-[52px] h-[52px] rounded-[17px] bg-white border border-slate-200/80 flex items-center justify-center overflow-hidden shadow-[-6px_-6px_14px_rgba(255,255,255,0.98),6px_8px_18px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)]">
-                    <img src="/ivs-logo.png" alt="IVS" className="w-10 h-10 object-contain" />
+                    <img src="/ivs-logo.webp" alt="IVS" className="w-10 h-10 object-contain" />
                   </div>
                 </div>
 
                 {/* Expanded */}
-                <div className="flex md:hidden md:group-hover:flex items-center gap-2.5 rounded-[20px] bg-white/80 border border-white/90 px-2.5 py-2.5 shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)]">
+                <div className="flex md:hidden ivs-sidebar-expanded items-center gap-2.5 rounded-[20px] bg-white/80 border border-white/90 px-2.5 py-2.5 shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)]">
                   <div className="w-[48px] h-[48px] rounded-[16px] bg-white border border-slate-200/70 flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_10px_20px_rgba(15,23,42,0.07)] shrink-0 overflow-hidden">
-                    <img src="/ivs-logo.png" alt="Iqra Virtual School" className="w-9 h-9 object-contain" />
+                    <img src="/ivs-logo.webp" alt="Iqra Virtual School" className="w-9 h-9 object-contain" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="text-[13.5px] font-extrabold text-slate-950 leading-tight truncate">Iqra Virtual School</div>
-                    <div className="text-[10.5px] font-semibold text-slate-500 truncate mt-0.5">{quranDepartmentDisplayName}</div>
+                    <div className="text-[10.5px] font-semibold text-slate-500 mt-0.5 leading-snug whitespace-normal break-words" title={quranDepartmentDisplayName}>{quranDepartmentDisplayName}</div>
                   </div>
                   <button onClick={() => setMobileMenuOpen(false)} className="md:hidden h-7 w-7 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-500 shrink-0" title="Close">
                     <X size={14} />
@@ -3749,7 +3764,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
               </div>
 
               {/* Divider after brand */}
-              <div className="mx-4 mt-3 h-px bg-slate-200/70 hidden md:hidden md:group-hover:block" />
+              <div className="mx-4 mt-3 h-px bg-slate-200/70 hidden md:hidden ivs-sidebar-expanded-divider" />
               <div className="mx-4 mt-3 h-px bg-slate-200/70 md:hidden" />
 
               {/* ─────────────────────────────────────
@@ -3758,26 +3773,26 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
               <div className="px-3 pt-3 pb-0">
 
                 {/* Collapsed */}
-                <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-2">
+                <div className="hidden md:flex ivs-sidebar-collapsed items-center justify-center py-2">
                   <div className="w-[52px] h-[52px] rounded-[17px] bg-slate-900 border border-slate-700/50 flex items-center justify-center overflow-hidden shadow-[0_12px_28px_rgba(15,23,42,0.30)]">
                     <RoleSidebarIcon size={22} className="text-white" aria-hidden="true" />
                   </div>
                 </div>
 
                 {/* Expanded */}
-                <div className="flex md:hidden md:group-hover:flex items-center gap-2.5 rounded-[20px] bg-slate-950 px-2.5 py-2.5 text-white shadow-[0_20px_48px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.08)]">
+                <div className="flex md:hidden ivs-sidebar-expanded items-center gap-2.5 rounded-[20px] bg-slate-950 px-2.5 py-2.5 text-white shadow-[0_20px_48px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.08)]">
                   <div className="w-[48px] h-[48px] rounded-[16px] bg-white/10 border border-white/10 flex items-center justify-center shadow-[0_12px_24px_rgba(0,0,0,0.25)] shrink-0 overflow-hidden">
                     <RoleSidebarIcon size={20} className="text-white" aria-hidden="true" />
                   </div>
-                  <div className="min-w-0">
-                    <div className="text-[12.5px] font-extrabold whitespace-nowrap">{roleLabel}</div>
+                  <div className="min-w-0 flex-1">
+                    <div className="max-w-full text-[12.5px] font-extrabold leading-snug whitespace-normal break-words" title={roleLabel}>{roleLabel}</div>
                     <div className="text-[10px] text-slate-400 mt-0.5 truncate font-semibold">{sidebarDisplayName}</div>
                   </div>
                 </div>
               </div>
 
               {/* Divider after account */}
-              <div className="mx-4 mt-3 h-px bg-slate-200/70 hidden md:hidden md:group-hover:block" />
+              <div className="mx-4 mt-3 h-px bg-slate-200/70 hidden md:hidden ivs-sidebar-expanded-divider" />
               <div className="mx-4 mt-3 h-px bg-slate-200/70 md:hidden" />
 
               {/* ─────────────────────────────────────
@@ -3786,7 +3801,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
               <nav className="flex-1 px-3 pt-3 overflow-y-auto" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
 
                 {/* Collapsed: stacked bare icons */}
-                <div className="hidden md:flex md:group-hover:hidden flex-col items-center gap-2.5 py-1">
+                <div className="hidden md:flex ivs-sidebar-collapsed flex-col items-center gap-2.5 py-1">
                   {coordinatorNavItems.map((id) => {
                     const item = NAV_META[id];
                     const Icon = item.icon;
@@ -3819,7 +3834,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
                 </div>
 
                 {/* Expanded: icon + label — grid-cols-[52px_1fr] keeps icon & text close */}
-                <div className="flex md:hidden md:group-hover:flex flex-col gap-1">
+                <div className="flex md:hidden ivs-sidebar-expanded flex-col gap-1">
                   {coordinatorNavItems.map((id) => {
                     const item = NAV_META[id];
                     const Icon = item.icon;
@@ -3874,7 +3889,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 ───────────────────────────────────── */}
               <div className="px-3 pt-3 pb-2">
                 {/* Collapsed */}
-                <div className="hidden md:flex md:group-hover:hidden items-center justify-center">
+                <div className="hidden md:flex ivs-sidebar-collapsed items-center justify-center">
                   <button
                     type="button"
                     onMouseEnter={() => {
@@ -3943,7 +3958,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
                     setAssistantOpen(true);
                     setMobileMenuOpen(false);
                   }}
-                  className={`flex md:hidden md:group-hover:flex w-full items-center gap-3 rounded-[22px] border px-3 py-3 text-left transition active:scale-[0.99] ${hasFeature("ai_assistant")
+                  className={`flex md:hidden ivs-sidebar-expanded w-full items-center gap-3 rounded-[22px] border px-3 py-3 text-left transition active:scale-[0.99] ${hasFeature("ai_assistant")
                     ? "bg-white/80 border-white/90 shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)] hover:bg-white"
                     : "border-slate-300 bg-slate-100 text-slate-500 grayscale opacity-75 shadow-inner"
                     }`}
@@ -3991,7 +4006,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
               <div className="px-3 pt-2 pb-3">
 
                 {/* Collapsed */}
-                <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-1">
+                <div className="hidden md:flex ivs-sidebar-collapsed items-center justify-center py-1">
                   <button onClick={() => { disconnectAcademyWS(); clearSession(); setSession(null); navigateToTab("dashboard"); }} title="Logout" className="transition-all duration-300">
                     <div className="w-[52px] h-[52px] rounded-[17px] bg-white/95 border border-rose-100 flex items-center justify-center text-rose-600 shadow-[-5px_-5px_12px_rgba(255,255,255,0.95),5px_7px_16px_rgba(244,63,94,0.12),inset_0_1px_0_rgba(255,255,255,1)]">
                       <LogOut size={19} />
@@ -4003,7 +4018,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
                 <button
                   onClick={() => { disconnectAcademyWS(); clearSession(); setSession(null); navigateToTab("dashboard"); }}
                   title="Logout"
-                  className="w-full flex md:hidden md:group-hover:flex rounded-[16px] bg-rose-50/90 border border-rose-100/80 hover:bg-rose-100/90 transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] shadow-[-4px_-4px_12px_rgba(255,255,255,0.95),4px_6px_14px_rgba(244,63,94,0.08)]"
+                  className="w-full flex md:hidden ivs-sidebar-expanded rounded-[16px] bg-rose-50/90 border border-rose-100/80 hover:bg-rose-100/90 transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] shadow-[-4px_-4px_12px_rgba(255,255,255,0.95),4px_6px_14px_rgba(244,63,94,0.08)]"
                 >
                   {/* Same 52px col as nav items — perfectly aligned */}
                   <div className="grid grid-cols-[52px_1fr] items-center w-full">
@@ -4021,6 +4036,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
             </div>
           </aside>
+          </div>
 
           {/* Content */}
           <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
@@ -4053,16 +4069,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
                   {/* Right */}
                   <div className="flex items-center gap-3 sm:gap-4">
-                    <div
-                      className="
-            px-2.5 py-1 rounded-[24px]
-            bg-white/72 backdrop-blur
-            border border-slate-200/80
-            shadow-[0_12px_28px_rgba(15,23,42,0.07)]
-          "
-                    >
-                      <TopbarClock />
-                    </div>
+                    <TopbarClock />
 
                     {(isSuperAdmin || isDepartmentAdmin) ? (
                       <button
@@ -4682,7 +4689,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
               {activeTab === "lessons" && canAccessPortalTab("lessons") && hasFeature("tab_lessons_control") && (
                 <div className="w-full max-w-none mx-auto">
                   <Suspense fallback={<TabLoading />}>
-                    <CoordinatorLessons />
+                    <CoordinatorLessons notificationRequestsVersion={notificationRequestsVersion} />
                   </Suspense>
                 </div>
               )}
@@ -5304,16 +5311,25 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
 
 
+/* Keep only the compact icons visible while the desktop sidebar animates.
+   Reveal the full cards after the width transition; this prevents the dark
+   account card from briefly appearing as a narrow vertical strip. */
 @media (min-width: 768px) {
-  .is-sidebar-open [class~="md:group-hover:hidden"] {
+  .ivs-quran-sidebar .ivs-sidebar-collapsed {
+    display: flex !important;
+    width: 52px;
+  }
+  .ivs-quran-sidebar .ivs-sidebar-expanded,
+  .ivs-quran-sidebar .ivs-sidebar-expanded-divider {
     display: none !important;
   }
-
-  .is-sidebar-open [class~="md:group-hover:flex"] {
+  .ivs-quran-sidebar.sidebar-content-ready .ivs-sidebar-collapsed {
+    display: none !important;
+  }
+  .ivs-quran-sidebar.sidebar-content-ready .ivs-sidebar-expanded {
     display: flex !important;
   }
-
-  .is-sidebar-open [class~="md:group-hover:block"] {
+  .ivs-quran-sidebar.sidebar-content-ready .ivs-sidebar-expanded-divider {
     display: block !important;
   }
 }

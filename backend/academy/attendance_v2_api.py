@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from django.db import transaction
 from django.db.models import Q
@@ -31,6 +32,7 @@ from .payroll_source_locks import (
     teacher_session_payroll_lock_payload,
 )
 from .ws_notify import notify_global
+from .substitute_availability_rules import can_release_scheduled_teacher
 
 
 ATTENDANCE_MANAGER_ROLES = {
@@ -98,7 +100,7 @@ def _parse_date(value):
             "date must use YYYY-MM-DD format."
         )
 
-    if parsed > timezone.localdate():
+    if parsed > timezone.localdate(timezone=ZoneInfo("Asia/Karachi")):
         raise ValueError(
             "Future attendance dates are not allowed."
         )
@@ -370,11 +372,17 @@ def _busy_teacher_ids(
         )
         .only(
             "teacher_id",
+            "student_id",
             "time_slot",
             "duration_minutes",
         )
     )
 
+    # Group actual overlapping sessions. A schedule is NOT enough by
+    # itself to make a teacher busy if every student has a confirmed
+    # absence/leave AND the teacher is explicitly present.
+    # One present/unmarked student in ANY overlapping session blocks.
+    overlapping = {}
     for row in schedule_rows:
         if _intervals_overlap(
             session_time,
@@ -382,9 +390,48 @@ def _busy_teacher_ids(
             row.time_slot,
             row.duration_minutes,
         ):
-            busy_ids.add(
-                row.teacher_id
+            key = (
+                row.teacher_id,
+                row.time_slot.strftime("%H:%M"),
             )
+            overlapping.setdefault(key, set()).add(row.student_id)
+
+    if overlapping:
+        all_student_ids = {
+            student_id
+            for student_ids in overlapping.values()
+            for student_id in student_ids
+        }
+        statuses_by_student = {
+            student_id: attendance.status
+            for student_id, attendance in _student_attendance_map(
+                all_student_ids, target_date,
+            ).items()
+        }
+        teacher_attendances = (
+            Attendance.objects.filter(
+                entity_type=Attendance.EntityType.TEACHER,
+                date=target_date,
+                teacher_id__in={key[0] for key in overlapping},
+            ).order_by("-updated_at", "-id")
+        )
+        statuses_by_teacher_session = {}
+        for attendance in teacher_attendances:
+            key = (attendance.teacher_id, attendance.class_key)
+            statuses_by_teacher_session.setdefault(key, attendance.status)
+
+        for (teacher_id, time_key), students in overlapping.items():
+            student_statuses = [
+                statuses_by_student.get(student_id)
+                for student_id in students
+            ]
+            teacher_status = statuses_by_teacher_session.get(
+                (teacher_id, time_key)
+            )
+            if not can_release_scheduled_teacher(
+                student_statuses, teacher_status,
+            ):
+                busy_ids.add(teacher_id)
 
     # Existing substitute assignments also make a teacher busy.
     # Exclude the session currently being edited so an assignment
@@ -452,6 +499,101 @@ def _busy_teacher_ids(
     )
 
     return busy_ids | unavailable_ids
+
+
+
+def lock_student_schedule_teachers(*, student, target_date):
+    """Serialize student status edits against substitute assignment saves.
+
+    All affected TeacherProfile locks are taken by ascending ID, the same
+    order used by the teacher-session POST endpoint.
+    """
+    department = student.department
+    if department is None:
+        return []
+    schedules = list(
+        _effective_schedule_queryset(
+            department=department, target_date=target_date,
+        ).filter(student=student).only(
+            "teacher_id", "time_slot", "duration_minutes", "student_id",
+        )
+    )
+    teacher_ids = sorted({row.teacher_id for row in schedules})
+    if teacher_ids:
+        list(
+            TeacherProfile.objects.select_for_update(of=("self",))
+            .filter(id__in=teacher_ids).order_by("id")
+        )
+    return schedules
+
+
+def student_status_conflicts_with_substitution(
+    *, student, target_date, new_status, schedules,
+):
+    """No one may restore an occupied student's slot while its teacher covers another.
+
+    Caller must hold the TeacherProfile locks from
+    lock_student_schedule_teachers() in the same atomic transaction.
+    """
+    if new_status in {Attendance.Status.ABSENT, Attendance.Status.LEAVE}:
+        return None
+    teacher_ids = {row.teacher_id for row in schedules}
+    if not teacher_ids:
+        return None
+    active_coverage = (
+        QuranClassCoverage.objects.select_related("schedule")
+        .filter(
+            date=target_date,
+            substitute_teacher_id__in=teacher_ids,
+            coverage_status=QuranClassCoverage.CoverageStatus.ASSIGNED,
+        )
+    )
+    for coverage in active_coverage:
+        interval = _coverage_interval(coverage)
+        if interval is None:
+            # Unknown time: fail closed rather than allowing a conflict.
+            return {
+                "code": "substitute_booking_conflict",
+                "detail": "An existing substitute booking has an unknown time. Resolve it before changing this student's attendance.",
+            }
+        for row in schedules:
+            if row.teacher_id != coverage.substitute_teacher_id:
+                continue
+            if _intervals_overlap(
+                row.time_slot, row.duration_minutes, interval[0], interval[1],
+            ):
+                return {
+                    "code": "substitute_booking_conflict",
+                    "detail": (
+                        "This student's teacher is already assigned as a "
+                        "substitute during the scheduled class. Reassign or "
+                        "cancel the substitute coverage before marking this "
+                        "student Present or Unmarked."
+                    ),
+                    "substitute_teacher_id": row.teacher_id,
+                }
+    return None
+
+
+def _teacher_has_overlapping_substitute_booking(
+    *, teacher, target_date, session_time, session_duration_minutes,
+):
+    """A substitute cannot be marked Absent/Leave/Unmarked while covering."""
+    coverages = (
+        QuranClassCoverage.objects.select_related("schedule")
+        .filter(
+            substitute_teacher=teacher,
+            date=target_date,
+            coverage_status=QuranClassCoverage.CoverageStatus.ASSIGNED,
+        )
+    )
+    for coverage in coverages:
+        interval = _coverage_interval(coverage)
+        if interval is None or _intervals_overlap(
+            session_time, session_duration_minutes, interval[0], interval[1],
+        ):
+            return True
+    return False
 
 
 def _available_substitutes(
@@ -720,6 +862,12 @@ def _audit(
     except Exception:
         pass
 
+
+def _notify_global_safely_after_commit(payload):
+    try:
+        notify_global("academy_update", payload)
+    except Exception:
+        pass
 
 
 def reconcile_student_coverage(
@@ -1249,25 +1397,6 @@ class QuranTeacherSessionAttendanceView(APIView):
         session_time = session["session_time"]
         schedules = session["schedules"]
 
-        source_lock = (
-            teacher_session_payroll_lock_payload(
-                department=department,
-                teacher=teacher,
-                target_date=target_date,
-                class_key=class_key,
-                request_data=request.data,
-            )
-        )
-
-        if source_lock:
-            return Response(
-                source_lock,
-                status=(
-                    status
-                    .HTTP_409_CONFLICT
-                ),
-            )
-
         teacher_status = str(
             request.data.get("status") or ""
         ).strip().lower()
@@ -1404,6 +1533,48 @@ class QuranTeacherSessionAttendanceView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Lock original teacher and every proposed substitute in ID order.
+        # Student attendance edits take the same locks; concurrent changes
+        # cannot invalidate availability between validation and save.
+        locked_teacher_rows = list(
+            TeacherProfile.objects.select_for_update(of=("self",))
+            .select_related("user", "department", "institution")
+            .filter(id__in=sorted({teacher.id, *assignments.values()}))
+            .order_by("id")
+        )
+
+        source_lock = (
+            teacher_session_payroll_lock_payload(
+                department=department,
+                teacher=teacher,
+                target_date=target_date,
+                class_key=class_key,
+                request_data=request.data,
+            )
+        )
+
+        if source_lock:
+            return Response(
+                source_lock,
+                status=(
+                    status
+                    .HTTP_409_CONFLICT
+                ),
+            )
+
+        if teacher_status in {Attendance.Status.ABSENT, Attendance.Status.LEAVE}:
+            if _teacher_has_overlapping_substitute_booking(
+                teacher=teacher,
+                target_date=target_date,
+                session_time=session_time,
+                session_duration_minutes=_session_duration_minutes(schedules),
+            ):
+                return Response(
+                    {"code": "substitute_booking_conflict",
+                     "detail": "This teacher is already covering another class at this time. Reassign that coverage before marking this teacher Absent or Leave."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
         substitute_objects = {}
 
         if teacher_status in {
@@ -1524,23 +1695,10 @@ class QuranTeacherSessionAttendanceView(APIView):
             # Serialize concurrent attempts to use the same
             # substitute teacher. The second request will wait,
             # then re-check the now-current coverage state.
-            candidate_rows = list(
-                TeacherProfile.objects
-                .select_for_update(of=("self",))
-                .select_related(
-                    "user",
-                    "department",
-                    "institution",
-                )
-                .filter(
-                    id__in=substitute_ids
-                )
-                .order_by("id")
-            )
-
             candidates = {
                 item.id: item
-                for item in candidate_rows
+                for item in locked_teacher_rows
+                if item.id in substitute_ids
             }
 
             session_duration_minutes = (
@@ -1847,20 +2005,24 @@ class QuranTeacherSessionAttendanceView(APIView):
         )
 
         try:
-            notify_global(
-                "academy_update",
-                {
-                    "event": (
-                        "teacher_session_attendance_v2"
-                    ),
-                    "department_id": (
-                        department.id
-                    ),
-                    "teacher_id": teacher.id,
-                    "date": str(target_date),
-                    "class_key": class_key,
-                    "status": teacher_status,
-                },
+            transaction.on_commit(
+                lambda event="teacher_session_attendance_v2",
+                department_id=department.id,
+                teacher_id=teacher.id,
+                date_value=str(target_date),
+                class_key_value=class_key,
+                status_value=teacher_status: (
+                    _notify_global_safely_after_commit(
+                        {
+                            "event": event,
+                            "department_id": department_id,
+                            "teacher_id": teacher_id,
+                            "date": date_value,
+                            "class_key": class_key_value,
+                            "status": status_value,
+                        }
+                    )
+                )
             )
         except Exception:
             pass
@@ -1900,6 +2062,22 @@ class QuranTeacherSessionAttendanceView(APIView):
         target_date = session["target_date"]
         class_key = session["class_key"]
         session_time = session["session_time"]
+
+        list(
+            TeacherProfile.objects.select_for_update(of=("self",))
+            .filter(id=teacher.id)
+        )
+        if _teacher_has_overlapping_substitute_booking(
+            teacher=teacher,
+            target_date=target_date,
+            session_time=session_time,
+            session_duration_minutes=_session_duration_minutes(session["schedules"]),
+        ):
+            return Response(
+                {"code": "substitute_booking_conflict",
+                 "detail": "This teacher is covering another class at this time. Reassign that coverage before unmarking teacher attendance."},
+                status=status.HTTP_409_CONFLICT,
+            )
 
         source_lock = (
             teacher_session_payroll_lock_payload(
@@ -2000,18 +2178,24 @@ class QuranTeacherSessionAttendanceView(APIView):
             )
 
         try:
-            notify_global(
-                "academy_update",
-                {
-                    "event": (
-                        "teacher_session_unmarked_v2"
-                    ),
-                    "department_id": department.id,
-                    "teacher_id": teacher.id,
-                    "date": str(target_date),
-                    "class_key": class_key,
-                    "attendance_id": attendance_id,
-                },
+            transaction.on_commit(
+                lambda event="teacher_session_unmarked_v2",
+                department_id=department.id,
+                teacher_id=teacher.id,
+                date_value=str(target_date),
+                class_key_value=class_key,
+                attendance_id_value=attendance_id: (
+                    _notify_global_safely_after_commit(
+                        {
+                            "event": event,
+                            "department_id": department_id,
+                            "teacher_id": teacher_id,
+                            "date": date_value,
+                            "class_key": class_key_value,
+                            "attendance_id": attendance_id_value,
+                        }
+                    )
+                )
             )
         except Exception:
             pass

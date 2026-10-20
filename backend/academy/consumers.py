@@ -81,5 +81,9 @@ class AcademyConsumer(AsyncWebsocketConsumer):
     async def attendance_marked(self, event):
         await self.send(text_data=json.dumps(event))
 
+    async def notification_created(self, event):
+        # Only an ID is sent. Clients load their private inbox through HTTPS.
+        await self.send(text_data=json.dumps(event))
+
     async def lesson_request_created(self, event):
         await self.send(text_data=json.dumps(event))

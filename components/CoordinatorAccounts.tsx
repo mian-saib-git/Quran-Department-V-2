@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   BookOpen,
   CheckCircle2,
+  Clock3,
   Copy,
   Download,
   Edit2,
@@ -47,6 +48,7 @@ import { useAcademyWS } from "../hooks/useAcademyWS";
 
 import { showFeatureLocked } from "../services/featureAccess";
 import { PageSkeleton } from "./ui/SkeletonLoaders";
+import TeacherRetirementDialog from "./TeacherRetirementDialog";
 const DEPARTMENT_ADMIN_ROLES = ["department_admin", "institution_admin"];
 
 const isDepartmentAdminRole = (role: unknown) =>
@@ -56,6 +58,7 @@ const isCoordinatorRole = (role: unknown) =>
   String(role || "").toLowerCase() === "coordinator";
 
 type Mode = "coordinator" | "teacher" | "student";
+type AccountsTab = Mode;
 
 type ModalMode =
   | "create-coordinator"
@@ -272,6 +275,46 @@ function getStudentTime(item: CoordinatorStudentAccount) {
     profile.classTime ||
     ""
   );
+}
+
+/** Read 24-hour clock values returned by the Accounts API. */
+function classStartMinutes(value: unknown): number | null {
+  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+/** Match any of a student's scheduled class start times, not just the first one. */
+function studentMatchesClassTime(
+  student: CoordinatorStudentAccount,
+  fromTime: string,
+  toTime: string,
+): boolean {
+  if (!fromTime && !toTime) return true;
+
+  const profile = student.student_profile;
+  const times = Array.isArray(profile?.schedules)
+    ? profile.schedules
+        .filter((schedule) => schedule && schedule.is_active !== false)
+        .map((schedule) => schedule.time_slot)
+    : [];
+  // Legacy records may have one top-level time_slot but no schedules array.
+  if (!times.length) times.push(getStudentTime(student));
+
+  const from = fromTime ? classStartMinutes(fromTime) : null;
+  const to = toTime ? classStartMinutes(toTime) : null;
+  return times.some((value) => {
+    const minutes = classStartMinutes(value);
+    if (minutes === null) return false;
+    if (from !== null && to !== null && from > to) {
+      // Example: 22:00 through 02:00 crosses midnight.
+      return minutes >= from || minutes <= to;
+    }
+    return (from === null || minutes >= from) && (to === null || minutes <= to);
+  });
 }
 
 function getStudentDays(item: CoordinatorStudentAccount): string[] {
@@ -658,16 +701,18 @@ export default function CoordinatorAccounts({
   const canManageCoordinators = isSuperAdmin || isDepartmentAdminRole(sessionRole);
   const canManageDepartmentAccounts = canManageCoordinators || isCoordinatorRole(sessionRole);
 
-  const [activeMode, setActiveMode] = useState<Mode>("teacher");
+  const [activeMode, setActiveMode] = useState<AccountsTab>("teacher");
   const [search, setSearch] = useState("");
+  const [classTimeFrom, setClassTimeFrom] = useState("");
+  const [classTimeTo, setClassTimeTo] = useState("");
   const [loading, setLoading] = useState(false);
   const [accountsLoaded, setAccountsLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [tabAccessLoading, setTabAccessLoading] = useState(false);
 
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
+  const [teacherToRetire, setTeacherToRetire] = useState<CoordinatorTeacherAccount | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm("teacher"));
-  const [referralSearch, setReferralSearch] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
   const [copiedUsername, setCopiedUsername] = useState("");
@@ -740,26 +785,6 @@ export default function CoordinatorAccounts({
     }
   }, [canManageCoordinators, activeMode]);
 
-  const referralCandidates = useMemo(() => {
-    const query = referralSearch.trim().toLowerCase();
-    return (data.students || [])
-      .filter((student) => student.is_active && student.student_profile?.id)
-      .filter((student) => {
-        if (!query) return true;
-        return [student.full_name, student.username, student.student_profile?.teacher_name]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase()
-          .includes(query);
-      })
-      .slice(0, 12);
-  }, [data.students, referralSearch]);
-
-  const selectedReferralStudent = useMemo(
-    () => (data.students || []).find((student) => String(student.student_profile?.id || "") === form.referral_student_id),
-    [data.students, form.referral_student_id]
-  );
-
   const filteredCoordinators = useMemo(() => {
     const q = search.trim().toLowerCase();
 
@@ -805,6 +830,7 @@ export default function CoordinatorAccounts({
     const q = search.trim().toLowerCase();
 
     return data.students.filter((item) => {
+      if (!studentMatchesClassTime(item, classTimeFrom, classTimeTo)) return false;
       if (!q) return true;
 
       const profile = item.student_profile;
@@ -828,7 +854,7 @@ export default function CoordinatorAccounts({
         .toLowerCase()
         .includes(q);
     });
-  }, [data.students, search]);
+  }, [data.students, search, classTimeFrom, classTimeTo]);
 
 
   const exportStudentsCsv = () => {
@@ -1018,8 +1044,8 @@ export default function CoordinatorAccounts({
       username: coordinator.username,
       password: "",
       email: coordinator.email || "",
-      first_name: coordinator.first_name || "",
-      last_name: coordinator.last_name || "",
+      first_name: displayName(coordinator.first_name, coordinator.last_name, ""),
+      last_name: "",
       is_active: coordinator.is_active,
       tab_access: { ...defaultQuranCoordinatorTabs(), ...(coordinator.tab_access || {}) },
     });
@@ -1048,8 +1074,8 @@ export default function CoordinatorAccounts({
       username: teacher.username,
       password: "",
       email: teacher.email || "",
-      first_name: teacher.first_name || "",
-      last_name: teacher.last_name || "",
+      first_name: displayName(teacher.first_name, teacher.last_name, ""),
+      last_name: "",
       is_active: teacher.is_active,
 
       father_name: teacher.teacher_profile?.father_name || "",
@@ -1071,8 +1097,8 @@ export default function CoordinatorAccounts({
       username: student.username,
       password: "",
       email: student.email || "",
-      first_name: student.first_name || "",
-      last_name: student.last_name || "",
+      first_name: displayName(student.first_name, student.last_name, ""),
+      last_name: "",
       is_active: student.is_active,
 
       phone: student.student_profile?.phone || "",
@@ -1378,48 +1404,27 @@ export default function CoordinatorAccounts({
     if (!canDeleteAccounts) {
       showFeatureLocked(
         "Delete Accounts",
-        "Permanent account deletion is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation."
+        "Account archiving is currently disabled for your department."
       );
       return;
     }
 
-    if (
-      !confirm(
-        "Delete this account permanently? This will remove the account and related records from the system. This action cannot be undone."
-      )
-    ) {
+    const teacher = data.teachers.find((item) => item.id === userId);
+    if (teacher) {
+      setTeacherToRetire(teacher);
       return;
     }
 
-    const previousData = data;
-
-    setData((prev) => ({
-      ...prev,
-      coordinators: prev.coordinators.filter((item) => item.id !== userId),
-      teachers: prev.teachers.filter((item) => item.id !== userId),
-      students: prev.students.filter((item) => item.id !== userId),
-    }));
-
-    window.dispatchEvent(
-      new CustomEvent("ivs-toast", {
-        detail: "Account deleted permanently",
-      })
-    );
+    if (!window.confirm(
+      "Archive this account? The login will be disabled while historical attendance and salary records stay intact."
+    )) return;
 
     try {
       await disableCoordinatorAccount(userId);
+      window.dispatchEvent(new CustomEvent("ivs-toast", { detail: "Account archived safely" }));
       await load();
     } catch (err: any) {
-      const message = String(err?.message || "");
-
-      if (message.includes("404") || message.toLowerCase().includes("not found")) {
-        await load();
-        setMessage("Account already deleted.");
-        return;
-      }
-
-      setData(previousData);
-      setMessage(message || "Could not delete account.");
+      setMessage(String(err?.message || "Could not archive account."));
       await load();
     }
   };
@@ -1432,7 +1437,7 @@ export default function CoordinatorAccounts({
 
   useEffect(() => {
     setPage(1);
-  }, [activeMode, search]);
+  }, [activeMode, search, classTimeFrom, classTimeTo]);
 
   const pagedCoordinators = getPagedItems(filteredCoordinators, page, PAGE_SIZE);
   const pagedTeachers = getPagedItems(filteredTeachers, page, PAGE_SIZE);
@@ -1515,8 +1520,8 @@ export default function CoordinatorAccounts({
                 <span>Import CSV</span>
                 {!canBulkImport && <span className="text-[10px]">??</span>}
               </button>
-              <button
-                onClick={() => openCreate(activeMode)}
+              {<button
+                onClick={() => openCreate(activeMode === "coordinator" ? "coordinator" : activeMode === "student" ? "student" : "teacher")}
                 className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-600 to-blue-600 px-5 py-3 text-sm font-extrabold text-white shadow-[0_20px_40px_-18px_rgba(37,99,235,0.75)] hover:brightness-110 transition"
               >
                 <Plus size={16} />
@@ -1526,7 +1531,7 @@ export default function CoordinatorAccounts({
                   : activeMode === "teacher"
                   ? "Teacher"
                   : "Student"}
-              </button>
+              </button>}
             </div>
           </div>
 
@@ -1591,12 +1596,12 @@ export default function CoordinatorAccounts({
       )}
 
       <div className="rounded-[24px] border border-slate-200/70 bg-white/75 backdrop-blur-xl shadow-[0_18px_50px_rgba(15,23,42,0.07)] overflow-hidden">
-        <div className="p-5 border-b border-slate-200/70 flex flex-col lg:flex-row gap-4 lg:items-center justify-between">
-          <div className="flex rounded-2xl bg-slate-100/70 p-1">
+        <div className="flex flex-col gap-3 border-b border-slate-200/70 p-4 sm:p-5 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between xl:flex-nowrap">
+          <div className="flex w-fit max-w-full flex-wrap rounded-2xl bg-slate-100/70 p-1">
             {canManageCoordinators && (
               <button
                 onClick={() => setActiveMode("coordinator")}
-                className={`px-4 py-2.5 rounded-xl text-sm font-extrabold transition ${
+                className={`rounded-xl px-4 py-2.5 text-sm font-extrabold transition ${
                   activeMode === "coordinator"
                     ? "bg-white text-indigo-700 shadow-sm"
                     : "text-slate-600 hover:text-slate-900"
@@ -1608,7 +1613,7 @@ export default function CoordinatorAccounts({
 
             <button
               onClick={() => setActiveMode("teacher")}
-              className={`px-4 py-2.5 rounded-xl text-sm font-extrabold transition ${
+              className={`rounded-xl px-4 py-2.5 text-sm font-extrabold transition ${
                 activeMode === "teacher"
                   ? "bg-white text-indigo-700 shadow-sm"
                   : "text-slate-600 hover:text-slate-900"
@@ -1619,7 +1624,7 @@ export default function CoordinatorAccounts({
 
             <button
               onClick={() => setActiveMode("student")}
-              className={`px-4 py-2.5 rounded-xl text-sm font-extrabold transition ${
+              className={`rounded-xl px-4 py-2.5 text-sm font-extrabold transition ${
                 activeMode === "student"
                   ? "bg-white text-indigo-700 shadow-sm"
                   : "text-slate-600 hover:text-slate-900"
@@ -1629,15 +1634,56 @@ export default function CoordinatorAccounts({
             </button>
           </div>
 
-          <div className="relative w-full lg:w-[360px]">
+          {activeMode === "student" && (
+            <div
+              role="group"
+              aria-label="Filter students by class start time"
+              className="flex w-full min-w-0 flex-wrap items-center gap-2 rounded-[20px] border border-indigo-200/80 bg-indigo-50/40 px-2.5 py-1.5 sm:w-auto sm:flex-nowrap xl:max-w-[610px] xl:flex-1 xl:justify-center"
+            >
+              <span className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap px-1 text-sm font-bold text-slate-600">
+                <Clock3 size={19} className="text-indigo-600" aria-hidden="true" />
+                Class start
+              </span>
+              <label htmlFor="accounts-class-time-from" className="sr-only">Class start from</label>
+              <input
+                id="accounts-class-time-from"
+                type="time"
+                value={classTimeFrom}
+                onChange={(event) => setClassTimeFrom(event.target.value)}
+                className="h-10 w-[137px] min-w-0 rounded-xl border-0 bg-white px-2.5 text-sm font-bold text-slate-800 shadow-sm outline-none focus:ring-2 focus:ring-indigo-200"
+              />
+              <span className="shrink-0 text-sm font-semibold text-slate-500" aria-hidden="true">to</span>
+              <label htmlFor="accounts-class-time-to" className="sr-only">Class start to</label>
+              <input
+                id="accounts-class-time-to"
+                type="time"
+                value={classTimeTo}
+                onChange={(event) => setClassTimeTo(event.target.value)}
+                className="h-10 w-[137px] min-w-0 rounded-xl border-0 bg-white px-2.5 text-sm font-bold text-slate-800 shadow-sm outline-none focus:ring-2 focus:ring-indigo-200"
+              />
+              <button
+                type="button"
+                onClick={() => { setClassTimeFrom(""); setClassTimeTo(""); }}
+                disabled={!classTimeFrom && !classTimeTo}
+                className="h-10 shrink-0 rounded-xl px-3 text-sm font-bold text-slate-600 transition hover:bg-white hover:text-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                Clear
+              </button>
+              <span className="sr-only" aria-live="polite">
+                Showing {filteredStudents.length} of {data.students.length} students
+              </span>
+            </div>
+          )}
+
+          <div className="relative w-full sm:w-[320px] lg:w-[285px] xl:w-[300px] xl:shrink-0">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
-  id="accounts-search"
-  name="accounts_search"
-  value={search}
-  onChange={(e) => setSearch(e.target.value)}
-  placeholder="Search accounts..."
-              className="w-full rounded-2xl border border-slate-200 bg-white/85 pl-9 pr-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-indigo-200"
+              id="accounts-search"
+              name="accounts_search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search accounts..."
+              className="w-full rounded-2xl border border-slate-200 bg-white/85 py-3 pl-9 pr-4 text-sm font-semibold outline-none focus:ring-2 focus:ring-indigo-200"
             />
           </div>
         </div>
@@ -1667,6 +1713,7 @@ export default function CoordinatorAccounts({
         ) : (
           <StudentTable
             items={pagedStudents.items}
+            hasActiveFilter={Boolean(search.trim() || classTimeFrom || classTimeTo)}
             copiedUsername={copiedUsername}
             onCopyUsername={handleCopyUsername}
             onEdit={openEditStudent}
@@ -1684,6 +1731,19 @@ export default function CoordinatorAccounts({
           />
         )}
       </div>
+
+      {teacherToRetire && (
+        <TeacherRetirementDialog
+          teacherAccountId={teacherToRetire.id}
+          teacherName={teacherToRetire.full_name || teacherToRetire.username}
+          onClose={() => setTeacherToRetire(null)}
+          onComplete={async () => {
+            setTeacherToRetire(null);
+            window.dispatchEvent(new CustomEvent("ivs-toast", { detail: "Teacher login permanently deleted" }));
+            await load();
+          }}
+        />
+      )}
 
       {/* CSV Import Modal */}
       {modalMode === "csv-import" && (
@@ -1920,20 +1980,16 @@ export default function CoordinatorAccounts({
 
       {/* Create / Edit Modal */}
       {modalMode && modalMode !== "csv-import" && (
-        <div className="fixed inset-0 z-50 bg-slate-950/55 backdrop-blur-md p-3 md:p-5 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 bg-slate-950/45 backdrop-blur-[3px] p-3 md:p-5 flex items-center justify-center">
           <form
             onSubmit={submit}
-           className="account-modal-card w-full max-w-5xl max-h-[88vh] overflow-hidden rounded-[26px] border border-white/70 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.22)] flex flex-col"
+           className="account-modal-card w-full max-w-[540px] max-h-[86vh] overflow-hidden rounded-[20px] border border-slate-200 bg-white shadow-[0_24px_65px_rgba(15,23,42,0.20)] flex flex-col"
           >
             {/* Header */}
-            <div className="relative overflow-hidden shrink-0 border-b border-slate-200/70 bg-white/92 backdrop-blur-xl">
-              <div className="pointer-events-none absolute -top-24 -right-24 h-64 w-64 rounded-full bg-blue-200/45 blur-3xl" />
-              <div className="pointer-events-none absolute top-0 left-1/3 h-40 w-72 rounded-full bg-indigo-200/35 blur-3xl" />
-              <div className="pointer-events-none absolute -bottom-24 -left-24 h-64 w-64 rounded-full bg-sky-100/70 blur-3xl" />
-
-              <div className="relative px-4 md:px-5 py-4 flex items-center justify-between gap-3">
+            <div className="relative shrink-0 border-b border-slate-200 bg-white">
+              <div className="relative px-4 py-3 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0">
-                  <div className="h-11 w-11 rounded-2xl bg-gradient-to-br from-indigo-600 via-blue-600 to-sky-500 text-white flex items-center justify-center shadow-[0_20px_42px_rgba(37,99,235,0.28)] shrink-0">
+                  <div className="h-9 w-9 rounded-lg border border-indigo-100 bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
                     {form.role === "coordinator" ? (
                       <ShieldCheck size={24} />
                     ) : form.role === "teacher" ? (
@@ -1944,11 +2000,11 @@ export default function CoordinatorAccounts({
                   </div>
 
                   <div className="min-w-0">
-                    <div className="inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50/80 px-3 py-1 text-[11px] font-black text-indigo-700">
+                    <div className="inline-flex items-center text-[10px] font-semibold uppercase tracking-[0.08em] text-indigo-600">
                       {modalMode.includes("create") ? "NEW ACCOUNT" : "EDIT ACCOUNT"}
                     </div>
 
-                    <h3 className="mt-1.5 text-xl md:text-2xl font-black tracking-tight text-slate-950 truncate">
+                    <h3 className="mt-1 text-lg md:text-xl font-bold tracking-tight text-slate-900 truncate">
                       {modalMode.includes("create") ? "Create" : "Edit"}{" "}
                       {form.role === "coordinator"
                         ? "Coordinator"
@@ -1958,7 +2014,7 @@ export default function CoordinatorAccounts({
                       Account
                     </h3>
 
-                    <p className="mt-1 text-sm font-semibold text-slate-500">
+                    <p className="mt-1 text-xs text-slate-500">
                       {form.role === "coordinator"
                         ? "Only department admins can manage coordinator login access."
                         : "Manage login details, profile information, and account status."}
@@ -1969,7 +2025,7 @@ export default function CoordinatorAccounts({
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="h-10 w-10 rounded-xl border border-slate-200 bg-white/90 text-slate-500 hover:text-slate-950 hover:bg-white shadow-[0_12px_26px_rgba(15,23,42,0.08)] flex items-center justify-center transition active:scale-[0.97] shrink-0"
+                  className="h-9 w-9 rounded-lg text-slate-500 hover:text-slate-950 hover:bg-slate-100 flex items-center justify-center transition shrink-0"
                   aria-label="Close"
                 >
                   <X size={21} />
@@ -1978,9 +2034,9 @@ export default function CoordinatorAccounts({
             </div>
 
             {/* Body */}
-            <div className="account-modal-scroll flex-1 overflow-y-auto px-4 md:px-5 py-4 space-y-4 bg-gradient-to-b from-slate-50/90 via-white to-white">
+            <div className="account-modal-scroll flex-1 overflow-y-auto px-3 sm:px-4 py-3 space-y-2.5 bg-slate-50/60">
               {message && (
-                <div className="rounded-3xl border border-rose-100 bg-rose-50 px-5 py-4 text-sm font-extrabold text-rose-700 shadow-[0_12px_28px_rgba(244,63,94,0.08)]">
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
                   {message}
                 </div>
               )}
@@ -2004,7 +2060,7 @@ export default function CoordinatorAccounts({
                   </div>
                 </div>
 
-                <div className="relative grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="relative grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Field label="Username">
                     <input
                       id="account-username"
@@ -2049,24 +2105,28 @@ export default function CoordinatorAccounts({
                     </div>
                   </Field>
 
-                  <Field label="First Name">
+                </div>
+              </section>
+
+              {/* One name field for all roles. The full name is saved in first_name. */}
+              <section className="account-section">
+                <div className="flex items-center gap-2 mb-3">
+                  <UserRound size={17} className="text-indigo-600" />
+                  <h4 className="account-section-title">
+                    {form.role === "coordinator" ? "Coordinator Details" : form.role === "teacher" ? "Teacher Details" : "Student Details"}
+                  </h4>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Field label="Name">
                     <input
+                      required
+                      autoComplete="name"
                       value={form.first_name}
-                      onChange={(e) => setForm({ ...form, first_name: e.target.value })}
+                      onChange={(e) => setForm({ ...form, first_name: e.target.value, last_name: "" })}
                       className="input-premium"
-                      placeholder="First name"
+                      placeholder="Full name"
                     />
                   </Field>
-
-                  <Field label="Last Name">
-                    <input
-                      value={form.last_name}
-                      onChange={(e) => setForm({ ...form, last_name: e.target.value })}
-                      className="input-premium"
-                      placeholder="Last name"
-                    />
-                  </Field>
-
                   <Field label="Email">
                     <input
                       type="email"
@@ -2076,7 +2136,6 @@ export default function CoordinatorAccounts({
                       placeholder="email@example.com"
                     />
                   </Field>
-
                   {(form.role === "teacher" || form.role === "student") && (
                     <Field label="Phone">
                       <input
@@ -2092,7 +2151,6 @@ export default function CoordinatorAccounts({
 
               {form.role === "coordinator" && canManageCoordinators && (
                 <section className="account-section account-section-feature">
-                  <div className="account-section-glow account-section-glow-indigo" />
                   <div className="relative flex items-start gap-3">
                     <div className="account-section-icon bg-slate-950 text-white">
                       <ShieldCheck size={20} />
@@ -2110,14 +2168,14 @@ export default function CoordinatorAccounts({
                       <Loader2 className="animate-spin" size={16} /> Loading tab access...
                     </div>
                   ) : (
-                    <div className="relative mt-4 grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <div className="relative mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                       {QURAN_COORDINATOR_TABS.map((tab) => {
                         const mainEnabled = features[tab.key] !== false;
                         const checked = form.tab_access[tab.key] !== false;
                         return (
                           <label
                             key={tab.key}
-                            className={`flex items-start gap-3 rounded-[20px] border p-3.5 transition ${
+                            className={`flex items-start gap-2.5 rounded-xl border p-3 transition ${
                               mainEnabled
                                 ? checked
                                   ? "cursor-pointer border-indigo-200 bg-white shadow-sm"
@@ -2138,7 +2196,7 @@ export default function CoordinatorAccounts({
                               className="mt-0.5 h-4 w-4 shrink-0 accent-indigo-600"
                             />
                             <span className="min-w-0 flex-1">
-                              <span className="flex items-center gap-2 text-sm font-black text-slate-900">
+                              <span className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                                 {tab.label}
                                 {!mainEnabled && (
                                   <span className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2 py-0.5 text-[8px] font-black uppercase tracking-wide text-white">
@@ -2146,7 +2204,7 @@ export default function CoordinatorAccounts({
                                   </span>
                                 )}
                               </span>
-                              <span className="mt-1 block text-[10px] font-semibold leading-relaxed text-slate-500">
+                              <span className="mt-1 block text-[11px] leading-snug text-slate-500">
                                 {tab.description}
                               </span>
                             </span>
@@ -2163,7 +2221,6 @@ export default function CoordinatorAccounts({
               {/* Teacher Profile */}
               {form.role === "teacher" && (
                 <section className="account-section">
-                  <div className="account-section-glow account-section-glow-blue" />
 
                   <div className="relative flex items-center gap-3 mb-4">
                     <div className="account-section-icon bg-blue-50 text-blue-600 border border-blue-100">
@@ -2173,12 +2230,12 @@ export default function CoordinatorAccounts({
                     <div>
                       <div className="account-section-title">Teacher Profile</div>
                       <div className="account-section-subtitle">
-                        Add teacher personal details, joining date, and class link.
+                        Joining date and additional contact details.
                       </div>
                     </div>
                   </div>
 
-                  <div className="relative grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="relative grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <Field label="Father Name">
                       <input
                         value={form.father_name}
@@ -2197,15 +2254,6 @@ export default function CoordinatorAccounts({
                       />
                     </Field>
 
-                    <Field label="Zoom Link">
-                      <input
-                        value={form.zoom_link}
-                        onChange={(e) => setForm({ ...form, zoom_link: e.target.value })}
-                        className="input-premium"
-                        placeholder="https://..."
-                      />
-                    </Field>
-
                     <Field label="Address">
                       <input
                         value={form.address}
@@ -2221,7 +2269,6 @@ export default function CoordinatorAccounts({
               {/* Student Assignment */}
               {form.role === "student" && (
                 <section className="account-section">
-                  <div className="account-section-glow account-section-glow-emerald" />
 
                   <div className="relative flex items-center justify-between gap-3 mb-4">
                     <div className="flex items-center gap-3">
@@ -2260,7 +2307,7 @@ export default function CoordinatorAccounts({
                       </select>
                     </Field>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <Field label="Class Time">
                         <select
                           required
@@ -2289,9 +2336,13 @@ export default function CoordinatorAccounts({
                         </select>
                       </Field>
 
-                      <Field label="Class Days">
-                        <div className="rounded-[22px] border border-slate-200 bg-white/80 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_10px_26px_rgba(15,23,42,0.04)]">
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      <div className="sm:col-span-2">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <span className="account-field-label !mb-0">Class Days</span>
+                          <span className="text-xs text-slate-500">{form.class_days.length} selected</span>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-white p-2.5">
+                          <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
                             {WEEKDAYS.map((day) => {
                               const active = form.class_days.includes(day);
 
@@ -2315,10 +2366,11 @@ export default function CoordinatorAccounts({
                                       };
                                     });
                                   }}
-                                  className={`rounded-2xl border px-3 py-2 text-xs font-black transition active:scale-[0.98] ${
+                                  aria-pressed={active}
+                                  className={`rounded-lg border px-1.5 py-2 text-xs font-semibold transition ${
                                     active
-                                      ? "border-indigo-200 bg-gradient-to-r from-indigo-50 to-blue-50 text-indigo-700 shadow-[0_10px_22px_rgba(79,70,229,0.12)]"
-                                      : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                                      ? "border-indigo-500 bg-indigo-600 text-white"
+                                      : "border-slate-200 bg-white text-slate-600 hover:border-indigo-300"
                                   }`}
                                 >
                                   {shortDay(day)}
@@ -2327,13 +2379,8 @@ export default function CoordinatorAccounts({
                             })}
                           </div>
 
-                          <div className="mt-3 rounded-2xl bg-slate-50 border border-slate-100 px-3 py-2 text-xs font-extrabold text-slate-500">
-                            Selected:{" "}
-                            <span className="text-slate-950">{form.class_days.length || 0}</span>{" "}
-                            day{form.class_days.length === 1 ? "" : "s"}
-                          </div>
                         </div>
-                      </Field>
+                      </div>
                     </div>
                   </div>
                 </section>
@@ -2341,15 +2388,14 @@ export default function CoordinatorAccounts({
 
               {form.role === "student" && (
                 <section className="account-section">
-                  <div className="account-section-glow account-section-glow-indigo" />
                   <div className="relative mb-4">
-                    <div className="account-section-title">Student Classification & Salary</div>
+                    <div className="account-section-title">Enrollment</div>
                     <div className="account-section-subtitle">
-                      Choose the enrollment source, language, referral, and current class outcome without mixing salary categories.
+                      Student type, language and class status.
                     </div>
                   </div>
 
-                  <div className="relative grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="relative grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <Field label="Student Type">
                       <select
                         value={form.student_type}
@@ -2404,47 +2450,6 @@ export default function CoordinatorAccounts({
                       </select>
                     </Field>
 
-                    {modalMode === "create-student" && (
-                      <div className="md:col-span-2 xl:col-span-3">
-                        <div className="mb-2 text-xs font-black uppercase tracking-[0.12em] text-slate-500">Referred By Student</div>
-                        <div className="rounded-[22px] border border-violet-200 bg-violet-50/45 p-3">
-                          <div className="relative">
-                            <Search size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-violet-400" />
-                            <input type="search" value={referralSearch} onChange={(event) => setReferralSearch(event.target.value)} placeholder="Search student name, username, or teacher..." className="w-full rounded-2xl border border-violet-200 bg-white py-3 pl-10 pr-3 text-sm font-bold text-slate-900 outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-100" />
-                          </div>
-                          {selectedReferralStudent && (
-                            <div className="mt-3 flex items-center justify-between gap-3 rounded-2xl border border-violet-200 bg-white px-3 py-2.5">
-                              <div className="min-w-0"><div className="truncate text-sm font-black text-slate-950">{selectedReferralStudent.full_name || selectedReferralStudent.username}</div><div className="truncate text-xs font-bold text-slate-500">@{selectedReferralStudent.username} · {selectedReferralStudent.student_profile?.teacher_name || "No teacher"}</div></div>
-                              <button type="button" onClick={() => setForm({ ...form, referral_student_id: "" })} className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><X size={15} /></button>
-                            </div>
-                          )}
-                          {!selectedReferralStudent && <div className="mt-3 max-h-48 space-y-2 overflow-y-auto pr-1">
-                            {referralCandidates.map((student) => (
-                              <button key={student.id} type="button" onClick={() => { setForm({ ...form, referral_student_id: String(student.student_profile?.id || "") }); setReferralSearch(""); }} className="flex w-full items-center justify-between gap-3 rounded-2xl border border-transparent bg-white px-3 py-2.5 text-left transition hover:border-violet-200 hover:bg-violet-50">
-                                <div className="min-w-0"><div className="truncate text-sm font-black text-slate-900">{student.full_name || student.username}</div><div className="truncate text-xs font-bold text-slate-500">@{student.username} · {student.student_profile?.teacher_name || "No teacher"}</div></div>
-                                <span className="shrink-0 rounded-full bg-violet-100 px-2.5 py-1 text-[10px] font-black text-violet-700">Select</span>
-                              </button>
-                            ))}
-                            {referralCandidates.length === 0 && <div className="rounded-2xl bg-white px-3 py-4 text-center text-xs font-bold text-slate-500">No matching student found.</div>}
-                          </div>}
-                          <div className="mt-2 text-[11px] font-semibold text-violet-700">The selected student's teacher receives the configured reference credit. This link is locked after creation.</div>
-                        </div>
-                      </div>
-                    )}
-
-                    {modalMode === "create-student" && (
-                      <label className="md:col-span-2 xl:col-span-3 flex items-center justify-between gap-4 rounded-[22px] border border-amber-200 bg-amber-50/75 px-4 py-3 cursor-pointer">
-                        <div><div className="text-sm font-black text-amber-950">Not Counted Class</div><div className="mt-1 text-xs font-semibold text-amber-700">Automatically selected when registration happens within the final four days of the month. This class rolls into the next salary month.</div></div>
-                        <input type="checkbox" checked={form.not_counted_class} onChange={(e) => setForm({ ...form, not_counted_class: e.target.checked })} className="h-5 w-5 shrink-0 accent-amber-600" />
-                      </label>
-                    )}
-
-                    <label className="md:col-span-2 xl:col-span-3 flex items-center justify-between gap-4 rounded-[22px] border border-emerald-200 bg-emerald-50/70 px-4 py-3 cursor-pointer">
-                      <div><div className="text-sm font-black text-emerald-900">First month fee received</div><div className="text-xs font-semibold text-emerald-700 mt-1">Enabling this automatically classifies the student as Old Student.</div></div>
-                      <input type="checkbox" checked={form.first_fee_paid} onChange={(e) => setForm({ ...form, first_fee_paid: e.target.checked, student_type: e.target.checked && form.student_type === "trial_student" ? "old_student" : form.student_type })} className="h-5 w-5 accent-emerald-600" />
-                    </label>
-
-                    <div className="md:col-span-2 xl:col-span-3 rounded-[20px] border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-xs font-bold text-indigo-800">Night shift is detected automatically from the selected class time. Classes from 10:00 PM through 8:30 AM qualify for the configured night bonus.</div>
                   </div>
                 </section>
               )}
@@ -2452,7 +2457,6 @@ export default function CoordinatorAccounts({
               {/* Notes */}
               {(form.role === "teacher" || form.role === "student") && (
                 <section className="account-section">
-                  <div className="account-section-glow account-section-glow-slate" />
 
                   <div className="relative mb-4">
                     <div className="account-section-title">Notes</div>
@@ -2507,12 +2511,12 @@ export default function CoordinatorAccounts({
             </div>
 
             {/* Footer */}
-            <div className="shrink-0 border-t border-slate-200/70 bg-white/92 backdrop-blur-xl px-4 md:px-5 py-3">
+            <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-2.5">
               <div className="flex flex-col sm:flex-row gap-3">
                 <button
                   type="submit"
                   disabled={saving}
-                  className="account-primary-btn inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-600 via-blue-600 to-sky-500 px-5 py-3 text-sm font-black text-white shadow-[0_22px_44px_-18px_rgba(37,99,235,0.85)] disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="account-primary-btn inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
                   {saving ? "Saving..." : "Save Account"}
@@ -2521,7 +2525,7 @@ export default function CoordinatorAccounts({
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="rounded-2xl border border-slate-200 bg-white px-6 py-3 text-sm font-black text-slate-700 shadow-[0_10px_24px_rgba(15,23,42,0.06)] hover:bg-slate-50 transition active:scale-[0.98]"
+                  className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
                 >
                   Cancel
                 </button>
@@ -2532,18 +2536,13 @@ export default function CoordinatorAccounts({
       )}
 <style>{`
 .account-modal-card {
-  animation: accountModalIn 0.18s ease-out both;
-  will-change: transform, opacity;
-}
-@keyframes accountModalIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px) scale(0.99);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
+  /* Create/Edit forms appear and disappear instantly; no entrance or exit motion. */
+  animation: none !important;
+  transition: none !important;
+  transform: none !important;
+  will-change: auto;
+  width: min(540px, 100%);
+  max-height: min(86vh, 760px);
 }
 
   .account-modal-scroll {
@@ -2752,6 +2751,95 @@ box-shadow:
       transform: translateX(420%) skewX(-18deg);
     }
   }
+
+
+/* IVS_ACCOUNT_MODALS_COMPACT_V1: restrained, consistent form styling */
+.account-modal-card .account-section {
+  border-radius: 14px;
+  padding: 14px 16px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  box-shadow: none;
+}
+.account-modal-card .account-section-feature { background: #fff; }
+.account-modal-card .account-section-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  box-shadow: none;
+}
+.account-modal-card .account-section-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.account-modal-card .account-section-subtitle {
+  font-size: 12px;
+  font-weight: 400;
+}
+.account-modal-card .account-field-label {
+  margin-bottom: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.account-modal-card .input-premium {
+  min-height: 40px;
+  border-radius: 10px;
+  border-color: #d9e1ee;
+  background: #fff;
+  box-shadow: none;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  transform: none;
+}
+.account-modal-card .input-premium:focus {
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+  transform: none;
+}
+.account-modal-card .input-premium::placeholder { font-weight: 400; }
+.account-modal-card .account-primary-btn::after { display: none; }
+.account-modal-card .account-primary-btn:hover:not(:disabled) {
+  transform: none;
+  filter: none;
+  box-shadow: none;
+}
+.account-modal-card .account-modal-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; }
+/* IVS_ACCOUNT_MODALS_NARROW_STATIC_V1_1 */
+.account-modal-card .account-section {
+  padding: 11px 12px;
+  border-radius: 12px;
+}
+.account-modal-card .account-section-glow { display: none; }
+.account-modal-card .account-section-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+.account-modal-card .account-section-title { font-size: 13px; }
+.account-modal-card .account-section-subtitle { font-size: 11px; line-height: 1.3; }
+.account-modal-card .input-premium {
+  min-height: 37px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  transition: none;
+}
+.account-modal-card .account-modal-scroll { scrollbar-width: thin; }
+.account-modal-card .account-primary-btn,
+.account-modal-card button[aria-label="Close"] {
+  animation: none;
+  transition: none;
+}
+.account-modal-card .account-primary-btn::after { content: none; }
+@media (max-width: 640px) {
+  .account-modal-card .account-section { padding: 10px; }
+  .account-modal-card { max-height: 91vh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .account-modal-card { animation: none; }
+}
 
   .account-switch {
     appearance: none;
@@ -3158,7 +3246,7 @@ canDeleteAccounts = true,
                     <button
                       onClick={() => onDisable(item.id)}
                       className="h-10 w-10 rounded-2xl border border-rose-100 bg-rose-50 text-rose-600 hover:bg-rose-100"
-                      title={canDeleteAccounts ? "Delete permanently" : "Delete Accounts is not enabled"}
+                      title={canDeleteAccounts ? "Archive account safely" : "Delete Accounts is not enabled"}
                     >
                       <Trash2 size={16} className="mx-auto" />
                     </button>
@@ -3263,7 +3351,7 @@ canDeleteAccounts = true,
                   <button
                     onClick={() => onDisable(item.id)}
                     className="h-10 w-10 rounded-2xl border border-rose-100 bg-rose-50 text-rose-600 hover:bg-rose-100"
-                    title={canDeleteAccounts ? "Delete permanently" : "Delete Accounts is not enabled"}
+                    title={canDeleteAccounts ? "Delete teacher login permanently" : "Delete Accounts is not enabled"}
                   >
                     <Trash2 size={16} className="mx-auto" />
                   </button>
@@ -3286,13 +3374,15 @@ canDeleteAccounts = true,
 // ─────────────────────────────────────────────────────────
 function StudentTable({
   items,
+  hasActiveFilter = false,
   copiedUsername,
   onCopyUsername,
   onEdit,
   onDisable,
 canDeleteAccounts = true,
-}: {
+ }: {
   items: CoordinatorStudentAccount[];
+  hasActiveFilter?: boolean;
   copiedUsername: string;
   onCopyUsername: (username: string) => void;
   onEdit: (item: CoordinatorStudentAccount) => void;
@@ -3300,7 +3390,9 @@ canDeleteAccounts = true,
   canDeleteAccounts?: boolean;
 }) {
   if (!items.length) {
-    return <EmptyState title="No students found" subtitle="Create your first student account." />;
+    return hasActiveFilter
+      ? <EmptyState title="No students match these filters" subtitle="Try another class time range or clear the filters." />
+      : <EmptyState title="No students found" subtitle="Create your first student account." />;
   }
 
   const getStudentName = (item: CoordinatorStudentAccount) => {
@@ -3437,7 +3529,7 @@ canDeleteAccounts = true,
                       type="button"
                       onClick={() => onDisable(item.id)}
                       className="h-10 w-10 rounded-2xl border border-rose-100 bg-rose-50 text-rose-600 hover:bg-rose-100 shadow-[0_10px_22px_rgba(244,63,94,0.10)] transition"
-                      title={canDeleteAccounts ? "Delete permanently" : "Delete Accounts is not enabled"}
+                      title={canDeleteAccounts ? "Archive account safely" : "Delete Accounts is not enabled"}
                     >
                       <Trash2 size={16} className="mx-auto" />
                     </button>

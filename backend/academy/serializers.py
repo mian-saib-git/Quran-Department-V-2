@@ -33,7 +33,7 @@ class TeacherProfileSerializer(serializers.ModelSerializer):
         ]
 
     def get_name(self, obj):
-        return obj.user.get_full_name() or obj.user.username
+        return str(obj)
 
 
 class StudentProfileSerializer(serializers.ModelSerializer):
@@ -62,7 +62,7 @@ class StudentProfileSerializer(serializers.ModelSerializer):
         return obj.user.get_full_name() or obj.user.username
 
     def get_teacher_name(self, obj):
-        return obj.teacher.user.get_full_name() or obj.teacher.user.username
+        return str(obj.teacher)
 
 
 class ClassScheduleSerializer(serializers.ModelSerializer):
@@ -88,7 +88,7 @@ class ClassScheduleSerializer(serializers.ModelSerializer):
         return obj.student.user.get_full_name() or obj.student.user.username
 
     def get_teacher_name(self, obj):
-        return obj.teacher.user.get_full_name() or obj.teacher.user.username
+        return str(obj.teacher)
 
 
 class AttendanceSerializer(serializers.ModelSerializer):
@@ -96,7 +96,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
     teacher_name = serializers.SerializerMethodField()
     student_id = serializers.IntegerField(source="student.id", read_only=True)
     student_name = serializers.SerializerMethodField()
-    marked_by_username = serializers.CharField(source="marked_by.username", read_only=True)
+    marked_by_username = serializers.SerializerMethodField()
 
     class Meta:
         model = Attendance
@@ -118,12 +118,16 @@ class AttendanceSerializer(serializers.ModelSerializer):
     def get_teacher_name(self, obj):
         if not obj.teacher:
             return ""
-        return obj.teacher.user.get_full_name() or obj.teacher.user.username
+        return str(obj.teacher)
 
     def get_student_name(self, obj):
         if not obj.student:
             return ""
         return obj.student.user.get_full_name() or obj.student.user.username
+
+    def get_marked_by_username(self, obj):
+        user = getattr(obj, 'marked_by', None)
+        return user.username if user else (obj.actor_name_snapshot or '')
 
 
 class LessonSerializer(serializers.ModelSerializer):
@@ -131,7 +135,7 @@ class LessonSerializer(serializers.ModelSerializer):
     student_name = serializers.SerializerMethodField()
     teacher_id = serializers.IntegerField(source="teacher.id", read_only=True)
     teacher_name = serializers.SerializerMethodField()
-    created_by_username = serializers.CharField(source="created_by.username", read_only=True)
+    created_by_username = serializers.SerializerMethodField()
 
     class Meta:
         model = Lesson
@@ -158,8 +162,11 @@ class LessonSerializer(serializers.ModelSerializer):
         return obj.student.user.get_full_name() or obj.student.user.username
 
     def get_teacher_name(self, obj):
-        return obj.teacher.user.get_full_name() or obj.teacher.user.username
-    
+        return str(obj.teacher)
+
+    def get_created_by_username(self, obj):
+        user = getattr(obj, 'created_by', None)
+        return user.username if user else (obj.actor_name_snapshot or '')
 
 
 class DailyLessonSubjectEntrySerializer(serializers.ModelSerializer):
@@ -183,7 +190,7 @@ class DailyLessonReportSerializer(serializers.ModelSerializer):
     student_name = serializers.SerializerMethodField()
     teacher_id = serializers.IntegerField(source="teacher.id", read_only=True)
     teacher_name = serializers.SerializerMethodField()
-    created_by_username = serializers.CharField(source="created_by.username", read_only=True)
+    created_by_username = serializers.SerializerMethodField()
     subject_entries = DailyLessonSubjectEntrySerializer(many=True, read_only=True)
 
     class Meta:
@@ -208,4 +215,8 @@ class DailyLessonReportSerializer(serializers.ModelSerializer):
         return obj.student.user.get_full_name() or obj.student.user.username
 
     def get_teacher_name(self, obj):
-        return obj.teacher.user.get_full_name() or obj.teacher.user.username
+        return str(obj.teacher)
+
+    def get_created_by_username(self, obj):
+        user = getattr(obj, 'created_by', None)
+        return user.username if user else (obj.actor_name_snapshot or '')

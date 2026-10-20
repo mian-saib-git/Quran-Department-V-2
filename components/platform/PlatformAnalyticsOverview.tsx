@@ -187,10 +187,10 @@ export default function PlatformAnalyticsOverview() {
                     <XAxis dataKey="label" interval="preserveStartEnd" minTickGap={18} tick={{ fontSize: 9, fontWeight: 700, fill: "#64748b" }} axisLine={false} tickLine={false} />
                     <YAxis width={34} tick={{ fontSize: 9, fontWeight: 700, fill: "#64748b" }} axisLine={false} tickLine={false} allowDecimals={false} />
                     <Tooltip contentStyle={{ borderRadius: 16, border: "1px solid #e2e8f0", fontSize: 12, fontWeight: 700 }} />
-                    <Area type="monotone" dataKey="quran_attendance" name="Qur'an Attendance" stroke="#4f46e5" strokeWidth={3} fill="url(#quranActivity)" />
-                    <Area type="monotone" dataKey="tuition_attendance" name="Tuition Attendance" stroke="#06b6d4" strokeWidth={3} fill="url(#tuitionActivity)" />
-                    <Area type="monotone" dataKey="lessons" name="Lessons" stroke="#10b981" strokeWidth={2.5} fillOpacity={0} />
-                    <Area type="monotone" dataKey="admin_activity" name="Admin Activity" stroke="#f59e0b" strokeWidth={2.5} fillOpacity={0} />
+                    <Area isAnimationActive={false} type="monotone" dataKey="quran_attendance" name="Qur'an Attendance" stroke="#4f46e5" strokeWidth={3} fill="url(#quranActivity)" />
+                    <Area isAnimationActive={false} type="monotone" dataKey="tuition_attendance" name="Tuition Attendance" stroke="#06b6d4" strokeWidth={3} fill="url(#tuitionActivity)" />
+                    <Area isAnimationActive={false} type="monotone" dataKey="lessons" name="Lessons" stroke="#10b981" strokeWidth={2.5} fillOpacity={0} />
+                    <Area isAnimationActive={false} type="monotone" dataKey="admin_activity" name="Admin Activity" stroke="#f59e0b" strokeWidth={2.5} fillOpacity={0} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -208,7 +208,7 @@ export default function PlatformAnalyticsOverview() {
           <div className="relative h-[220px] w-full min-w-0 overflow-hidden sm:h-[300px] lg:h-[330px]">
             <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 320, height: 220 }} debounce={60}>
               <RadialBarChart cx="50%" cy="48%" innerRadius="44%" outerRadius="78%" barSize={18} data={radialData} startAngle={210} endAngle={-30}>
-                <RadialBar dataKey="value" background cornerRadius={18} />
+                <RadialBar isAnimationActive={false} dataKey="value" background cornerRadius={18} />
                 <Tooltip formatter={(value) => `${value}%`} contentStyle={{ borderRadius: 16, border: "1px solid #e2e8f0", fontSize: 12, fontWeight: 700 }} />
               </RadialBarChart>
             </ResponsiveContainer>
@@ -228,11 +228,11 @@ export default function PlatformAnalyticsOverview() {
 
       <div className="grid gap-6 xl:grid-cols-2">
         <ChartCard title="Users by Role" subtitle="Every active portal category represented from the accounts database.">
-          {data.users_by_role.length ? <div className="h-[270px] sm:h-[300px] lg:h-[320px]"><ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 320, height: 220 }} debounce={60}><BarChart data={data.users_by_role} layout="vertical" margin={{ left: 18, right: 20 }}><CartesianGrid strokeDasharray="4 6" horizontal={false} stroke="#e2e8f0" /><XAxis type="number" allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 700, fill: "#64748b" }} /><YAxis type="category" dataKey="label" width={92} axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 800, fill: "#475569" }} /><Tooltip cursor={{ fill: "rgba(99,102,241,0.06)" }} contentStyle={{ borderRadius: 16, border: "1px solid #e2e8f0", fontSize: 12, fontWeight: 700 }} /><Bar dataKey="value" name="Accounts" radius={[0, 12, 12, 0]}>{data.users_by_role.map((item, index) => <Cell key={item.key} fill={chartColors[index % chartColors.length]} />)}</Bar></BarChart></ResponsiveContainer></div> : <EmptyChart />}
+          {data.users_by_role.length ? <div className="h-[270px] sm:h-[300px] lg:h-[320px]"><ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 320, height: 220 }} debounce={60}><BarChart data={data.users_by_role} layout="vertical" margin={{ left: 18, right: 20 }}><CartesianGrid strokeDasharray="4 6" horizontal={false} stroke="#e2e8f0" /><XAxis type="number" allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 700, fill: "#64748b" }} /><YAxis type="category" dataKey="label" width={92} axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 800, fill: "#475569" }} /><Tooltip cursor={{ fill: "rgba(99,102,241,0.06)" }} contentStyle={{ borderRadius: 16, border: "1px solid #e2e8f0", fontSize: 12, fontWeight: 700 }} /><Bar isAnimationActive={false} dataKey="value" name="Accounts" radius={[0, 12, 12, 0]}>{data.users_by_role.map((item, index) => <Cell key={item.key} fill={chartColors[index % chartColors.length]} />)}</Bar></BarChart></ResponsiveContainer></div> : <EmptyChart />}
         </ChartCard>
 
         <ChartCard title="Department Portfolio" subtitle="Distribution of Qur'an, Tuition, and future department types.">
-          {data.department_types.length ? <div className="grid items-center gap-4 sm:grid-cols-[1fr_0.9fr]"><div className="h-[240px] sm:h-[280px]"><ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 320, height: 220 }} debounce={60}><PieChart><Pie data={data.department_types} dataKey="value" nameKey="label" innerRadius={65} outerRadius={105} paddingAngle={5} cornerRadius={10}>{data.department_types.map((item, index) => <Cell key={item.key} fill={chartColors[index % chartColors.length]} />)}</Pie><Tooltip contentStyle={{ borderRadius: 16, border: "1px solid #e2e8f0", fontSize: 12, fontWeight: 700 }} /></PieChart></ResponsiveContainer></div><div className="space-y-3">{data.department_types.map((item, index) => <div key={item.key} className="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3 dark:bg-slate-800"><span className="flex items-center gap-2 text-xs font-black"><span className="h-3 w-3 rounded-full" style={{ backgroundColor: chartColors[index % chartColors.length] }} />{item.label}</span><span className="text-sm font-black">{item.value}</span></div>)}</div></div> : <EmptyChart />}
+          {data.department_types.length ? <div className="grid items-center gap-4 sm:grid-cols-[1fr_0.9fr]"><div className="h-[240px] sm:h-[280px]"><ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 320, height: 220 }} debounce={60}><PieChart><Pie isAnimationActive={false} data={data.department_types} dataKey="value" nameKey="label" innerRadius={65} outerRadius={105} paddingAngle={5} cornerRadius={10}>{data.department_types.map((item, index) => <Cell key={item.key} fill={chartColors[index % chartColors.length]} />)}</Pie><Tooltip contentStyle={{ borderRadius: 16, border: "1px solid #e2e8f0", fontSize: 12, fontWeight: 700 }} /></PieChart></ResponsiveContainer></div><div className="space-y-3">{data.department_types.map((item, index) => <div key={item.key} className="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3 dark:bg-slate-800"><span className="flex items-center gap-2 text-xs font-black"><span className="h-3 w-3 rounded-full" style={{ backgroundColor: chartColors[index % chartColors.length] }} />{item.label}</span><span className="text-sm font-black">{item.value}</span></div>)}</div></div> : <EmptyChart />}
         </ChartCard>
       </div>
 
@@ -247,8 +247,8 @@ export default function PlatformAnalyticsOverview() {
                     <XAxis dataKey="status" interval={0} axisLine={false} tickLine={false} tick={{ fontSize: 9, fontWeight: 800, fill: "#475569" }} />
                     <YAxis width={34} allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 9, fontWeight: 700, fill: "#64748b" }} />
                     <Tooltip contentStyle={{ borderRadius: 16, border: "1px solid #e2e8f0", fontSize: 12, fontWeight: 700 }} />
-                    <Bar dataKey="quran" name="Qur'an" stackId="attendance" fill="#4f46e5" radius={[0, 0, 8, 8]} />
-                    <Bar dataKey="tuition" name="Tuition" stackId="attendance" fill="#06b6d4" radius={[8, 8, 0, 0]} />
+                    <Bar isAnimationActive={false} dataKey="quran" name="Qur'an" stackId="attendance" fill="#4f46e5" radius={[0, 0, 8, 8]} />
+                    <Bar isAnimationActive={false} dataKey="tuition" name="Tuition" stackId="attendance" fill="#06b6d4" radius={[8, 8, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>

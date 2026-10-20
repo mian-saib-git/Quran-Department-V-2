@@ -5,12 +5,16 @@ from decimal import Decimal, InvalidOperation
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
+from zoneinfo import ZoneInfo
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Department
+from accounts.notification_service import salary_transition
+import logging
+_notification_logger = logging.getLogger(__name__)
 
 from .models import (
     QuranSalaryAdjustment,
@@ -121,7 +125,7 @@ def _positive_int(
 
 
 def _month_year(request):
-    today = timezone.localdate()
+    today = timezone.localdate(timezone=ZoneInfo("Asia/Karachi"))
 
     try:
         month = int(
@@ -1715,6 +1719,10 @@ class QuranSalaryV2PayrollView(
                     "updated_at",
                 ]
             )
+            try:
+                salary_transition(payroll, "submit")
+            except Exception:
+                _notification_logger.exception("Salary submission notification delivery failed")
 
             return Response(
                 {
@@ -1927,6 +1935,10 @@ class QuranSalaryV2PayrollView(
                         "updated_at",
                     ]
                 )
+                try:
+                    salary_transition(payroll, "approved")
+                except Exception:
+                    _notification_logger.exception("Salary approval notification delivery failed")
 
                 return Response(
                     {
@@ -1993,6 +2005,10 @@ class QuranSalaryV2PayrollView(
                     "updated_at",
                 ]
             )
+            try:
+                salary_transition(payroll, "rejected")
+            except Exception:
+                _notification_logger.exception("Salary rejection notification delivery failed")
 
             return Response(
                 {

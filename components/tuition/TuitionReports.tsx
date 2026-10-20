@@ -1879,11 +1879,6 @@ export default function TuitionReports({ departmentId, features, generatedBy = "
     setDateFilterBasis("attendance_date");
   };
 
-  if (completeAttendance.loading || completeAttendance.error) return <div role="status" className="p-6">
-    <p>{completeAttendance.error || "Loading all attendance pages for the selected report range…"}</p>
-    {completeAttendance.error && <button onClick={completeAttendance.reload}>Retry report</button>}
-  </div>;
-
   if (loading) {
     return (
       <div className="rounded-[30px] border border-slate-200/80 bg-white p-10 text-center shadow-[0_18px_48px_rgba(15,23,42,0.07)]">
@@ -1894,7 +1889,19 @@ export default function TuitionReports({ departmentId, features, generatedBy = "
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" aria-busy={completeAttendance.loading}>
+      {(completeAttendance.loading || completeAttendance.error) && (
+        <div role="status" aria-live="polite" className="flex flex-wrap items-center gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-900">
+          {completeAttendance.loading ? (
+            <><Loader2 size={18} className="animate-spin" /> Updating attendance for the selected filters...</>
+          ) : (
+            <>
+              <span>{completeAttendance.error}</span>
+              <button type="button" onClick={completeAttendance.reload} className="rounded-lg border border-indigo-300 bg-white px-3 py-1.5">Retry report</button>
+            </>
+          )}
+        </div>
+      )}
       {message && (
         <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900">
           <AlertCircle className="mt-0.5 shrink-0" size={18} />
@@ -1920,24 +1927,24 @@ export default function TuitionReports({ departmentId, features, generatedBy = "
               label="CSV"
               icon={<FileDown size={15} />}
               tone="bg-slate-950 text-white shadow-[0_12px_24px_rgba(15,23,42,0.18)] hover:bg-slate-800"
-              enabled={canExportCsv}
-              lockedMessage="Tuition CSV export is disabled by Main Admin."
+              enabled={canExportCsv && !completeAttendance.loading && !completeAttendance.error}
+              lockedMessage={completeAttendance.loading || completeAttendance.error ? "Wait until the selected attendance range finishes loading." : "Tuition CSV export is disabled by Main Admin."}
               onClick={() => void exportRows(filteredRows, generatedBy, "csv", exportMeta)}
             />
             <IconButton
               label="Excel"
               icon={<FileSpreadsheet size={15} />}
               tone="bg-blue-600 text-white shadow-[0_12px_24px_rgba(37,99,235,0.20)] hover:bg-blue-700"
-              enabled={canExportExcel}
-              lockedMessage="Tuition Excel export is disabled by Main Admin."
+              enabled={canExportExcel && !completeAttendance.loading && !completeAttendance.error}
+              lockedMessage={completeAttendance.loading || completeAttendance.error ? "Wait until the selected attendance range finishes loading." : "Tuition Excel export is disabled by Main Admin."}
               onClick={() => void exportRows(filteredRows, generatedBy, "excel", exportMeta)}
             />
             <IconButton
               label="PDF"
               icon={<FileText size={15} />}
               tone="bg-emerald-600 text-white shadow-[0_12px_24px_rgba(5,150,105,0.20)] hover:bg-emerald-700"
-              enabled={canExportPdf}
-              lockedMessage="Tuition PDF export is disabled by Main Admin."
+              enabled={canExportPdf && !completeAttendance.loading && !completeAttendance.error}
+              lockedMessage={completeAttendance.loading || completeAttendance.error ? "Wait until the selected attendance range finishes loading." : "Tuition PDF export is disabled by Main Admin."}
               onClick={() => void exportPdf(filteredRows, generatedBy, exportMeta)}
             />
             <IconButton

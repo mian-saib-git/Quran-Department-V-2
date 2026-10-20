@@ -54,7 +54,11 @@ from .attendance_report_import import (
     import_attendance_report_csv,
     parse_attendance_report_csv,
 )
-from .attendance_v2_api import reconcile_student_coverage
+from .attendance_v2_api import (
+    reconcile_student_coverage,
+    lock_student_schedule_teachers,
+    student_status_conflicts_with_substitution,
+)
 from .attendance_import_payroll import AttendanceImportPayrollLocked
 from .payroll_source_locks import (
     PayrollSourceLockedError,
@@ -332,11 +336,11 @@ def attendance_payload(attendance):
         "classKey": attendance.class_key or "",
         "class_key": attendance.class_key or "",
         "status": attendance.status,
-        "marked_by": marked_by.username,
-        "marked_by_id": marked_by.id,
-        "marked_by_username": marked_by.username,
-        "marked_by_name": user_display_name(marked_by),
-        "marked_by_role": marked_by.role,
+        "marked_by": marked_by.username if marked_by else attendance.actor_name_snapshot,
+        "marked_by_id": attendance.marked_by_id,
+        "marked_by_username": marked_by.username if marked_by else "",
+        "marked_by_name": user_display_name(marked_by) if marked_by else attendance.actor_name_snapshot,
+        "marked_by_role": marked_by.role if marked_by else "former_teacher",
         "created_at": attendance.created_at.isoformat() if attendance.created_at else None,
         "updated_at": attendance.updated_at.isoformat() if attendance.updated_at else None,
     }
@@ -357,11 +361,11 @@ def lesson_payload(lesson):
         "lesson_data": lesson.lesson_data or {},
         "title": lesson.title,
         "notes": lesson.notes,
-        "created_by": lesson.created_by.username,
-        "created_by_id": lesson.created_by.id,
-        "created_by_username": lesson.created_by.username,
-        "created_by_name": user_display_name(lesson.created_by),
-        "created_by_role": lesson.created_by.role,
+        "created_by": lesson.created_by.username if lesson.created_by else lesson.actor_name_snapshot,
+        "created_by_id": lesson.created_by_id,
+        "created_by_username": lesson.created_by.username if lesson.created_by else "",
+        "created_by_name": user_display_name(lesson.created_by) if lesson.created_by else lesson.actor_name_snapshot,
+        "created_by_role": lesson.created_by.role if lesson.created_by else "former_teacher",
         "created_at": lesson.created_at.isoformat(),
         "updated_at": lesson.updated_at.isoformat(),
     }
@@ -394,11 +398,11 @@ def daily_lesson_report_payload(report):
             daily_lesson_subject_entry_payload(entry)
             for entry in report.subject_entries.all()
         ],
-        "created_by": report.created_by.username,
-        "created_by_id": report.created_by.id,
-        "created_by_username": report.created_by.username,
-        "created_by_name": user_display_name(report.created_by),
-        "created_by_role": report.created_by.role,
+        "created_by": report.created_by.username if report.created_by else report.actor_name_snapshot,
+        "created_by_id": report.created_by_id,
+        "created_by_username": report.created_by.username if report.created_by else "",
+        "created_by_name": user_display_name(report.created_by) if report.created_by else report.actor_name_snapshot,
+        "created_by_role": report.created_by.role if report.created_by else "former_teacher",
         "edit_permission_until": (
             report.edit_permission_until.isoformat()
             if report.edit_permission_until
@@ -894,8 +898,8 @@ class DashboardView(APIView):
                 "user": user_payload(user),
                 "dashboard_type": "coordinator",
                 "counts": {
-                    "teachers": TeacherProfile.objects.filter(department=department).count(),
-                    "students": StudentProfile.objects.filter(department=department).count(),
+                    "teachers": TeacherProfile.objects.filter(department=department, user__isnull=False, user__archived_at__isnull=True).count(),
+                    "students": StudentProfile.objects.filter(department=department, user__archived_at__isnull=True).count(),
                     "active_schedules": ClassSchedule.objects.filter(department=department, is_active=True).count(),
                     "attendance_records": Attendance.objects.filter(department=department).count(),
                     "lessons": Lesson.objects.filter(department=department).count(),
@@ -1130,11 +1134,11 @@ class DashboardView(APIView):
                         "progress_status": entry.progress_status,
                         "remarks": entry.remarks,
                         "lesson_data": entry.lesson_data or {},
-                        "created_by": report.created_by.username,
-                        "created_by_id": report.created_by.id,
-                        "created_by_username": report.created_by.username,
-                        "created_by_name": report.created_by.get_full_name() or report.created_by.username,
-                        "created_by_role": report.created_by.role,
+                        "created_by": report.created_by.username if report.created_by else report.actor_name_snapshot,
+                        "created_by_id": report.created_by_id,
+                        "created_by_username": report.created_by.username if report.created_by else "",
+                        "created_by_name": (report.created_by.get_full_name() or report.created_by.username) if report.created_by else report.actor_name_snapshot,
+                        "created_by_role": report.created_by.role if report.created_by else "former_teacher",
                         "created_at": report.created_at.isoformat(),
                         "updated_at": report.updated_at.isoformat(),
                     }
@@ -2393,7 +2397,7 @@ def _attendance_import_truthy(value):
 
 def _resolve_attendance_import_teacher_for_user(user, csv_teacher_name):
     """Resolve the CSV teacher inside the authenticated coordinator's Quran scope."""
-    queryset = TeacherProfile.objects.select_related("user").all()
+    queryset = TeacherProfile.objects.select_related("user").filter(user__isnull=False)
 
     if not getattr(user, "is_superuser", False):
         department = quran_department_for_user(user)
@@ -2434,7 +2438,7 @@ def _resolve_attendance_import_teacher_for_user(user, csv_teacher_name):
 
 def _attendance_import_scope_querysets(user):
     """Return teacher/student querysets limited to the caller's Quran department."""
-    teachers = TeacherProfile.objects.select_related("user").all()
+    teachers = TeacherProfile.objects.select_related("user").filter(user__isnull=False)
     students = StudentProfile.objects.select_related("user", "teacher__user").all()
 
     if getattr(user, "is_superuser", False):
@@ -3083,6 +3087,20 @@ class AttendanceListCreateView(APIView):
             )
         )
 
+        # Protect availability established by confirmed Absent/Leave
+        # students, including concurrent teacher-session saves.
+        effective_student_schedules = lock_student_schedule_teachers(
+            student=student, target_date=target_date,
+        )
+        conflict = student_status_conflicts_with_substitution(
+            student=student,
+            target_date=target_date,
+            new_status=status_value,
+            schedules=effective_student_schedules,
+        )
+        if conflict:
+            return Response(conflict, status=status.HTTP_409_CONFLICT)
+
         source_lock = (
             student_attendance_payroll_lock_payload(
                 student=student,
@@ -3316,6 +3334,20 @@ class AttendanceDeleteView(APIView):
         target_date = (
             attendance.date
         )
+
+        # Deleting an Absent/Leave mark produces an Unmarked student.
+        # Do not free a time slot already committed to substitute cover.
+        effective_student_schedules = lock_student_schedule_teachers(
+            student=student, target_date=target_date,
+        )
+        conflict = student_status_conflicts_with_substitution(
+            student=student,
+            target_date=target_date,
+            new_status="not_marked",
+            schedules=effective_student_schedules,
+        )
+        if conflict:
+            return Response(conflict, status=status.HTTP_409_CONFLICT)
 
         source_lock = (
             student_attendance_payroll_lock_payload(
@@ -4377,11 +4409,11 @@ class AcademyStateView(APIView):
         )
 
         if is_department_manager(user):
-            teachers = TeacherProfile.objects.filter(department=department).select_related("user").filter(department=department).order_by("id")
+            teachers = TeacherProfile.objects.filter(department=department, user__isnull=False, user__archived_at__isnull=True).select_related("user").order_by("id")
             students = StudentProfile.objects.filter(department=department).select_related(
                 "user",
                 "teacher__user",
-            ).prefetch_related(schedules_prefetch).filter(department=department).order_by("user__first_name", "user__username", "id")
+            ).prefetch_related(schedules_prefetch).filter(department=department, user__archived_at__isnull=True).order_by("user__first_name", "user__username", "id")
             attendance_qs = Attendance.objects.filter(department=department).select_related(
                 "teacher__user",
                 "student__user",
@@ -4791,7 +4823,7 @@ def build_assistant_school_context(user):
     if not department:
         return "No active Quran department is assigned to this account."
 
-    teachers = TeacherProfile.objects.filter(department=department).select_related("user").order_by("user__first_name", "user__username", "id")
+    teachers = TeacherProfile.objects.filter(department=department, user__isnull=False).select_related("user").order_by("user__first_name", "user__username", "id")
     students = StudentProfile.objects.filter(department=department).select_related("user", "teacher__user").prefetch_related(
         Prefetch(
             "schedules",

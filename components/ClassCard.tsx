@@ -15,6 +15,7 @@ import {
   getQuranTeacherSessionAttendance,
   type QuranTeacherSessionPayload,
 } from "../services/djangoApiService";
+import { getQuranBusinessTime } from "../services/quranBusinessTime";
 import {
   CheckCircle2,
   Clock3,
@@ -32,6 +33,7 @@ type LiveCoverageEditor = {
   status: AttendanceStatus;
   payload: QuranTeacherSessionPayload;
   assignments: Record<number, string>;
+  intentGeneration: number;
 };
 
 type Props = {
@@ -242,6 +244,30 @@ export function ClassCard({
 
   const studentActionVersionRef = useRef(0);
   const teacherActionVersionRef = useRef(0);
+  const teacherIntentGenerationRef = useRef(0);
+  const isMountedRef = useRef(true);
+
+  const beginTeacherAttendanceIntent = () => {
+    const nextGeneration = teacherIntentGenerationRef.current + 1;
+    teacherIntentGenerationRef.current = nextGeneration;
+    setCoverageEditor(null);
+    setCoverageError("");
+    setCoverageLoading(false);
+    setCoverageSaving(false);
+    return nextGeneration;
+  };
+
+  const isCurrentTeacherIntent = (generation: number) =>
+    isMountedRef.current && teacherIntentGenerationRef.current === generation;
+
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+      teacherIntentGenerationRef.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     setStudentStatus(attendanceToday?.status ?? null);
@@ -256,8 +282,11 @@ export function ClassCard({
   ]);
 
   useEffect(() => {
+    teacherIntentGenerationRef.current += 1;
     setCoverageEditor(null);
     setCoverageError("");
+    setCoverageLoading(false);
+    setCoverageSaving(false);
   }, [attendanceDate, student.timeSlot, teacher?.id]);
 
   useEffect(() => {
@@ -309,8 +338,11 @@ export function ClassCard({
       });
   };
 
-  const loadCoverageEditor = async (status: AttendanceStatus) => {
-    if (!teacher) return;
+  const loadCoverageEditor = async (
+    status: AttendanceStatus,
+    intentGeneration: number,
+  ) => {
+    if (!teacher || !isCurrentTeacherIntent(intentGeneration)) return;
 
     if (status === AttendanceStatus.PRESENT) {
       setCoverageEditor(null);
@@ -330,6 +362,8 @@ export function ClassCard({
         date: attendanceDate,
         class_key: student.timeSlot,
       });
+
+      if (!isCurrentTeacherIntent(intentGeneration)) return;
 
       const assignments: Record<number, string> = {};
 
@@ -352,7 +386,7 @@ export function ClassCard({
       );
 
       if (notMarked.length > 0) {
-        setCoverageEditor({ status, payload, assignments });
+        setCoverageEditor({ status, payload, assignments, intentGeneration });
         setCoverageError(
           `Mark student attendance first for ${notMarked.length} student${
             notMarked.length === 1 ? "" : "s"
@@ -363,25 +397,32 @@ export function ClassCard({
 
       if (required.length === 0) {
         setCoverageEditor(null);
+        if (!isCurrentTeacherIntent(intentGeneration)) return;
         runTeacherAttendanceAction(status, () =>
           onMarkTeacherAttendance(teacher.id, status, []),
         );
         return;
       }
 
-      setCoverageEditor({ status, payload, assignments });
+      setCoverageEditor({ status, payload, assignments, intentGeneration });
     } catch (error: any) {
+      if (!isCurrentTeacherIntent(intentGeneration)) return;
       setCoverageEditor(null);
       setCoverageError(
         error?.message || "Could not load substitute teachers for this session.",
       );
     } finally {
-      setCoverageLoading(false);
+      if (isCurrentTeacherIntent(intentGeneration)) {
+        setCoverageLoading(false);
+      }
     }
   };
 
   const saveCoverageAttendance = async () => {
     if (!teacher || !coverageEditor || coverageSaving) return;
+
+    const intentGeneration = coverageEditor.intentGeneration;
+    if (!isCurrentTeacherIntent(intentGeneration)) return;
 
     const notMarked = coverageEditor.payload.students.filter(
       (row) => row.student_status === "not_marked",
@@ -433,6 +474,7 @@ export function ClassCard({
     const fallbackStatus = teacherStatus;
     const nextStatus = coverageEditor.status;
 
+    if (!isCurrentTeacherIntent(intentGeneration)) return;
     flushSync(() => setTeacherStatus(nextStatus));
     setCoverageSaving(true);
     setCoverageError("");
@@ -444,6 +486,8 @@ export function ClassCard({
         assignments,
       );
 
+      if (!isCurrentTeacherIntent(intentGeneration)) return;
+
       if (saved === false) {
         setTeacherStatus(fallbackStatus);
         setCoverageError(
@@ -454,13 +498,16 @@ export function ClassCard({
 
       setCoverageEditor(null);
     } catch (error: any) {
+      if (!isCurrentTeacherIntent(intentGeneration)) return;
       setTeacherStatus(fallbackStatus);
       setCoverageError(
         error?.message ||
           "Could not save the teacher attendance and substitute assignment.",
       );
     } finally {
-      setCoverageSaving(false);
+      if (isCurrentTeacherIntent(intentGeneration)) {
+        setCoverageSaving(false);
+      }
     }
   };
 
@@ -486,8 +533,8 @@ export function ClassCard({
   const countdownLabel = useMemo(() => {
     if (startMinutes === null) return isCurrentSession ? "In progress" : "Upcoming";
 
-    const now = new Date(clockTick);
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const now = getQuranBusinessTime(new Date(clockTick));
+    const currentMinutes = now.hour * 60 + now.minute;
 
     if (isCurrentSession) {
       let remaining = startMinutes + durationMinutes - currentMinutes;
@@ -669,12 +716,12 @@ export function ClassCard({
                 current={teacherChoice}
                 onSet={(status) => {
                   if (!teacher) return;
-                  void loadCoverageEditor(status);
+                  const intentGeneration = beginTeacherAttendanceIntent();
+                  void loadCoverageEditor(status, intentGeneration);
                 }}
                 onClear={() => {
                   if (!teacher) return;
-                  setCoverageEditor(null);
-                  setCoverageError("");
+                  beginTeacherAttendanceIntent();
                   runTeacherAttendanceAction(null, () =>
                     onUnmarkTeacherAttendance(teacher.id)
                   );
@@ -699,8 +746,7 @@ export function ClassCard({
                   <button
                     type="button"
                     onClick={() => {
-                      setCoverageEditor(null);
-                      setCoverageError("");
+                      beginTeacherAttendanceIntent();
                     }}
                     className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[9px] font-black text-slate-600"
                   >

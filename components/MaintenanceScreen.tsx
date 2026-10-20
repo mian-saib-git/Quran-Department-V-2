@@ -34,7 +34,7 @@ export default function MaintenanceScreen({
               <div className="relative">
                 <div className="flex items-center gap-3">
                   <span className="grid h-14 w-14 place-items-center rounded-[20px] border border-white/25 bg-white/15 shadow-inner backdrop-blur">
-                    <img src="/ivs-logo.png" alt="Iqra Virtual School" className="h-10 w-10 object-contain" />
+                    <img src="/ivs-logo.webp" alt="Iqra Virtual School" className="h-10 w-10 object-contain" />
                   </span>
                   <div>
                     <div className="text-xs font-black uppercase tracking-[0.18em] text-indigo-100">Iqra Virtual School</div>

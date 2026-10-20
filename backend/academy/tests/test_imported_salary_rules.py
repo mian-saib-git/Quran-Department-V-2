@@ -31,8 +31,10 @@ class ConfirmedHistoricalSessionsTests(SimpleTestCase):
         )
         # Virtual filler dates must never be treated as paid by themselves.
         self.assertTrue(dates)
-        # The candidate generator covers September 29-30 too.  Only
-        # marked eligible dates will be paid, up to a total of 20.
+        # The candidate generator covers September 29-30 too. Only
+        # corroborated and marked eligible sessions earn payroll units.
+        # Each seven-day block is capped at five; there is no hard 20-unit
+        # monthly cap in the current Salary V2 policy.
         self.assertEqual(len(dates), 22)
         self.assertEqual(dates[-2:], [date(2026, 9, 29), date(2026, 9, 30)])
         self.assertEqual(_earned_payroll_dates_for_student(
@@ -101,9 +103,10 @@ class FullCalendarSalaryCapTests(SimpleTestCase):
         candidates, paid = self._dates(2026, 9, 30, present)
         self.assertIn(date(2026, 9, 29), candidates)
         self.assertIn(date(2026, 9, 30), candidates)
-        self.assertEqual(len(paid), 20)
-        self.assertEqual(paid[-1], date(2026, 9, 29))
-        self.assertNotIn(date(2026, 9, 30), paid)
+        # September has four complete seven-day blocks and a partial
+        # fifth block. All 21 corroborated and marked sessions here qualify.
+        self.assertEqual(len(paid), 21)
+        self.assertEqual(paid[-2:], [date(2026, 9, 29), date(2026, 9, 30)])
 
     def test_full_31_day_month_eligible_last_three_days(self):
         _, paid = self._dates(2026, 10, 31, [1, 2, 29, 30, 31])
@@ -123,12 +126,13 @@ class FullCalendarSalaryCapTests(SimpleTestCase):
         self.assertEqual(len(paid), 5)
         self.assertEqual(paid, [date(2026, 9, x) for x in range(1, 6)])
 
-    def test_monthly_cap_is_twenty_even_with_all_dates_marked(self):
+    def test_full_month_is_capped_per_block_not_at_twenty(self):
         _, paid = self._dates(2026, 10, 31, list(range(1, 32)))
-        self.assertEqual(len(paid), 20)
-        self.assertNotIn(date(2026, 10, 29), paid)
+        # Five units in each of four full blocks, plus Oct 29-31.
+        self.assertEqual(len(paid), 23)
+        self.assertEqual(paid[-3:], [date(2026, 10, d) for d in (29, 30, 31)])
 
-    def test_ineligible_and_future_dates_do_not_use_monthly_cap(self):
+    def test_ineligible_and_future_dates_are_not_earned(self):
         start = date(2026, 9, 1)
         end = date(2026, 9, 30)
         states = {

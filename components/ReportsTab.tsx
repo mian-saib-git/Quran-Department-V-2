@@ -1,5 +1,5 @@
 import { useCompleteAttendance } from "../hooks/useCompleteAttendance";
-import { getAllQuranAttendance, toAttendanceRecord } from "../services/djangoApiService";
+import { getAllQuranAttendance, getQuranReportScheduledSessions, toAttendanceRecord, type QuranReportScheduledSession } from "../services/djangoApiService";
 // IVS_ATTENDANCE_TIME_CLASS_BASED_V24
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { showFeatureLocked } from "../services/featureAccess";
@@ -870,6 +870,18 @@ export function ReportsTab({
   const completeAttendance = useCompleteAttendance(`${effectiveRange.start}:${effectiveRange.end}:${dateFilterBasis}:${attendanceImportCommitted}`, reportLoader);
   const appState = { ...sourceState, attendance: completeAttendance.rows };
 
+  const needsScheduledSessions = dateFilterBasis === "attendance_date" && includeUnmarked &&
+    (selectedTeacherIds.length > 0 || selectedStudentIds.length > 0 || Boolean(classTimeStart || classTimeEnd));
+  const sessionsLoader = React.useCallback(() =>
+    getQuranReportScheduledSessions(effectiveRange.start, effectiveRange.end),
+    [effectiveRange.start, effectiveRange.end]
+  );
+  const scheduledSessions = useCompleteAttendance<QuranReportScheduledSession>(
+    `${effectiveRange.start}:${effectiveRange.end}`, sessionsLoader, needsScheduledSessions
+  );
+  const reportLoading = completeAttendance.loading || (needsScheduledSessions && scheduledSessions.loading);
+  const reportError = completeAttendance.error || (needsScheduledSessions ? scheduledSessions.error : "");
+
   const resetAttendanceImport = () => {
     setAttendanceImportFile(null);
     setAttendanceImportAllowUnmatched(false);
@@ -1284,7 +1296,6 @@ export function ReportsTab({
 
     if (!s || !e) return [] as Row[];
 
-    const dates = dateListInclusive(s, e, Math.ceil((Date.parse(e) - Date.parse(s)) / 86400000) + 1);
     const hasEntitySelection =
       selectedTeacherIds.length > 0 || selectedStudentIds.length > 0;
     const wantsUnmarked =
@@ -1344,7 +1355,9 @@ export function ReportsTab({
       if (record.entityType === EntityType.TEACHER) {
         if (!includeTeacherRow) return;
         const teacherId = String(record.entityId);
-        if (!reportTeacherIdSet.has(teacherId)) return;
+        if (selectedTeacherIds.length > 0
+          ? !selectedTeacherIdSet.has(teacherId)
+          : (!wantsUnmarked && !reportTeacherIdSet.has(teacherId))) return;
 
         const normalizedTime = normalizeClassTime(record.classKey);
         if (
@@ -1450,51 +1463,54 @@ export function ReportsTab({
       );
     }
 
-    for (const date of dates) {
-      if (includeTeacherRow) {
-        for (const teacher of scope.teachers) {
-          const teacherId = String(teacher.id);
-          const times = (teacherClassTimes.get(teacherId) || []).filter((time) =>
-            timeMatchesRange(time, classTimeStart, classTimeEnd)
-          );
-          const rowTimes = times.length > 0 ? times : hasTimeFilter ? [] : [""];
+    // Every saved attendance record is authoritative, even when the related
+    // schedule was later closed, and must never be replaced by an invented row.
+    for (const record of appState.attendance) pushFromRecord(record);
 
-          for (const time of rowTimes) {
-            const key = `${date}:${EntityType.TEACHER}:${teacher.id}:${time}`;
-            const record = recordMap.get(key);
+    if (scheduledSessions.loading || scheduledSessions.error) return [] as Row[];
 
-            out.push({
-              date,
-              entityType: EntityType.TEACHER,
-              teacherName: teacher.name,
-              studentName: teacherSessionStudentName(
-                teacherId,
-                date,
-                time,
-                record?.studentName
-              ),
-              classTime: formatClassTime(time),
-              status: record?.status ?? "Unmarked",
-              markedBy: record?.markedByName || record?.markedByUsername || "—",
-              updatedAt: record?.timestamp ?? null,
-            });
-          }
-        }
+    const markedStudentDates = new Set(appState.attendance
+      .filter(record => record.entityType === EntityType.STUDENT)
+      .map(record => `${record.date}:${record.studentId || record.entityId}`));
+    const markedTeacherSlots = new Set(appState.attendance
+      .filter(record => record.entityType === EntityType.TEACHER)
+      .map(record => `${record.date}:${record.entityId}:${normalizeClassTime(record.classKey)}`));
+    const generatedTeacherSlots = new Set<string>();
+
+    for (const session of scheduledSessions.rows) {
+      const teacherId = String(session.teacher_id);
+      const studentId = String(session.student_id);
+      const time = normalizeClassTime(session.class_key);
+      if (selectedTeacherIds.length > 0 && !selectedTeacherIdSet.has(teacherId)) continue;
+      if (selectedStudentIds.length > 0 && !selectedStudentIdSet.has(studentId)) continue;
+      if (!timeMatchesRange(time, classTimeStart, classTimeEnd)) continue;
+
+      if (!markedStudentDates.has(`${session.date}:${studentId}`)) {
+        out.push({
+          date: session.date,
+          entityType: EntityType.STUDENT,
+          teacherName: session.teacher_name,
+          studentName: session.student_name,
+          classTime: formatClassTime(time),
+          status: "Unmarked",
+          markedBy: "—",
+          updatedAt: null,
+        });
       }
 
-      for (const student of scope.students) {
-        const key = `${date}:${EntityType.STUDENT}:${student.id}:`;
-        const record = recordMap.get(key);
-
+      const teacherKey = `${session.date}:${teacherId}:${time}`;
+      if (includeTeacherRow && !markedTeacherSlots.has(teacherKey) &&
+          !generatedTeacherSlots.has(teacherKey)) {
+        generatedTeacherSlots.add(teacherKey);
         out.push({
-          date,
-          entityType: EntityType.STUDENT,
-          teacherName: teacherById.get(String(student.teacherId))?.name ?? "Unknown Teacher",
-          studentName: student.name,
-          classTime: formatClassTime(student.timeSlot),
-          status: record?.status ?? "Unmarked",
-          markedBy: record?.markedByName || record?.markedByUsername || "—",
-          updatedAt: record?.timestamp ?? null,
+          date: session.date,
+          entityType: EntityType.TEACHER,
+          teacherName: session.teacher_name,
+          studentName: "—",
+          classTime: formatClassTime(time),
+          status: "Unmarked",
+          markedBy: "—",
+          updatedAt: null,
         });
       }
     }
@@ -1522,6 +1538,9 @@ export function ReportsTab({
     teacherById,
     studentById,
     dateFilterBasis,
+    scheduledSessions.rows,
+    scheduledSessions.loading,
+    scheduledSessions.error,
   ]);
 
   const normalizedReportSearch = reportSearch.trim().toLocaleLowerCase();
@@ -1805,6 +1824,10 @@ export function ReportsTab({
   }_${effectiveRange.start}_to_${effectiveRange.end}${exportTimeSuffix}`;
 
   const exportCSV = () => {
+  if (reportLoading || reportError) {
+    alert("Please wait for the selected attendance range to finish loading before exporting.");
+    return;
+  }
   if (!canExportCsv) {
     showFeatureLocked("CSV Export");
     return;
@@ -1859,6 +1882,10 @@ export function ReportsTab({
   };
 
 const exportExcel = async () => {
+  if (reportLoading || reportError) {
+    alert("Please wait for the selected attendance range to finish loading before exporting.");
+    return;
+  }
   if (!canExportExcel) {
     showFeatureLocked("Excel Export");
     return;
@@ -1917,6 +1944,10 @@ const exportExcel = async () => {
 };
 
 const exportPDF = async () => {
+  if (reportLoading || reportError) {
+    alert("Please wait for the selected attendance range to finish loading before exporting.");
+    return;
+  }
   if (!canExportPdf) {
     showFeatureLocked("PDF Export");
     return;
@@ -2018,8 +2049,8 @@ const exportPDF = async () => {
   const totalUnmarked = Number(summary.Unmarked ?? 0);
   const totalRows = filteredAttendanceRows.length;
 
-  const attendanceScore =
-    totalRows > 0 ? Math.round((totalPresent / totalRows) * 100) : 0;
+  const markedRows = totalPresent + totalAbsent + totalLeave;
+  const attendanceScore = markedRows > 0 ? Math.round((totalPresent / markedRows) * 100) : null;
 
   const loadImageAsDataUrl = async (url: string): Promise<string | null> => {
     try {
@@ -2472,13 +2503,13 @@ const exportPDF = async () => {
 
     doc.setTextColor(...TEXT);
     doc.setFontSize(31);
-    doc.text(`${attendanceScore}%`, 24, 134);
+    doc.text(attendanceScore === null ? "N/A" : `${attendanceScore}%`, 24, 134);
 
     doc.setTextColor(...MUTED);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.5);
 
-    doc.text("Present rows compared with total report rows.", 24, 145, {
+    doc.text("Present compared with marked attendance only.", 24, 145, {
       maxWidth: 54,
     });
 
@@ -2791,12 +2822,22 @@ const pagedTeachers = useMemo(
     setDateFilterBasis("attendance_date");
   };
 
-  if (completeAttendance.loading || completeAttendance.error) return <div role="status" className="p-6">
-    <p>{completeAttendance.error || "Loading all attendance pages for the selected report range…"}</p>
-    {completeAttendance.error && <button onClick={completeAttendance.reload}>Retry report</button>}
-  </div>;
+  // Keep filters mounted during a date-range fetch; the attendance hook does
+  // not expose rows from the previous range, preventing stale report exports.
   return (
-    <div className="w-full max-w-none mx-auto space-y-6">
+    <div className="w-full max-w-none mx-auto space-y-6" aria-busy={reportLoading}>
+      {(reportLoading || reportError) && (
+        <div role="status" aria-live="polite" className="flex flex-wrap items-center gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-bold text-indigo-900">
+          {reportLoading ? (
+            <><Loader2 className="h-4 w-4 animate-spin" /> Updating attendance for the selected filters...</>
+          ) : (
+            <>
+              <span>{reportError}</span>
+              <button type="button" onClick={() => { completeAttendance.reload(); scheduledSessions.reload(); }} className="rounded-lg border border-indigo-300 bg-white px-3 py-1.5">Retry report</button>
+            </>
+          )}
+        </div>
+      )}
       <div className="relative overflow-hidden rounded-[34px] border border-slate-200/70 bg-white/75 backdrop-blur-xl shadow-[0_24px_70px_rgba(15,23,42,0.09)] p-6">
         <div className="pointer-events-none absolute -top-28 -right-28 h-80 w-80 rounded-full bg-emerald-200/35 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-28 -left-28 h-80 w-80 rounded-full bg-indigo-200/25 blur-3xl" />

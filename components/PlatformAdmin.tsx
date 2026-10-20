@@ -1,3 +1,6 @@
+import IVSClockCard from "./IVSClockCard";
+import NotificationBell from "./NotificationBell";
+import { IVS_NOTIFICATION_NAVIGATE_EVENT, type NotificationNavigateDetail } from "./notificationNavigation";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
@@ -233,6 +236,38 @@ function formatDepartmentType(value: string) {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
+// The live clock owns its timer so the full Main Admin portal does not rerender each second.
+function PlatformClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const hourHandRotation = (now.getHours() % 12) * 30 + now.getMinutes() * 0.5;
+  const minuteHandRotation = now.getMinutes() * 6 + now.getSeconds() * 0.1;
+  const secondHandRotation = now.getSeconds() * 6;
+  return (
+    <>
+      <div className="hidden sm:block"><IVSClockCard now={now} compact /></div>
+      <div className="relative hidden h-10 w-10 shrink-0 rounded-full border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800 min-[380px]:block sm:hidden" aria-label="Current time">
+        <span
+          className="absolute left-1/2 top-1/2 h-[12px] w-[3px] origin-bottom rounded-full bg-slate-900 dark:bg-white"
+          style={{ transform: `translate(-50%, -100%) rotate(${hourHandRotation}deg)` }}
+        />
+        <span
+          className="absolute left-1/2 top-1/2 h-[16px] w-[2px] origin-bottom rounded-full bg-indigo-600"
+          style={{ transform: `translate(-50%, -100%) rotate(${minuteHandRotation}deg)` }}
+        />
+        <span
+          className="absolute left-1/2 top-1/2 h-[18px] w-px origin-bottom bg-rose-500"
+          style={{ transform: `translate(-50%, -100%) rotate(${secondHandRotation}deg)` }}
+        />
+        <span className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-indigo-600 dark:border-slate-800" />
+      </div>
+    </>
+  );
+}
+
 export default function PlatformAdmin({
   themeMode = "light",
   onToggleTheme,
@@ -243,11 +278,21 @@ export default function PlatformAdmin({
   onSaveAdminProfile,
 }: PlatformAdminProps) {
   const [activeSection, setActiveSection] = useState<PlatformSection>("overview");
+  useEffect(() => {
+    const onNotificationNavigate = (event: Event) => {
+      const detail = (event as CustomEvent<NotificationNavigateDetail>).detail;
+      if (detail?.handled || detail?.target !== "salary_approvals") return;
+      setActiveSection("salary_approvals");
+      setMobileSidebarOpen(false);
+      detail.handled = true;
+    };
+    window.addEventListener(IVS_NOTIFICATION_NAVIGATE_EVENT, onNotificationNavigate);
+    return () => window.removeEventListener(IVS_NOTIFICATION_NAVIGATE_EVENT, onNotificationNavigate);
+  }, []);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [desktopSidebarExpanded, setDesktopSidebarExpanded] = useState(false);
   const sidebarCloseTimerRef = useRef<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [now, setNow] = useState(() => new Date());
   const [displayAdminName, setDisplayAdminName] = useState(adminName);
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileNotice, setProfileNotice] = useState("");
@@ -308,10 +353,6 @@ export default function PlatformAdmin({
     };
   }, []);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
   useEffect(() => {
     setDisplayAdminName(adminName);
     setProfileForm((current) => ({
@@ -700,10 +741,6 @@ export default function PlatformAdmin({
         }
       : SECTION_COPY[activeSection];
 
-  const hourHandRotation = (now.getHours() % 12) * 30 + now.getMinutes() * 0.5;
-  const minuteHandRotation = now.getMinutes() * 6 + now.getSeconds() * 0.1;
-  const secondHandRotation = now.getSeconds() * 6;
-
   return (
     <div className="h-[100dvh] min-h-[100dvh] overflow-hidden bg-slate-100 text-slate-950 transition-colors dark:bg-[#07101f] dark:text-white">
       {mobileSidebarOpen && (
@@ -737,7 +774,7 @@ export default function PlatformAdmin({
           <div className="flex min-w-0 items-center gap-3">
             <div className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-2xl border border-white bg-white shadow-[0_12px_28px_rgba(79,70,229,0.16)] dark:border-slate-700 dark:bg-slate-800">
               <img
-                src="/tuition-logo.png"
+                src="/ivs-logo.webp"
                 alt="Iqra Virtual School"
                 className="h-10 w-10 object-contain"
                 onError={(event) => {
@@ -763,6 +800,7 @@ export default function PlatformAdmin({
           <button
             type="button"
             onClick={() => setMobileSidebarOpen(false)}
+            aria-label="Close navigation"
             className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 lg:hidden"
           >
             <X size={18} />
@@ -887,13 +925,14 @@ export default function PlatformAdmin({
         </div>
       </aside>
 
-      <div className={`flex h-[100dvh] min-h-0 min-w-0 flex-col overflow-hidden transition-[padding] duration-300 ${sidebarExpanded ? "lg:pl-[292px]" : "lg:pl-[88px]"}`}>
+      <div className={`flex h-[100dvh] min-h-0 min-w-0 flex-col overflow-hidden lg:pl-[88px]`}>
         <header className="z-30 shrink-0 border-b border-slate-200/80 bg-white/88 px-3 py-2.5 backdrop-blur-2xl dark:border-slate-800 dark:bg-[#07101f]/88 sm:px-4 sm:py-3 md:px-6 lg:px-8">
           <div className="mx-auto flex max-w-[1720px] min-w-0 items-center justify-between gap-2 sm:gap-3">
             <div className="flex min-w-0 items-center gap-3">
               <button
                 type="button"
                 onClick={() => setMobileSidebarOpen(true)}
+                aria-label="Open navigation"
                 className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 sm:h-12 sm:w-12 lg:hidden"
               >
                 <Menu size={21} />
@@ -910,52 +949,8 @@ export default function PlatformAdmin({
             </div>
 
             <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-              <div className="relative hidden min-w-[218px] items-center gap-2.5 overflow-hidden rounded-[20px] border border-slate-200 bg-white px-2.5 py-2 shadow-[0_10px_26px_rgba(15,23,42,0.08),inset_0_1px_0_rgba(255,255,255,0.95)] dark:border-slate-700 dark:bg-slate-800 sm:flex">
-                <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-indigo-50/70 via-white/10 to-cyan-50/70 dark:from-indigo-500/10 dark:via-transparent dark:to-cyan-500/10" />
-                <div className="relative h-12 w-12 shrink-0 rounded-full border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-indigo-100 shadow-[0_7px_16px_rgba(15,23,42,0.1),inset_0_2px_5px_rgba(255,255,255,1)] dark:border-slate-600 dark:from-slate-700 dark:via-slate-800 dark:to-slate-900">
-                  <span className="absolute left-1/2 top-1 -translate-x-1/2 text-[6px] font-black text-slate-400 dark:text-slate-500">12</span>
-                  <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[6px] font-black text-slate-400 dark:text-slate-500">3</span>
-                  <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 text-[6px] font-black text-slate-400 dark:text-slate-500">6</span>
-                  <span className="absolute left-1 top-1/2 -translate-y-1/2 text-[6px] font-black text-slate-400 dark:text-slate-500">9</span>
-                  <span
-                    className="absolute left-1/2 top-1/2 h-[13px] w-[3px] origin-bottom rounded-full bg-slate-900 dark:bg-white"
-                    style={{ transform: `translate(-50%, -100%) rotate(${hourHandRotation}deg)` }}
-                  />
-                  <span
-                    className="absolute left-1/2 top-1/2 h-[17px] w-[2px] origin-bottom rounded-full bg-indigo-600"
-                    style={{ transform: `translate(-50%, -100%) rotate(${minuteHandRotation}deg)` }}
-                  />
-                  <span
-                    className="absolute left-1/2 top-1/2 h-[19px] w-px origin-bottom bg-rose-500"
-                    style={{ transform: `translate(-50%, -100%) rotate(${secondHandRotation}deg)` }}
-                  />
-                  <span className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-indigo-600 shadow-sm dark:border-slate-800" />
-                </div>
-                <div className="relative min-w-0">
-                  <div className="whitespace-nowrap text-sm font-black tracking-tight text-slate-950 dark:text-white">
-                    {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                  </div>
-                  <div className="mt-0.5 whitespace-nowrap text-[10px] font-bold text-slate-500 dark:text-slate-400">
-                    {now.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}
-                  </div>
-                </div>
-              </div>
-
-              <div className="relative hidden h-10 w-10 shrink-0 rounded-full border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800 min-[380px]:block sm:hidden" aria-label="Current time">
-                <span
-                  className="absolute left-1/2 top-1/2 h-[12px] w-[3px] origin-bottom rounded-full bg-slate-900 dark:bg-white"
-                  style={{ transform: `translate(-50%, -100%) rotate(${hourHandRotation}deg)` }}
-                />
-                <span
-                  className="absolute left-1/2 top-1/2 h-[16px] w-[2px] origin-bottom rounded-full bg-indigo-600"
-                  style={{ transform: `translate(-50%, -100%) rotate(${minuteHandRotation}deg)` }}
-                />
-                <span
-                  className="absolute left-1/2 top-1/2 h-[18px] w-px origin-bottom bg-rose-500"
-                  style={{ transform: `translate(-50%, -100%) rotate(${secondHandRotation}deg)` }}
-                />
-                <span className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-indigo-600 dark:border-slate-800" />
-              </div>
+              <PlatformClock />
+              <div className="sm:hidden"><NotificationBell /></div>
 
               <button
                 type="button"

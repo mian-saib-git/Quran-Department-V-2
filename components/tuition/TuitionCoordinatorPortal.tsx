@@ -1,3 +1,5 @@
+import IVSClockCard from "../IVSClockCard";
+import NotificationBell from "../NotificationBell";
 import { getAllTuitionAttendance } from "../../services/tuitionApiService";
 // IVS_COMPACT_INDEPENDENT_LIVE_COLUMNS_V19
 import React, { useEffect, useMemo, useState } from "react";
@@ -132,46 +134,7 @@ function formatTime(value: string) {
 }
 
 function TuitionClock() {
-  const [now, setNow] = useState(new Date());
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  const second = now.getSeconds();
-  const minute = now.getMinutes() + second / 60;
-  const hour = (now.getHours() % 12) + minute / 60;
-  const timeText = now.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  });
-  const dayText = now.toLocaleDateString(undefined, { weekday: "long" });
-  const dateText = now.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-
-  return (
-    <div className="flex h-[54px] items-center gap-3">
-      <div className="relative h-[46px] w-[46px] shrink-0 rounded-full border border-white bg-gradient-to-br from-white to-slate-100 shadow-[0_8px_22px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)]">
-        <span className="absolute left-1/2 top-[2px] -translate-x-1/2 text-[6px] font-black text-slate-400">12</span>
-        <span className="absolute right-[4px] top-1/2 -translate-y-1/2 text-[6px] font-black text-slate-400">3</span>
-        <span className="absolute bottom-[2px] left-1/2 -translate-x-1/2 text-[6px] font-black text-slate-400">6</span>
-        <span className="absolute left-[4px] top-1/2 -translate-y-1/2 text-[6px] font-black text-slate-400">9</span>
-        <span className="absolute left-1/2 top-1/2 h-[13px] w-[3px] origin-bottom rounded-full bg-slate-800" style={{ transform: `translate(-50%, -100%) rotate(${hour * 30}deg)` }} />
-        <span className="absolute left-1/2 top-1/2 h-[17px] w-[2px] origin-bottom rounded-full bg-indigo-600" style={{ transform: `translate(-50%, -100%) rotate(${minute * 6}deg)` }} />
-        <span className="absolute left-1/2 top-1/2 h-[19px] w-px origin-bottom rounded-full bg-rose-500" style={{ transform: `translate(-50%, -100%) rotate(${second * 6}deg)` }} />
-        <span className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-indigo-600 shadow-sm" />
-      </div>
-      <div className="tuition-clock-copy min-w-[150px] leading-tight">
-        <div className="tuition-clock-time text-[18px] font-black tabular-nums text-slate-950">{timeText}</div>
-        <div className="mt-1 flex items-center gap-2 text-[11px] font-extrabold text-slate-500">
-          <span>{dayText}</span>
-          <span className="h-1 w-1 rounded-full bg-indigo-500" />
-          <span>{dateText}</span>
-        </div>
-      </div>
-    </div>
-  );
+  return <IVSClockCard />;
 }
 
 
@@ -646,7 +609,8 @@ export default function TuitionCoordinatorPortal({
     // Main Admin-disabled tabs remain visible as locked, even when a stored
     // Department Admin preference is also false.
     if (features[item.feature] !== true) return false;
-    return coordinatorTabs[item.feature] === false;
+    // Only explicit approval from the auth context permits a coordinator tab.
+    return coordinatorTabs[item.feature] !== true;
   };
 
   const visibleNav = useMemo(
@@ -833,6 +797,10 @@ export default function TuitionCoordinatorPortal({
     role: "teacher" | "student",
     profileId: number,
   ) => {
+    if (isCoordinator && coordinatorTabs.tab_tuition_accounts !== true) {
+      showFeatureLocked("Accounts & Enrollment", "Your Department Admin has not granted access to Accounts & Enrollment.");
+      return;
+    }
     if (features.tab_tuition_accounts !== true) {
       showFeatureLocked(
         "Accounts & Enrollment",
@@ -935,14 +903,14 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
       {/* Collapsed */}
       <div className="hidden md:flex md:group-hover:hidden items-center justify-center py-2">
         <div className="w-[52px] h-[52px] rounded-[17px] bg-white border border-slate-200/80 flex items-center justify-center overflow-hidden shadow-[-6px_-6px_14px_rgba(255,255,255,0.98),6px_8px_18px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)]">
-          <img src="/tuition-logo.png" alt="IVS" className="w-10 h-10 object-contain" />
+          <img src="/ivs-logo.webp" alt="IVS" className="w-10 h-10 object-contain" />
         </div>
       </div>
 
       {/* Expanded */}
       <div className="tuition-sidebar-brand-card flex md:hidden md:group-hover:flex items-center gap-2.5 rounded-[20px] bg-white/80 border border-white/90 px-2.5 py-2.5 shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)]">
         <div className="w-[48px] h-[48px] rounded-[16px] bg-white border border-slate-200/70 flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_10px_20px_rgba(15,23,42,0.07)] shrink-0 overflow-hidden">
-          <img src="/tuition-logo.png" alt="Iqra Virtual School" className="w-9 h-9 object-contain" />
+          <img src="/ivs-logo.webp" alt="Iqra Virtual School" className="w-9 h-9 object-contain" />
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-[13.5px] font-extrabold text-slate-950 leading-tight truncate">Iqra Virtual School</div>
@@ -1187,7 +1155,7 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
                 </div>
 
                 <div className="flex items-center gap-3">
-                  <div className="ivs-tuition-clock-shell flex rounded-[24px] border border-slate-200/80 bg-white/76 px-2.5 py-1 shadow-[0_12px_28px_rgba(15,23,42,0.07)]"><TuitionClock /></div>
+                  <TuitionClock />
                   {isDepartmentAdmin ? (
                     <button
                       type="button"

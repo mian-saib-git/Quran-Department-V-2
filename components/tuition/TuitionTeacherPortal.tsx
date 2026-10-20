@@ -1,3 +1,5 @@
+import IVSClockCard from "../IVSClockCard";
+import NotificationBell from "../NotificationBell";
 import { useCompleteAttendance } from "../../hooks/useCompleteAttendance";
 import { getAllTuitionTeacherAttendance } from "../../services/tuitionApiService";
 // IVS_TUITION_TEACHER_PORTAL_V53_DAILY_CLASSES_MOBILE_POLISH
@@ -485,7 +487,7 @@ export default function TuitionTeacherPortal({
         >
           <div className="teacher-portal-sidebar-brand flex h-[68px] shrink-0 items-center gap-3 rounded-[20px] border border-slate-200/80 bg-white px-3 py-2 shadow-[0_12px_30px_rgba(15,23,42,0.08)] dark:border-slate-800 dark:bg-slate-900">
             <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50 to-cyan-50 dark:border-indigo-900 dark:from-indigo-950 dark:to-cyan-950">
-              <img src="/tuition-logo.png" alt="Tuition Department" className="h-9 w-9 object-contain" />
+              <img src="/ivs-logo.webp" alt="Tuition Department" className="h-9 w-9 object-contain" />
             </div>
             <div className="min-w-0">
               <p className="truncate text-sm font-black text-slate-950 dark:text-white">Iqra Virtual School</p>
@@ -571,6 +573,7 @@ export default function TuitionTeacherPortal({
 
             <div className="flex items-center gap-2 sm:gap-3">
               <PortalClock now={now} />
+              <div className="sm:hidden"><NotificationBell /></div>
               <button
                 type="button"
                 onClick={() => void loadPortal()}
@@ -686,30 +689,7 @@ export default function TuitionTeacherPortal({
 }
 
 function PortalClock({ now }: { now: Date }) {
-  const second = now.getSeconds() * 6;
-  const minute = now.getMinutes() * 6 + now.getSeconds() * 0.1;
-  const hour = (now.getHours() % 12) * 30 + now.getMinutes() * 0.5;
-  return (
-    <div className="hidden h-12 items-center gap-3 rounded-[18px] border border-slate-200 bg-white px-3 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:flex">
-      <div className="relative h-9 w-9 rounded-full border-2 border-slate-200 bg-gradient-to-br from-white to-indigo-50 shadow-inner dark:border-slate-700 dark:from-slate-800 dark:to-indigo-950">
-        {[0, 3, 6, 9].map((marker) => (
-          <span
-            key={marker}
-            className="absolute left-1/2 top-1/2 h-1.5 w-1.5 rounded-full bg-slate-400"
-            style={{ transform: `translate(-50%, -50%) rotate(${marker * 30}deg) translateY(-12px)` }}
-          />
-        ))}
-        <span className="absolute left-1/2 top-1/2 h-[10px] w-[2px] origin-bottom rounded-full bg-slate-700 dark:bg-slate-200" style={{ transform: `translate(-50%, -100%) rotate(${hour}deg)` }} />
-        <span className="absolute left-1/2 top-1/2 h-[13px] w-[2px] origin-bottom rounded-full bg-indigo-600" style={{ transform: `translate(-50%, -100%) rotate(${minute}deg)` }} />
-        <span className="absolute left-1/2 top-1/2 h-[14px] w-px origin-bottom rounded-full bg-rose-500" style={{ transform: `translate(-50%, -100%) rotate(${second}deg)` }} />
-        <span className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-indigo-600 ring-2 ring-white dark:ring-slate-900" />
-      </div>
-      <div className="leading-tight">
-        <p className="text-sm font-black text-slate-950 dark:text-white">{formatTime(now)}</p>
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-slate-400">{now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</p>
-      </div>
-    </div>
-  );
+  return <div className="hidden sm:block"><IVSClockCard now={now} compact /></div>;
 }
 
 function OverviewTab({

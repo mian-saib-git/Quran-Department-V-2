@@ -277,10 +277,14 @@ def _student_month_record(student: StudentProfile, teacher: TeacherProfile, year
         return None
 
     assigned_dates = {row["date"] for row in assigned_states}
+    student_cutoff = student.user.archived_effective_date
+    teacher_cutoff = teacher.salary_end_date
     salary_active_dates = {
         row["date"]
         for row in assigned_states
         if row["class_status"] == StudentProfile.ClassStatus.RUNNING
+        and (student_cutoff is None or row["date"] <= student_cutoff)
+        and (teacher_cutoff is None or row["date"] <= teacher_cutoff)
     }
     final_row = assigned_states[-1]
     end_state = next((row for row in reversed(daily_states) if row["date"] == end), None)
@@ -1138,7 +1142,7 @@ def salary_slip_payload(slip):
         "id": slip.id,
         "teacher_id": slip.teacher_id,
         "teacher_name": str(slip.teacher),
-        "teacher_username": slip.teacher.user.username,
+        "teacher_username": slip.teacher.user.username if slip.teacher.user_id else "",
         "month": slip.month,
         "year": slip.year,
         "behavior_good": slip.behavior_good,
@@ -1334,7 +1338,7 @@ def salary_audit_payload(teacher, year: int, month: int, metric: str, slip=None,
         "teacher": {
             "id": teacher.id,
             "name": str(teacher),
-            "username": teacher.user.username,
+            "username": teacher.user.username if teacher.user_id else "",
         },
         "rows": rows,
         "calculation_audit": [],

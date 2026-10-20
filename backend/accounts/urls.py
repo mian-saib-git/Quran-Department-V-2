@@ -1,4 +1,5 @@
 from .self_profile_api import SelfProfileView
+from .teacher_retirement_api import TeacherRetirementView
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -42,7 +43,20 @@ from .platform_communications_api import (
 )
 from .platform_analytics_api import PlatformAnalyticsView
 
+from .notification_api import (
+    PortalNotificationListView,
+    PortalNotificationReadView,
+    PortalNotificationReadAllView,
+    PortalNotificationClearView,
+    PortalNotificationClearAllView,
+)
+
 urlpatterns = [
+    path("notifications/", PortalNotificationListView.as_view(), name="portal_notifications"),
+    path("notifications/read-all/", PortalNotificationReadAllView.as_view(), name="portal_notifications_read_all"),
+    path("notifications/clear-all/", PortalNotificationClearAllView.as_view(), name="portal_notifications_clear_all"),
+    path("notifications/<int:notification_id>/clear/", PortalNotificationClearView.as_view(), name="portal_notification_clear"),
+    path("notifications/<int:notification_id>/read/", PortalNotificationReadView.as_view(), name="portal_notification_read"),
     path("profile/", SelfProfileView.as_view(), name="auth_profile"),
     path("login/", LoginView.as_view(), name="auth_login"),
     path("refresh/", TokenRefreshView.as_view(), name="token_refresh"),
@@ -81,5 +95,6 @@ urlpatterns = [
 
     path("accounts/", CoordinatorAccountListCreateView.as_view(), name="coordinator_accounts"),
     path("accounts/<int:user_id>/", CoordinatorAccountDetailView.as_view(), name="coordinator_account_detail"),
+    path("accounts/<int:user_id>/teacher-retirement/", TeacherRetirementView.as_view(), name="teacher_retirement"),
     path("coordinator-tab-access/<int:user_id>/", CoordinatorTabAccessView.as_view(), name="coordinator_tab_access"),
 ]

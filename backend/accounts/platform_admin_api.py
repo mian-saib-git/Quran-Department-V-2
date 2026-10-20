@@ -800,7 +800,12 @@ class PlatformGeminiTestView(APIView):
             response = requests.get(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{model}",
                 headers={"x-goog-api-key": api_key},
-                timeout=15,
+                timeout=(3.0, 8.0),
+            )
+        except requests.Timeout:
+            return Response(
+                {"detail": "Gemini connection timed out. Check server outbound connectivity to Google and try again."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         except requests.RequestException as exc:
             return Response({"detail": f"Gemini connection failed: {exc}"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)

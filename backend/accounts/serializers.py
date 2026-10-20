@@ -481,7 +481,7 @@ class CreateAccountSerializer(serializers.Serializer):
                     "teacher_id": "teacher_id is required for student accounts."
                 })
 
-            if not TeacherProfile.objects.filter(id=teacher_id).exists():
+            if not TeacherProfile.objects.filter(id=teacher_id, user__is_active=True, user__archived_at__isnull=True).exists():
                 raise serializers.ValidationError({
                     "teacher_id": "Selected teacher does not exist."
                 })
@@ -711,7 +711,7 @@ class UpdateAccountSerializer(serializers.Serializer):
         if transfer_to_teacher_id:
             user = self.context["user"]
             student = getattr(user, "student_profile", None)
-            queryset = TeacherProfile.objects.filter(id=transfer_to_teacher_id)
+            queryset = TeacherProfile.objects.filter(id=transfer_to_teacher_id, user__is_active=True, user__archived_at__isnull=True)
             if student and student.department_id:
                 queryset = queryset.filter(department_id=student.department_id)
             target = queryset.first()

@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .attendance_v2_api import QuranTeacherSessionAttendanceView
+from .attendance_report_sessions_api import QuranAttendanceReportSessionsView
 
 from .salary_v2_api import (
     QuranSalaryV2PayrollView,
@@ -84,6 +85,7 @@ path("lesson-access-requests/<int:pk>/", LessonAccessRequestDetailView.as_view()
         QuranTeacherSessionAttendanceView.as_view(),
         name="academy_teacher_session_attendance_v2",
     ),
+    path("attendance/report-sessions/", QuranAttendanceReportSessionsView.as_view(), name="academy_attendance_report_sessions"),
     path("attendance/", AttendanceListCreateView.as_view(), name="academy_attendance"),
     path("attendance/import-monthly/", AttendanceMonthlyImportView.as_view(), name="academy_attendance_import_monthly"),
     path("attendance/<int:pk>/", AttendanceDeleteView.as_view(), name="academy_attendance_delete"),

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 from django.db.models import Count, Q
 from django.db.models.functions import TruncDate
@@ -50,12 +50,23 @@ class PlatformAnalyticsView(APIView):
         start_day = today - timedelta(days=13)
         now = timezone.now()
 
-        institutions_total = Institution.objects.count()
-        institutions_active = Institution.objects.filter(is_active=True).count()
-        departments_total = Department.objects.count()
-        departments_active = Department.objects.filter(is_active=True).count()
-        users_total = User.objects.count()
-        users_active = User.objects.filter(is_active=True).count()
+        # Related totals are calculated in one aggregate per model, avoiding
+        # repeated round trips without changing the counts returned to clients.
+        institution_counts = Institution.objects.aggregate(
+            total=Count("id"), active=Count("id", filter=Q(is_active=True))
+        )
+        department_counts = Department.objects.aggregate(
+            total=Count("id"), active=Count("id", filter=Q(is_active=True))
+        )
+        user_counts = User.objects.aggregate(
+            total=Count("id"), active=Count("id", filter=Q(is_active=True))
+        )
+        institutions_total = institution_counts["total"]
+        institutions_active = institution_counts["active"]
+        departments_total = department_counts["total"]
+        departments_active = department_counts["active"]
+        users_total = user_counts["total"]
+        users_active = user_counts["active"]
 
         role_rows = User.objects.values("role").annotate(value=Count("id")).order_by("role")
         users_by_role = [
@@ -128,9 +139,14 @@ class PlatformAnalyticsView(APIView):
             .values(day=TruncDate("date"))
             .annotate(value=Count("id"))
         }
+        # Filter directly on the datetime column so an index on created_at can
+        # be used; TruncDate only groups the already-filtered 14-day rows.
+        start_at = timezone.make_aware(
+            datetime.combine(start_day, time.min), timezone.get_current_timezone()
+        )
         audit_activity = {
             row["day"]: row["value"]
-            for row in PlatformAuditLog.objects.filter(created_at__date__gte=start_day)
+            for row in PlatformAuditLog.objects.filter(created_at__gte=start_at)
             .annotate(day=TruncDate("created_at"))
             .values("day")
             .annotate(value=Count("id"))
@@ -149,18 +165,27 @@ class PlatformAnalyticsView(APIView):
                 }
             )
 
-        feature_total = DepartmentFeature.objects.count()
-        feature_enabled = DepartmentFeature.objects.filter(is_enabled=True).count()
+        feature_counts = DepartmentFeature.objects.aggregate(
+            total=Count("id"), enabled=Count("id", filter=Q(is_enabled=True))
+        )
+        feature_total = feature_counts["total"]
+        feature_enabled = feature_counts["enabled"]
         feature_rate = round((feature_enabled / feature_total) * 100, 1) if feature_total else 0
 
+        feature_by_type = {
+            row["department__department_type"]: row
+            for row in DepartmentFeature.objects.values("department__department_type")
+            .annotate(total=Count("id"), enabled=Count("id", filter=Q(is_enabled=True)))
+        }
+        # department_types was already loaded above; avoid three extra
+        # existence queries when a department has no configured features.
+        existing_types = {row["key"] for row in department_types}
         type_feature_health = []
         for department_type in [Department.DepartmentType.QURAN, Department.DepartmentType.TUITION, Department.DepartmentType.GENERAL]:
-            total = DepartmentFeature.objects.filter(department__department_type=department_type).count()
-            enabled = DepartmentFeature.objects.filter(
-                department__department_type=department_type,
-                is_enabled=True,
-            ).count()
-            if total or Department.objects.filter(department_type=department_type).exists():
+            counts = feature_by_type.get(department_type, {})
+            total = counts.get("total", 0)
+            enabled = counts.get("enabled", 0)
+            if total or department_type in existing_types:
                 type_feature_health.append(
                     {
                         "key": department_type,

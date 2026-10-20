@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Bell,
+  ClipboardList,
   BookOpen,
   CalendarDays,
   CheckCircle2,
@@ -209,7 +210,7 @@ function getPagedItems<T>(items: T[], page: number, pageSize: number) {
 
 // ─── Main component ───────────────────────────────────────────
 
-export default function CoordinatorLessons() {
+export default function CoordinatorLessons({ notificationRequestsVersion = 0 }: { notificationRequestsVersion?: number }) {
 const [lessons, setLessons] = useState<LessonPayload[]>([]);
   const [dailyReports, setDailyReports] = useState<DailyLessonReportPayload[]>([]);
   const [permissions, setPermissions] = useState<PermissionRow[]>([]);
@@ -228,6 +229,12 @@ const [lessons, setLessons] = useState<LessonPayload[]>([]);
   const [requestTab, setRequestTab] = useState<RequestTab>("pending");
   const [workspaceTab, setWorkspaceTab] =
     useState<WorkspaceTab>("lessons");
+  useEffect(() => {
+    if (notificationRequestsVersion > 0) {
+      setWorkspaceTab("requests");
+      setRequestTab("pending");
+    }
+  }, [notificationRequestsVersion]);
   const [lessonContentTab, setLessonContentTab] =
     useState<LessonContentTab>("daily");
 
@@ -1074,8 +1081,8 @@ const handleDisablePermission = async (
                   : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
               }`}
             >
-              <Bell size={15} />
-              Requests & Notifications
+              <ClipboardList size={15} />
+              Requests & Reviews
 
               {pendingRequests.length > 0 && (
                 <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-black text-white">
@@ -1361,9 +1368,7 @@ const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLess
                       </p>
                     </div>
 
-                    <span className="rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-indigo-600">
-                      Private
-                    </span>
+
                   </div>
 
                   <div>
@@ -1668,226 +1673,144 @@ const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLess
             <>
       {/* Lesson History by Student */}
       <section className="rounded-[28px] border border-slate-200/70 bg-white/80 backdrop-blur-xl shadow-[0_18px_50px_rgba(15,23,42,0.07)] overflow-hidden">
-        <div className="border-b border-slate-200/70 p-5">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div className="relative md:col-span-2 xl:col-span-2">
+        <div className="border-b border-slate-200/70 p-5 sm:p-6 lg:p-7">
+          <div className="space-y-4 sm:space-y-5">
+            <label className="relative block">
+              <span className="sr-only">Search lesson records</span>
               <Search
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                size={19}
+                aria-hidden="true"
+                className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"
               />
-
               <input
                 value={search}
-                onChange={event =>
-                  setSearch(event.target.value)
-                }
+                onChange={event => setSearch(event.target.value)}
                 placeholder="Search student, teacher, subject, lesson..."
-                className="w-full rounded-2xl border border-slate-200 bg-white/90 py-3 pl-9 pr-4 text-sm font-semibold outline-none focus:ring-2 focus:ring-indigo-200"
+                className="h-12 w-full rounded-2xl border border-indigo-100 bg-indigo-50/30 py-3 pl-12 pr-4 text-sm font-medium text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:bg-white focus:ring-4 focus:ring-indigo-100 sm:h-14 sm:text-base"
               />
+            </label>
+
+            <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2 xl:grid-cols-4">
+              <label className="block min-w-0">
+                <span className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-slate-500">Teacher</span>
+                <select
+                  value={selectedTeacher}
+                  onChange={event => setSelectedTeacher(event.target.value)}
+                  className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100 sm:h-14 sm:text-base"
+                >
+                  <option value="all">All teachers</option>
+                  {teachers.map(teacher => (
+                    <option key={teacher.id} value={teacher.id}>{teacher.name}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block min-w-0">
+                <span className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-slate-500">Student</span>
+                <select
+                  value={selectedStudentFilter}
+                  onChange={event => setSelectedStudentFilter(event.target.value)}
+                  className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100 sm:h-14 sm:text-base"
+                >
+                  <option value="all">All students</option>
+                  {studentOptions.map(student => (
+                    <option key={student.id} value={student.id}>{student.name}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block min-w-0">
+                <span className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-slate-500">Subject</span>
+                <select
+                  value={selectedSubject}
+                  onChange={event => setSelectedSubject(event.target.value)}
+                  className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100 sm:h-14 sm:text-base"
+                >
+                  <option value="all">All subjects</option>
+                  {subjectOptions.map(subject => (
+                    <option key={subject} value={subject}>{subject}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block min-w-0">
+                <span className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-slate-500">Progress status</span>
+                <select
+                  value={selectedProgress}
+                  onChange={event => setSelectedProgress(event.target.value)}
+                  className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100 sm:h-14 sm:text-base"
+                >
+                  <option value="all">All progress statuses</option>
+                  <option value="excellent">Excellent</option>
+                  <option value="good">Good</option>
+                  <option value="satisfactory">Satisfactory</option>
+                  <option value="needs_improvement">Needs Improvement</option>
+                  <option value="">Unmarked</option>
+                </select>
+              </label>
             </div>
 
-            <select
-              value={selectedTeacher}
-              onChange={event =>
-                setSelectedTeacher(
-                  event.target.value
-                )
-              }
-              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
-            >
-              <option value="all">
-                All teachers
-              </option>
-
-              {teachers.map(teacher => (
-                <option
-                  key={teacher.id}
-                  value={teacher.id}
+            <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2 xl:grid-cols-4">
+              <label className="block min-w-0">
+                <span className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-slate-500">Month</span>
+                <select
+                  value={selectedMonth}
+                  onChange={event => setSelectedMonth(event.target.value)}
+                  className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100 sm:h-14 sm:text-base"
                 >
-                  {teacher.name}
-                </option>
-              ))}
-            </select>
+                  <option value="all">All months</option>
+                  {months.map(month => (
+                    <option key={month} value={month}>{formatMonth(month)}</option>
+                  ))}
+                </select>
+              </label>
 
-            <select
-              value={selectedStudentFilter}
-              onChange={event =>
-                setSelectedStudentFilter(
-                  event.target.value
-                )
-              }
-              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
-            >
-              <option value="all">
-                All students
-              </option>
+              <label className="block min-w-0">
+                <span className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-slate-500">From lesson date</span>
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={event => setDateFrom(event.target.value)}
+                  className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100 sm:h-14 sm:text-base"
+                />
+              </label>
 
-              {studentOptions.map(student => (
-                <option
-                  key={student.id}
-                  value={student.id}
+              <label className="block min-w-0">
+                <span className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-slate-500">To lesson date</span>
+                <input
+                  type="date"
+                  value={dateTo}
+                  min={dateFrom || undefined}
+                  onChange={event => setDateTo(event.target.value)}
+                  className="h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100 sm:h-14 sm:text-base"
+                />
+              </label>
+
+              <div className="flex min-w-0 flex-col justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearch("");
+                    setSelectedMonth("all");
+                    setSelectedTeacher("all");
+                    setSelectedStudentFilter("all");
+                    setSelectedSubject("all");
+                    setSelectedProgress("all");
+                    setDateFrom("");
+                    setDateTo("");
+                  }}
+                  className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 transition hover:border-indigo-200 hover:bg-indigo-50/40 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-100 sm:h-14 sm:text-base"
                 >
-                  {student.name}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={selectedMonth}
-              onChange={event =>
-                setSelectedMonth(
-                  event.target.value
-                )
-              }
-              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
-            >
-              <option value="all">
-                All months
-              </option>
-
-              {months.map(month => (
-                <option
-                  key={month}
-                  value={month}
-                >
-                  {formatMonth(month)}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={selectedSubject}
-              onChange={event =>
-                setSelectedSubject(
-                  event.target.value
-                )
-              }
-              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
-            >
-              <option value="all">
-                All subjects
-              </option>
-
-              {subjectOptions.map(subject => (
-                <option
-                  key={subject}
-                  value={subject}
-                >
-                  {subject}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={selectedProgress}
-              onChange={event =>
-                setSelectedProgress(
-                  event.target.value
-                )
-              }
-              className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200"
-            >
-              <option value="all">
-                All progress statuses
-              </option>
-
-              <option value="excellent">
-                Excellent
-              </option>
-
-              <option value="good">
-                Good
-              </option>
-
-              <option value="satisfactory">
-                Satisfactory
-              </option>
-
-              <option value="needs_improvement">
-                Needs Improvement
-              </option>
-
-              <option value="">
-                Unmarked
-              </option>
-            </select>
-
-            <div className="rounded-2xl border border-slate-200/90 bg-slate-50/80 p-3 md:col-span-2 xl:col-span-2">
-              <div className="mb-3 flex items-start gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600">
-                  <CalendarDays size={16} />
-                </div>
-
-                <div>
-                  <div className="text-xs font-black text-slate-800">
-                    Lesson date range
-                  </div>
-
-                  <p className="mt-0.5 text-[11px] font-semibold leading-5 text-slate-400">
-                    Optional — filter lesson records between two dates.
-                    Leave both empty to show every lesson.
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className="block">
-                  <span className="mb-1.5 block text-[11px] font-black uppercase tracking-wide text-slate-500">
-                    From lesson date
-                  </span>
-
-                  <input
-                    type="date"
-                    value={dateFrom}
-                    onChange={event =>
-                      setDateFrom(event.target.value)
-                    }
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
-                  />
-                </label>
-
-                <label className="block">
-                  <span className="mb-1.5 block text-[11px] font-black uppercase tracking-wide text-slate-500">
-                    To lesson date
-                  </span>
-
-                  <input
-                    type="date"
-                    value={dateTo}
-                    min={dateFrom || undefined}
-                    onChange={event =>
-                      setDateTo(event.target.value)
-                    }
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
-                  />
-                </label>
+                  <RefreshCw size={17} aria-hidden="true" />
+                  Reset filters
+                </button>
               </div>
             </div>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="text-xs font-bold text-slate-500">
-              Showing {filteredLessons.length} matching
-              lesson entries
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                setSearch("");
-                setSelectedMonth("all");
-                setSelectedTeacher("all");
-                setSelectedStudentFilter("all");
-                setSelectedSubject("all");
-                setSelectedProgress("all");
-                setDateFrom("");
-                setDateTo("");
-              }}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-600 hover:bg-slate-50"
-            >
-              Reset Filters
-            </button>
-          </div>
+          <p className="mt-4 text-xs font-semibold text-slate-500" aria-live="polite">
+            Showing {filteredLessons.length} matching lesson entries
+          </p>
         </div>
 
         {loading ? (

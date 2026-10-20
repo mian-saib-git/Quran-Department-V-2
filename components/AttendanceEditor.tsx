@@ -950,11 +950,14 @@ export function AttendanceEditor({
   const complete = useCompleteAttendance(date, dateLoader);
   const appState = { ...sourceState, attendance: complete.rows };
   const onUpsert: UpsertFn = async args => {
+    // Never submit attendance while the selected date is still loading.
+    if (complete.loading || complete.error) return false;
     const saved = await saveUpsert(args);
     if (saved) complete.reload();
     return saved;
   };
   const onDelete: DeleteFn = async args => {
+    if (complete.loading || complete.error) return false;
     const saved = await saveDelete(args);
     if (saved) complete.reload();
     return saved;
@@ -969,6 +972,10 @@ const debouncedSearch = useDebouncedValue(search, 200);
   const [onlyScheduled, setOnlyScheduled] = useState(true);
   const [statusFilter, setStatusFilter] = useState<StatusOrUnmarked | "all">("all");
 const [openTeacherId, setOpenTeacherId] = useState<string | null>(null);
+// Close the previous date's teacher modal immediately when the date changes.
+React.useEffect(() => {
+  setOpenTeacherId(null);
+}, [date]);
 const [page, setPage] = useState(1);
 React.useEffect(() => {
   setPage(1);
@@ -1182,11 +1189,9 @@ const pagedStudents = getPagedItems(filteredStudents, page, PAGE_SIZE);
     return teacherCards.find((t) => t.teacherId === openTeacherId) || null;
   }, [openTeacherId, teacherCards]);
 
-if (complete.loading || complete.error) return <div role="status" className="p-6">
-  <input aria-label="Attendance date" type="date" value={date} onChange={event => setDate(event.target.value)} />
-  <p>{complete.error || "Loading complete attendance for this date…"}</p>
-  {complete.error && <button onClick={complete.reload}>Retry attendance</button>}
-</div>;
+// Keep all Attendance filters and the workspace mounted while data reloads.
+// The hook already hides previous-date records, so show placeholders instead
+// of wrongly describing the new date as "Unmarked" before it has loaded.
 return (
   <div className="w-full max-w-none ui-glass ui-card ui-gradient-border ui-card-hover p-4 sm:p-6 anim-fade-up">
       {/* Header */}
@@ -1357,6 +1362,38 @@ return (
         </div>
       </div>
 
+      {/* The results change in place; the date picker and all filters stay mounted. */}
+      <section aria-busy={complete.loading} className="min-h-[260px]">
+        {complete.loading ? (
+          <div role="status" data-testid="attendance-inline-loading" className="mt-5 space-y-5" aria-live="polite">
+            <div className="flex items-center gap-3 rounded-2xl border border-indigo-100 bg-indigo-50/70 px-4 py-3 text-sm font-semibold text-indigo-800">
+              <span aria-hidden="true" className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />
+              Updating attendance for {date}…
+            </div>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-5" aria-hidden="true">
+              {Array.from({ length: 5 }, (_, index) => (
+                <div key={index} className="h-20 animate-pulse rounded-3xl border border-slate-200 bg-slate-100/80" />
+              ))}
+            </div>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2" aria-hidden="true">
+              <div className="h-36 animate-pulse rounded-3xl border border-slate-200 bg-slate-100/80" />
+              <div className="h-36 animate-pulse rounded-3xl border border-slate-200 bg-slate-100/80" />
+            </div>
+          </div>
+        ) : complete.error ? (
+          <div role="alert" className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-800">
+            <p className="font-bold">Attendance could not be loaded for {date}.</p>
+            <p className="mt-1 break-words">{complete.error}</p>
+            <button
+              type="button"
+              onClick={complete.reload}
+              className="mt-3 rounded-xl border border-rose-200 bg-white px-4 py-2 font-bold text-rose-800 hover:bg-rose-100"
+            >
+              Retry loading attendance
+            </button>
+          </div>
+        ) : (
+          <>
       {/* Summary */}
       <div className="mt-5 grid grid-cols-2 md:grid-cols-5 gap-3">
         {[
@@ -1578,9 +1615,13 @@ return (
         )}
       </div>
 
+          </>
+        )}
+      </section>
+
       {/* Teacher Modal */}
       <TeacherAttendanceModal
-        open={!!openTeacher}
+        open={!!openTeacher && !complete.loading && !complete.error}
         onClose={() =>
           setOpenTeacherId(null)
         }

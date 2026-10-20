@@ -1485,6 +1485,23 @@ export async function generateMonthlyLessonSummary(params: {
   });
 }
 
+export type QuranReportScheduledSession = {
+  date: string;
+  class_key: string;
+  student_id: number;
+  student_name: string;
+  teacher_id: number;
+  teacher_name: string;
+  schedule_id: number;
+};
+
+export async function getQuranReportScheduledSessions(dateFrom: string, dateTo: string): Promise<QuranReportScheduledSession[]> {
+  const response = await request<{ sessions: QuranReportScheduledSession[] }>(
+    `/api/academy/attendance/report-sessions/${buildQuery({ date_from: dateFrom, date_to: dateTo })}`
+  );
+  return response.sessions;
+}
+
 export async function getAttendance(params?: AttendanceFilters): Promise<AttendancePage<AttendanceApiResponse>> {
   return request<AttendancePage<AttendanceApiResponse>>(`/api/academy/attendance/${buildQuery(params)}`);
 }
@@ -1753,6 +1770,58 @@ export async function updateCoordinatorAccount(userId: number, input: UpdateAcco
     method: "PATCH",
     body: JSON.stringify(input),
   });
+}
+
+export type TeacherRetirementPreview = {
+  teacher_id: number;
+  teacher_user_id: number;
+  teacher_name: string;
+  assigned_students: number;
+  active_classes: number;
+  can_archive: boolean;
+  students: {
+    id: number; user_id: number; name: string; username: string; status: string;
+    active_class_count: number;
+    schedule: { weekday: string; time_slot: string; duration_minutes: number }[];
+    available_teacher_ids: number[];
+  }[];
+  destination_teachers: { id: number; name: string }[];
+};
+
+export function getTeacherRetirementPreview(userId: number) {
+  return request<TeacherRetirementPreview>(`/api/auth/accounts/${userId}/teacher-retirement/`);
+}
+
+export function transferTeacherStudent(userId: number, studentId: number, destinationTeacherId: number) {
+  return request<{ detail: string }>(`/api/auth/accounts/${userId}/teacher-retirement/`, {
+    method: "POST",
+    body: JSON.stringify({ student_id: studentId, destination_teacher_id: destinationTeacherId }),
+  });
+}
+
+export function transferTeacherStudents(
+  userId: number,
+  transfers: { student_id: number; destination_teacher_id: number }[]
+) {
+  return request<{ detail: string; transferred: { student_id: number; destination_teacher_id: number }[] }>(
+    `/api/auth/accounts/${userId}/teacher-retirement/`, {
+      method: "POST", body: JSON.stringify({ transfers }),
+    }
+  );
+}
+
+export type ArchivedTeacher = {
+  id: number;
+  teacher_id: number;
+  name: string;
+  username: string;
+  archived_at: string;
+  effective_date: string | null;
+  archived_by: string;
+};
+
+export function getArchivedTeachers() {
+  return request<{ teachers: ArchivedTeacher[] }>("/api/auth/accounts/archived-teachers/");
 }
 
 export async function disableCoordinatorAccount(userId: number) {

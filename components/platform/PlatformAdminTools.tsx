@@ -707,7 +707,11 @@ export function ApplicationSettingsPanel() {
     setNotice("");
     try {
       const response = await testPlatformGeminiConnection();
-      setNotice(`${response.detail} (${response.latency_ms} ms)`);
+      setNotice(
+        response.latency_ms > 8000
+          ? `${response.detail} (${response.latency_ms} ms). Gemini responded slowly. Check the outbound connection to Google if this continues.`
+          : `${response.detail} (${response.latency_ms} ms)`,
+      );
     } catch (err: any) {
       setError(err?.message || "Gemini connection test failed.");
     } finally {
@@ -750,6 +754,7 @@ export function ApplicationSettingsPanel() {
             <label><span className="mb-1.5 block text-xs font-black">Replace API key</span><input type="password" value={geminiKey} onChange={(event) => setGeminiKey(event.target.value)} autoComplete="new-password" placeholder={settingsState?.gemini_api_key_configured ? `Configured ${settingsState.gemini_api_key_hint} · leave blank to keep` : "Enter Gemini API key"} className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold dark:border-slate-700 dark:bg-slate-800" /></label>
             <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-4 py-3 text-xs font-bold dark:bg-slate-800"><span>Key source</span><span className="rounded-full bg-white px-2.5 py-1 text-indigo-600 dark:bg-slate-900 dark:text-indigo-300">{settingsState?.gemini_api_key_source || "missing"}</span></div>
             <button type="button" onClick={() => void testGemini()} disabled={testing || !settingsState?.gemini_api_key_configured} className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-violet-200 bg-violet-50 py-3 text-sm font-black text-violet-700 disabled:opacity-50 dark:border-violet-500/25 dark:bg-violet-500/10 dark:text-violet-200">{testing ? <Loader2 size={17} className="animate-spin" /> : <HeartPulse size={17} />} Test Gemini Connection</button>
+            <p className="mt-2 text-[11px] font-semibold text-slate-500 dark:text-slate-400">Checks Google connectivity only when clicked. Slow responses depend on your server network and Google service availability.</p>
           </div>
         </section>
 

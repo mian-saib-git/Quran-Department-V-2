@@ -576,6 +576,13 @@ class AuthContextView(APIView):
                 "department_type": department.department_type,
             } if department else None,
             "features": features,
+            # Saved Department Admin coordinator choices must accompany every
+            # auth context refresh. The frontend cannot infer them from Feature rows.
+            "coordinator_tabs": (
+                coordinator_tab_access_map(user, department)
+                if department and user.role == User.Role.COORDINATOR
+                else {}
+            ),
             "roles": roles,
             "maintenance": maintenance_payload(active_maintenance_for_user(user)),
         })
@@ -646,7 +653,7 @@ class CoordinatorAccountListCreateView(APIView):
 
             qs = (
                 TeacherProfile.objects
-                .filter(department=department)
+                .filter(department=department, user__isnull=False, user__archived_at__isnull=True)
                 .select_related("user")
                 .order_by(
                     "user__first_name",
@@ -677,7 +684,7 @@ class CoordinatorAccountListCreateView(APIView):
 
             qs = (
                 StudentProfile.objects
-                .filter(department=department)
+                .filter(department=department, user__archived_at__isnull=True)
                 .select_related("user", "teacher__user")
                 .prefetch_related(
                     active_subjects_prefetch,
@@ -710,7 +717,7 @@ class CoordinatorAccountListCreateView(APIView):
             if not can_manage_coordinator_accounts(request.user):
                 return User.objects.none()
 
-            qs = scoped_coordinator_queryset(request.user)
+            qs = scoped_coordinator_queryset(request.user).filter(archived_at__isnull=True)
 
             if search:
                 qs = qs.filter(
@@ -769,7 +776,10 @@ class CoordinatorAccountListCreateView(APIView):
             # Students page still needs the teacher list for the Add/Edit student dropdown.
             all_teachers = [
                 account_payload_for_user(item.user)
-                for item in TeacherProfile.objects.select_related("user").order_by(
+                for item in TeacherProfile.objects.select_related("user").filter(
+                    department=resolve_department_for_account_scope(request.user, "quran"),
+                    user__is_active=True, user__archived_at__isnull=True,
+                ).order_by(
                     "user__first_name",
                     "user__username",
                     "id",
@@ -789,7 +799,7 @@ class CoordinatorAccountListCreateView(APIView):
         if can_manage_coordinator_accounts(request.user):
             coordinators = [
                 account_payload_for_user(item)
-                for item in scoped_coordinator_queryset(request.user).order_by(
+                for item in scoped_coordinator_queryset(request.user).filter(archived_at__isnull=True).order_by(
                     "first_name",
                     "username",
                     "id",
@@ -877,10 +887,8 @@ class CoordinatorAccountDetailView(APIView):
         except User.DoesNotExist:
             return None
 
-        if user.role == User.Role.COORDINATOR and not user_is_in_same_account_scope(
-            request.user,
-            user,
-            "quran",
+        if user.archived_at is not None or not user_is_in_same_account_scope(
+            request.user, user, "quran",
         ):
             return None
 
@@ -944,118 +952,48 @@ class CoordinatorAccountDetailView(APIView):
         return Response(account)
 
     def delete(self, request, user_id):
+        """Delete teacher logins only after transfers; retain historical teaching identity."""
+        from .account_archive_service import archive_quran_account
+        from .teacher_retirement_service import TeacherRetirementBlocked
+
         department = resolve_department_for_account_scope(request.user, "quran")
         if not coordinator_has_effective_tab_access(
             request.user, department, "tab_accounts_enrollment"
         ):
-            return Response(
-                {"detail": "Accounts & Enrollment is not available for this coordinator."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
+            return Response({"detail": "Accounts & Enrollment is unavailable."}, status=403)
         if not can_manage_department_accounts(request.user):
-            return Response(
-                {"detail": "Only coordinators can delete accounts."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
+            return Response({"detail": "Only coordinators can archive accounts."}, status=403)
         user = self.get_object(request, user_id)
-
         if user is None:
-            return Response(
-                {"detail": "Account not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if user.id == request.user.id:
-            return Response(
-                {"detail": "You cannot delete your own account."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if user.is_superuser:
-            return Response(
-                {"detail": "Super admin account cannot be deleted from here."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+            return Response({"detail": "Account not found in your department."}, status=404)
+        if user.id == request.user.id or user.is_superuser:
+            return Response({"detail": "You cannot archive your own or a super admin account."}, status=400)
         if user.role == User.Role.COORDINATOR and not can_manage_coordinator_accounts(request.user):
-            return Response(
-                {"detail": "Only department admins can delete coordinator accounts."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        from django.db import transaction
-        from academy.models import (
-            Attendance,
-            ClassSchedule,
-            DailyLessonReport,
-            Lesson,
-            LessonAccessPermission,
-            LessonAccessRequest,
-            MonthlyLessonPlan,
-            MonthlyLessonSummary,
-            StudentProfile,
-            StudentSubject,
-            TeacherProfile,
-        )
-
-        deleted_role = user.role
-        deleted_username = user.username
-
-        with transaction.atomic():
-            if user.role == User.Role.STUDENT:
-                try:
-                    student = user.student_profile
-                except StudentProfile.DoesNotExist:
-                    student = None
-
-                if student:
-                    Attendance.objects.filter(student=student).delete()
-                    StudentSubject.objects.filter(student=student).delete()
-                    ClassSchedule.objects.filter(student=student).delete()
-                    LessonAccessPermission.objects.filter(student=student).delete()
-                    LessonAccessRequest.objects.filter(student=student).delete()
-                    MonthlyLessonPlan.objects.filter(student=student).delete()
-                    MonthlyLessonSummary.objects.filter(student=student).delete()
-                    DailyLessonReport.objects.filter(student=student).delete()
-                    Lesson.objects.filter(student=student).delete()
-
-            elif user.role == User.Role.TEACHER:
-                try:
-                    teacher = user.teacher_profile
-                except TeacherProfile.DoesNotExist:
-                    teacher = None
-
-                if teacher:
-                    students = list(StudentProfile.objects.filter(teacher=teacher))
-
-                    for student in students:
-                        Attendance.objects.filter(student=student).delete()
-                        StudentSubject.objects.filter(student=student).delete()
-                        ClassSchedule.objects.filter(student=student).delete()
-                        LessonAccessPermission.objects.filter(student=student).delete()
-                        LessonAccessRequest.objects.filter(student=student).delete()
-                        MonthlyLessonPlan.objects.filter(student=student).delete()
-                        MonthlyLessonSummary.objects.filter(student=student).delete()
-                        DailyLessonReport.objects.filter(student=student).delete()
-                        Lesson.objects.filter(student=student).delete()
-                        student.user.delete()
-
-                    Attendance.objects.filter(teacher=teacher).delete()
-                    ClassSchedule.objects.filter(teacher=teacher).delete()
-                    LessonAccessPermission.objects.filter(teacher=teacher).delete()
-                    LessonAccessRequest.objects.filter(teacher=teacher).delete()
-                    MonthlyLessonPlan.objects.filter(teacher=teacher).delete()
-                    MonthlyLessonSummary.objects.filter(teacher=teacher).delete()
-                    DailyLessonReport.objects.filter(teacher=teacher).delete()
-                    Lesson.objects.filter(teacher=teacher).delete()
-
-            user.delete()
-
-        return Response({
-            "detail": f"{deleted_role.title()} account '{deleted_username}' deleted permanently."
-        })
+            return Response({"detail": "Only department admins can archive coordinators."}, status=403)
+        # Preserve other roles' existing archive behavior. Teacher login deletion
+        # is a separate operation with stronger dependency checks.
+        user_id_before_delete, role_before_delete = user.pk, user.role
+        try:
+            if user.role == User.Role.TEACHER:
+                from .teacher_login_deletion_service import delete_teacher_login_permanently
+                result = delete_teacher_login_permanently(user=user, actor=request.user, request=request)
+            else:
+                result = archive_quran_account(user=user, actor=request.user, request=request)
+        except TeacherRetirementBlocked as exc:
+            return Response({"detail": str(exc), "code": "teacher_assignments_remaining", **exc.readiness}, status=409)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=409)
+        except Exception as exc:
+            from django.db.models.deletion import ProtectedError, RestrictedError
+            from django.db import IntegrityError
+            if isinstance(exc, (ProtectedError, RestrictedError, IntegrityError)):
+                return Response({"detail": "Deletion blocked by protected history. No records were deleted."}, status=409)
+            raise
+        transaction.on_commit(lambda: notify_global("academy_update", {
+            "event": "account_deleted", "message": "Teacher login deleted" if role_before_delete == User.Role.TEACHER else "Account archived",
+            "account_id": user_id_before_delete, "role": role_before_delete,
+        }))
+        return Response(result)
 
 
 class CoordinatorTabAccessView(APIView):
@@ -1110,6 +1048,13 @@ class CoordinatorTabAccessView(APIView):
         if unknown:
             return Response(
                 {"detail": f"Unsupported coordinator tab keys: {', '.join(unknown)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        invalid_values = [key for key, value in submitted.items() if type(value) is not bool]
+        if invalid_values:
+            return Response(
+                {"detail": f"Coordinator tab values must be true/false: {', '.join(sorted(invalid_values))}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

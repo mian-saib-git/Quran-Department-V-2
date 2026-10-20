@@ -31,11 +31,24 @@ class TeacherProfile(models.Model):
         related_name="+",
     )
 
+    # The login can be physically deleted; historical payroll still points to this profile.
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name="teacher_profile",
     )
+    historical_name = models.CharField(max_length=255, blank=True, default="")
+    login_deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    login_deleted_effective_date = models.DateField(null=True, blank=True, db_index=True)
+
+    @property
+    def salary_end_date(self):
+        if self.login_deleted_effective_date:
+            return self.login_deleted_effective_date
+        return getattr(self.user, "archived_effective_date", None)
+
     father_name = models.CharField(max_length=120, blank=True)
     phone = models.CharField(max_length=40, blank=True)
     address = models.TextField(blank=True)
@@ -52,7 +65,9 @@ class TeacherProfile(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return self.user.get_full_name() or self.user.username
+        if self.user_id:
+            return self.user.get_full_name() or self.user.username
+        return self.historical_name or f"Former teacher #{self.pk}"
 
 
 class StudentProfile(models.Model):
@@ -609,9 +624,12 @@ class Attendance(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices)
     marked_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name="marked_attendance",
     )
+    actor_name_snapshot = models.CharField(max_length=255, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -707,9 +725,12 @@ class Lesson(models.Model):
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name="created_lessons",
     )
+    actor_name_snapshot = models.CharField(max_length=255, blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -766,9 +787,12 @@ class DailyLessonReport(models.Model):
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name="created_daily_lesson_reports",
     )
+    actor_name_snapshot = models.CharField(max_length=255, blank=True, default="")
 
     edit_permission_granted_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -1117,9 +1141,12 @@ class MonthlyLessonSummary(models.Model):
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name="created_monthly_lesson_summaries",
     )
+    actor_name_snapshot = models.CharField(max_length=255, blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1214,9 +1241,12 @@ class MonthlyLessonPlan(models.Model):
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name="created_monthly_lesson_plans",
     )
+    actor_name_snapshot = models.CharField(max_length=255, blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

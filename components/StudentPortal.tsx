@@ -1,3 +1,5 @@
+import IVSClockCard from "./IVSClockCard";
+import NotificationBell from "./NotificationBell";
 import { useCompleteAttendance } from "../hooks/useCompleteAttendance";
 import { getAllQuranAttendance } from "../services/djangoApiService";
 // IVS_QURAN_STUDENT_PORTAL_V49_SAFE_CARD_REVEAL_FIX
@@ -1081,7 +1083,7 @@ const lessons = (dashboard as any)?.lessons || [];
             <X size={18} />
           </button>
           <div className="sp-logo-icon">
-            <img src="/ivs-logo.png" alt="Iqra Virtual School" className="sp-sidebar-logo-img" />
+            <img src="/ivs-logo.webp" alt="Iqra Virtual School" className="sp-sidebar-logo-img" />
           </div>
 
           <div className="min-w-0">
@@ -1149,6 +1151,7 @@ const lessons = (dashboard as any)?.lessons || [];
 
           <div className="flex items-center gap-2 sm:gap-3">
             <ClockCard now={clockNow} />
+              <div className="sm:hidden"><NotificationBell /></div>
 
             <button
               type="button"
@@ -2656,35 +2659,7 @@ const lessons = (dashboard as any)?.lessons || [];
 }
 
 function ClockCard({ now }: { now: Date }) {
-  const second = now.getSeconds();
-  const minute = now.getMinutes() + second / 60;
-  const hour = (now.getHours() % 12) + minute / 60;
-  const dayLabel = now.toLocaleDateString("en-US", { weekday: "long" });
-  const dateLabel = now.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-  const timeLabel = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
-
-  return (
-    <div className="hidden h-[58px] items-center gap-3 rounded-[24px] border border-slate-200/90 bg-white/95 px-2.5 py-1.5 shadow-[0_10px_28px_rgba(15,23,42,0.09)] sm:flex">
-      <div className="relative h-[46px] w-[46px] shrink-0 rounded-full border border-white bg-gradient-to-br from-white to-slate-100 shadow-[0_8px_22px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)]">
-        <span className="absolute left-1/2 top-[2px] -translate-x-1/2 text-[6px] font-black text-slate-400">12</span>
-        <span className="absolute right-[4px] top-1/2 -translate-y-1/2 text-[6px] font-black text-slate-400">3</span>
-        <span className="absolute bottom-[2px] left-1/2 -translate-x-1/2 text-[6px] font-black text-slate-400">6</span>
-        <span className="absolute left-[4px] top-1/2 -translate-y-1/2 text-[6px] font-black text-slate-400">9</span>
-        <span className="absolute left-1/2 top-1/2 h-[13px] w-[3px] origin-bottom rounded-full bg-slate-800" style={{ transform: `translate(-50%, -100%) rotate(${hour * 30}deg)` }} />
-        <span className="absolute left-1/2 top-1/2 h-[17px] w-[2px] origin-bottom rounded-full bg-indigo-600" style={{ transform: `translate(-50%, -100%) rotate(${minute * 6}deg)` }} />
-        <span className="absolute left-1/2 top-1/2 h-[19px] w-px origin-bottom rounded-full bg-rose-500" style={{ transform: `translate(-50%, -100%) rotate(${second * 6}deg)` }} />
-        <span className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-indigo-600 shadow-sm" />
-      </div>
-      <div className="hidden min-w-[152px] lg:block">
-        <div className="text-[18px] font-black leading-none tracking-tight text-slate-950">{timeLabel}</div>
-        <div className="mt-1.5 flex items-center gap-2 text-[11px] font-extrabold text-slate-500">
-          <span>{dayLabel}</span>
-          <span className="text-indigo-500">.</span>
-          <span>{dateLabel}</span>
-        </div>
-      </div>
-    </div>
-  );
+  return <div className="hidden sm:block"><IVSClockCard now={now} compact /></div>;
 }
 
 function AttendanceFilters({
