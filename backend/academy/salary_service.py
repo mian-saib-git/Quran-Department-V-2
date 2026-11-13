@@ -575,6 +575,11 @@ def _metric_ids(records, predicate):
 
 
 def calculate_teacher_salary(teacher, year: int, month: int, config, slip=None):
+    dept = getattr(teacher, "department", None) or getattr(getattr(teacher, "user", None), "department", None)
+    if dept:
+        from salary.cutover_guard import assert_legacy_salary_write_permitted
+        assert_legacy_salary_write_permitted(dept, year, month, operation="calculate_teacher_salary (V1)")
+
     start, end = month_bounds(year, month)
     today = timezone.localdate()
     lesson_cutoff = min(end, today) if (year, month) >= (today.year, today.month) else end
@@ -1110,6 +1115,10 @@ def calculate_teacher_salary(teacher, year: int, month: int, config, slip=None):
 def refresh_salary_slip(slip, actor=None, force=False):
     if slip.status == TeacherSalarySlip.Status.PROCESSED and not force:
         return slip
+    dept = slip.department or getattr(slip.teacher, "department", None) or getattr(getattr(slip.teacher, "user", None), "department", None)
+    if dept:
+        from salary.cutover_guard import assert_legacy_salary_write_permitted
+        assert_legacy_salary_write_permitted(dept, slip.year, slip.month, operation="refresh_salary_slip (V1)")
     config = salary_configuration_for_department(slip.department, actor)
     snapshot, calculated_total, gross_total, deduction_total, final_total = calculate_teacher_salary(
         slip.teacher,

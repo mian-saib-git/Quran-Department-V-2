@@ -459,19 +459,33 @@ class QuranSalaryDashboardView(APIView):
             total_pages = paginator.num_pages
 
         slips = []
-        for teacher in teachers:
-            slip, _ = TeacherSalarySlip.objects.get_or_create(
-                department=department,
-                teacher=teacher,
-                month=month,
-                year=year,
-                defaults={
-                    "institution": department.institution,
-                    "updated_by": request.user if _is_salary_admin(request.user) else None,
-                },
-            )
-            refresh_salary_slip(slip, request.user if _is_salary_admin(request.user) else None)
-            slips.append(salary_slip_payload(slip))
+        from salary.cutover_guard import is_unified_salary_active
+        if is_unified_salary_active(department, year, month):
+            # Unified ownership active: read-only historical mode.
+            # Do NOT create new slips or recalculate existing slips.
+            for teacher in teachers:
+                slip = TeacherSalarySlip.objects.filter(
+                    department=department,
+                    teacher=teacher,
+                    month=month,
+                    year=year,
+                ).first()
+                if slip:
+                    slips.append(salary_slip_payload(slip))
+        else:
+            for teacher in teachers:
+                slip, _ = TeacherSalarySlip.objects.get_or_create(
+                    department=department,
+                    teacher=teacher,
+                    month=month,
+                    year=year,
+                    defaults={
+                        "institution": department.institution,
+                        "updated_by": request.user if _is_salary_admin(request.user) else None,
+                    },
+                )
+                refresh_salary_slip(slip, request.user if _is_salary_admin(request.user) else None)
+                slips.append(salary_slip_payload(slip))
 
         response = Response({
             "month": month,
@@ -506,10 +520,19 @@ class QuranSalaryDashboardView(APIView):
             return error
         try:
             slip_id = int(request.data.get("slip_id"))
-            slip = TeacherSalarySlip.objects.select_for_update().select_related("teacher__user").get(
+            slip = TeacherSalarySlip.objects.select_for_update(of=("self",)).select_related("teacher__user").get(
                 id=slip_id,
                 department=department,
             )
+            from salary.cutover_guard import check_legacy_write_guard
+            guard_error = check_legacy_write_guard(
+                department=slip.department or department,
+                year=slip.year,
+                month=slip.month,
+                operation="update_salary_slip (V1)",
+            )
+            if guard_error:
+                return guard_error
         except (TypeError, ValueError, TeacherSalarySlip.DoesNotExist):
             return Response({"detail": "Salary slip not found."}, status=status.HTTP_404_NOT_FOUND)
 

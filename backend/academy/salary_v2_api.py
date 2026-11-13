@@ -22,6 +22,7 @@ from .models import (
 )
 from .salary_v2_service import (
     adjustment_payload,
+    build_batch_payroll_readiness_map,
     calculate_department_payrolls,
     calculate_teacher_payroll,
     ledger_payload,
@@ -524,6 +525,10 @@ class QuranSalaryV2PayrollView(
 
         payrolls = (
             payrolls
+            .prefetch_related(
+                "adjustments",
+                "adjustments__teacher__user",
+            )
             .order_by(
                 (
                     "teacher__user__"
@@ -541,11 +546,17 @@ class QuranSalaryV2PayrollView(
             )
         )
 
+        payrolls_list = list(payrolls)
+        readiness_map = build_batch_payroll_readiness_map(
+            department, year, month, payrolls_list
+        )
+
         rows = [
             payroll_payload(
-                payroll
+                payroll,
+                readiness_map=readiness_map,
             )
-            for payroll in payrolls
+            for payroll in payrolls_list
         ]
 
         return Response({
@@ -870,6 +881,16 @@ class QuranSalaryV2PayrollView(
                         .HTTP_404_NOT_FOUND
                     ),
                 )
+
+            from salary.cutover_guard import check_legacy_write_guard
+            guard_resp = check_legacy_write_guard(
+                payroll.department,
+                payroll.year,
+                payroll.month,
+                operation="propose_adjustment (V2)",
+            )
+            if guard_resp:
+                return guard_resp
 
             proposal_statuses = {
                 (
@@ -1222,6 +1243,16 @@ class QuranSalaryV2PayrollView(
                         .HTTP_404_NOT_FOUND
                     ),
                 )
+
+            from salary.cutover_guard import check_legacy_write_guard
+            guard_resp = check_legacy_write_guard(
+                adjustment.department,
+                adjustment.salary_year,
+                adjustment.salary_month,
+                operation=f"{action} (V2)",
+            )
+            if guard_resp:
+                return guard_resp
 
             if (
                 adjustment.status
@@ -1593,6 +1624,16 @@ class QuranSalaryV2PayrollView(
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
+            from salary.cutover_guard import check_legacy_write_guard
+            guard_resp = check_legacy_write_guard(
+                payroll.department,
+                payroll.year,
+                payroll.month,
+                operation="submit_payroll (V2)",
+            )
+            if guard_resp:
+                return guard_resp
+
             submission_status = payroll.status
             submittable_statuses = {
                 QuranTeacherMonthlyPayroll.Status.DEPARTMENT_REVIEW,
@@ -1819,6 +1860,16 @@ class QuranSalaryV2PayrollView(
                         .HTTP_404_NOT_FOUND
                     ),
                 )
+
+            from salary.cutover_guard import check_legacy_write_guard
+            guard_resp = check_legacy_write_guard(
+                payroll.department,
+                payroll.year,
+                payroll.month,
+                operation=f"{action}_payroll (V2)",
+            )
+            if guard_resp:
+                return guard_resp
 
             approvable_statuses = {
                 QuranTeacherMonthlyPayroll.Status.DEPARTMENT_REVIEW,
@@ -2105,6 +2156,16 @@ class QuranSalaryV2PayrollView(
                     ),
                 )
 
+            from salary.cutover_guard import check_legacy_write_guard
+            guard_resp = check_legacy_write_guard(
+                payroll.department,
+                payroll.year,
+                payroll.month,
+                operation=f"{action}_payroll (V2)",
+            )
+            if guard_resp:
+                return guard_resp
+
             # ------------------------------------------------
             # MARK PAID
             # ------------------------------------------------
@@ -2370,6 +2431,16 @@ class QuranSalaryV2PayrollView(
                     .HTTP_400_BAD_REQUEST
                 ),
             )
+
+        from salary.cutover_guard import check_legacy_write_guard
+        guard_resp = check_legacy_write_guard(
+            department,
+            year,
+            month,
+            operation="calculate_department_payrolls (V2)",
+        )
+        if guard_resp:
+            return guard_resp
 
         payrolls = (
             calculate_department_payrolls(

@@ -109,3 +109,6 @@ backend/stage*_apply.ps1
 
 # Local hotfix backups
 *.dashboard-hotfix-backup-*
+/salary_payments/
+/backend/salary_payments/
+/release-staging/

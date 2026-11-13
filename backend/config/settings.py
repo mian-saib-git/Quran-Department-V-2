@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "accounts",
     "academy",
     "tuition",
+    "salary",
 ]
 
 MIDDLEWARE = [
@@ -253,6 +254,11 @@ LOGGING = {
         "accounts": {
             "handlers": ["console", "file"],
             "level": "WARNING",
+            "propagate": False,
+        },
+        "salary": {
+            "handlers": ["console", "file"],
+            "level": "INFO",
             "propagate": False,
         },
     },

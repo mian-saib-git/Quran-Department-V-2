@@ -42,6 +42,13 @@ class Command(BaseCommand):
         department = teacher.department or getattr(teacher.user, "department", None)
         if department is None:
             raise CommandError("Teacher has no department: payroll calculation cannot proceed.")
+        from salary.cutover_guard import is_unified_salary_active
+        if is_unified_salary_active(department, opts["year"], opts["month"]):
+            raise CommandError(
+                f"Cutover guard denied: Department #{department.id} ({department.name}) for "
+                f"{opts['year']}-{opts['month']:02d} is migrated to Unified Salary Management. "
+                "Legacy V2 recalculations are strictly prohibited."
+            )
         existing = QuranTeacherMonthlyPayroll.objects.select_for_update().filter(
             teacher=teacher, department=department, year=opts["year"], month=opts["month"]
         ).first()

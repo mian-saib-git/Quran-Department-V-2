@@ -7,7 +7,7 @@ from typing import Any
 import re
 
 from django.db import transaction
-from django.db.models import Prefetch, Q
+from django.db.models import Count, Prefetch, Q
 from django.utils import timezone
 from zoneinfo import ZoneInfo
 
@@ -1064,6 +1064,8 @@ def calculate_department_payrolls(
     actor=None,
     target_teacher_ids=None,
 ):
+    from salary.cutover_guard import assert_legacy_salary_write_permitted
+    assert_legacy_salary_write_permitted(department, year, month, operation="calculate_department_payrolls (V2)")
     """
     Recalculate Quran payrolls using the complete department/month
     calculation context.
@@ -2103,6 +2105,9 @@ def calculate_teacher_payroll(
             "Teacher must belong to a department."
         )
 
+    from salary.cutover_guard import assert_legacy_salary_write_permitted
+    assert_legacy_salary_write_permitted(department, year, month, operation="calculate_teacher_payroll (V2)")
+
     start, _ = month_bounds(year, month)
     if teacher.salary_end_date and teacher.salary_end_date < start:
         raise ValueError("Teacher is archived before this salary month; future payroll is disabled.")
@@ -2285,9 +2290,29 @@ def payroll_readiness(payroll):
         .count()
     )
 
+    return _compile_readiness_response(
+        calculated_at=payroll.calculated_at,
+        missing_absence_coverages=missing_absence_coverages,
+        unresolved_coverages=unresolved_coverages,
+        not_marked_coverages=not_marked_coverages,
+        present_without_substitute=present_without_substitute,
+        invalid_nonpresent_assignments=invalid_nonpresent_assignments,
+        pending_adjustments=pending_adjustments,
+    )
+
+
+def _compile_readiness_response(
+    calculated_at,
+    missing_absence_coverages,
+    unresolved_coverages,
+    not_marked_coverages,
+    present_without_substitute,
+    invalid_nonpresent_assignments,
+    pending_adjustments,
+):
     operational_blockers = []
 
-    if not payroll.calculated_at:
+    if not calculated_at:
         operational_blockers.append({
             "code": "not_calculated",
             "count": 1,
@@ -2397,6 +2422,144 @@ def payroll_readiness(payroll):
     }
 
 
+def build_batch_payroll_readiness_map(department, year, month, payrolls):
+    if not payrolls:
+        return {}
+
+    start, end = month_bounds(year, month)
+    teacher_ids = list({p.teacher_id for p in payrolls if p.teacher_id})
+    if not teacher_ids:
+        return {p.id: payroll_readiness(p) for p in payrolls}
+
+    coverages = (
+        QuranClassCoverage.objects
+        .filter(
+            department=department,
+            original_teacher_id__in=teacher_ids,
+            date__range=(start, end),
+        )
+        .values(
+            "original_teacher_id",
+            "student_id",
+            "date",
+            "coverage_status",
+            "teacher_status",
+            "student_status",
+            "substitute_teacher_id",
+        )
+    )
+
+    unresolved_map = defaultdict(int)
+    not_marked_map = defaultdict(int)
+    present_without_sub_map = defaultdict(int)
+    invalid_nonpresent_map = defaultdict(int)
+    known_coverage_pairs = defaultdict(set)
+
+    for cov in coverages:
+        t_id = cov["original_teacher_id"]
+        c_status = cov["coverage_status"]
+        t_status = cov["teacher_status"]
+        s_status = cov["student_status"]
+        sub_id = cov["substitute_teacher_id"]
+        s_id = cov["student_id"]
+        dt = cov["date"]
+
+        if c_status != QuranClassCoverage.CoverageStatus.CANCELLED and s_id and dt:
+            known_coverage_pairs[t_id].add((s_id, dt))
+
+        if c_status == QuranClassCoverage.CoverageStatus.UNRESOLVED:
+            unresolved_map[t_id] += 1
+
+        is_absent_or_leave = t_status in (
+            QuranClassCoverage.TeacherStatus.ABSENT,
+            QuranClassCoverage.TeacherStatus.LEAVE,
+        )
+
+        if is_absent_or_leave:
+            if s_status == QuranClassCoverage.StudentStatus.NOT_MARKED:
+                not_marked_map[t_id] += 1
+
+            if s_status == QuranClassCoverage.StudentStatus.PRESENT:
+                if sub_id is None or c_status != QuranClassCoverage.CoverageStatus.ASSIGNED:
+                    present_without_sub_map[t_id] += 1
+
+            if (
+                s_status in (
+                    QuranClassCoverage.StudentStatus.ABSENT,
+                    QuranClassCoverage.StudentStatus.LEAVE,
+                    QuranClassCoverage.StudentStatus.NOT_MARKED,
+                )
+                and c_status == QuranClassCoverage.CoverageStatus.ASSIGNED
+                and sub_id is not None
+            ):
+                invalid_nonpresent_map[t_id] += 1
+
+    teacher_absences = (
+        Attendance.objects
+        .filter(
+            entity_type=Attendance.EntityType.TEACHER,
+            teacher_id__in=teacher_ids,
+            date__range=(start, end),
+            status__in=[Attendance.Status.ABSENT, Attendance.Status.LEAVE],
+        )
+        .values_list("teacher_id", "date", "class_key")
+    )
+
+    absent_sessions_by_teacher = defaultdict(set)
+    for t_id, dt, ck in teacher_absences:
+        if ck:
+            absent_sessions_by_teacher[t_id].add((dt, ck))
+
+    missing_coverages_map = defaultdict(int)
+    teachers_with_absences = [t_id for t_id in teacher_ids if absent_sessions_by_teacher.get(t_id)]
+    if teachers_with_absences:
+        student_attendances = (
+            Attendance.objects
+            .filter(
+                entity_type=Attendance.EntityType.STUDENT,
+                teacher_id__in=teachers_with_absences,
+                date__range=(start, end),
+            )
+            .values_list("teacher_id", "student_id", "date", "class_key")
+        )
+        for t_id, s_id, dt, ck in student_attendances:
+            if (
+                s_id
+                and (dt, ck) in absent_sessions_by_teacher[t_id]
+                and (s_id, dt) not in known_coverage_pairs[t_id]
+            ):
+                missing_coverages_map[t_id] += 1
+
+    pending_adjs = (
+        QuranSalaryAdjustment.objects
+        .filter(
+            department=department,
+            teacher_id__in=teacher_ids,
+            salary_year=year,
+            salary_month=month,
+            status=QuranSalaryAdjustment.Status.PENDING,
+        )
+        .values("teacher_id")
+        .annotate(total=Count("id"))
+    )
+    pending_map = {row["teacher_id"]: row["total"] for row in pending_adjs}
+
+    readiness_map = {}
+    for p in payrolls:
+        t_id = p.teacher_id
+        readiness_map[p.id] = _compile_readiness_response(
+            calculated_at=p.calculated_at,
+            missing_absence_coverages=missing_coverages_map.get(t_id, 0),
+            unresolved_coverages=unresolved_map.get(t_id, 0),
+            not_marked_coverages=not_marked_map.get(t_id, 0),
+            present_without_substitute=present_without_sub_map.get(t_id, 0),
+            invalid_nonpresent_assignments=invalid_nonpresent_map.get(t_id, 0),
+            pending_adjustments=pending_map.get(t_id, 0),
+        )
+
+    return readiness_map
+
+
 def adjustment_payload(adjustment):
     return {
         "id": adjustment.id,
@@ -2451,7 +2614,11 @@ def adjustment_payload(adjustment):
     }
 
 
-def payroll_payload(payroll):
+def payroll_payload(payroll, readiness_map=None):
+    if readiness_map and payroll.id in readiness_map:
+        readiness = readiness_map[payroll.id]
+    else:
+        readiness = payroll_readiness(payroll)
     return {
         "id": payroll.id,
         "adjustments": [
@@ -2540,9 +2707,7 @@ def payroll_payload(payroll):
         "calculation_snapshot": (
             payroll.calculation_snapshot or {}
         ),
-        "readiness": payroll_readiness(
-            payroll
-        ),
+        "readiness": readiness,
     }
 
 

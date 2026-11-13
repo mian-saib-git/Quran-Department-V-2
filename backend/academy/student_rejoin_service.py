@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
@@ -564,6 +564,17 @@ def rejoin_student_drop(
         )
         .first()
     )
+
+    from salary.cutover_guard import is_unified_salary_active
+    if drop_event is not None and is_unified_salary_active(drop_event.department, drop_event.drop_effective_date.year, drop_event.drop_effective_date.month):
+        raise StudentRejoinError(
+            code="legacy_salary_mutation_denied",
+            detail=(
+                f"Department #{drop_event.department_id} for period "
+                f"{drop_event.drop_effective_date.year}-{drop_event.drop_effective_date.month:02d} "
+                "is migrated to Unified Salary Management. Legacy V2 student rejoin mutations are denied."
+            ),
+        )
 
     if drop_event is None:
         latest = (

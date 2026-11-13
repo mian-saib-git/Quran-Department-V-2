@@ -510,7 +510,10 @@ export default function App() {
     }
 
     if (event === "coordinator_tab_access_updated") {
-      window.dispatchEvent(new Event("ivs-coordinator-tab-access-refresh"));
+      const targetUserId = Number((data as any).user_id || (data as any).userId || 0);
+      window.dispatchEvent(new CustomEvent("ivs-coordinator-tab-access-refresh", {
+        detail: { userId: targetUserId || undefined },
+      }));
     }
 
     if (
@@ -575,6 +578,7 @@ export default function App() {
       setSession(null);
       setAuthContext(null);
       setEnabledFeatures({});
+      setCoordinatorTabAccess({});
       setFeatureContextLoaded(false);
       setFeatureContextError("");
       setMaintenanceState({ active: false });
@@ -644,7 +648,8 @@ export default function App() {
         console.log("AUTH CONTEXT:", ctx.department, ctx.features);
         setAuthContext(ctx);
         setMaintenanceState(ctx.maintenance ?? { active: false });
-        setEnabledFeatures(ctx.features);
+        setEnabledFeatures(ctx.features ?? {});
+        setCoordinatorTabAccess(ctx.coordinator_tabs ?? {});
         setFeatureContextError("");
         setFeatureContextLoaded(true);
         return;
@@ -800,23 +805,48 @@ export default function App() {
     session?.access,
   ]);
 
+  const coordinatorTabSyncRequestRef = useRef(0);
+
   useEffect(() => {
-    const refreshCoordinatorTabs = () => {
+    const refreshCoordinatorTabs = (event?: Event) => {
       if (!session?.access) return;
+
+      const detail = (event as CustomEvent<{ userId?: number }>)?.detail;
+      const targetUserId = detail?.userId;
+      const currentUserId = Number(session?.user?.id || (session as any)?.id || 0);
+
+      // If the event specifically targets another coordinator, ignore it
+      if (targetUserId && currentUserId && Number(targetUserId) !== currentUserId) {
+        return;
+      }
+
+      const requestId = coordinatorTabSyncRequestRef.current + 1;
+      coordinatorTabSyncRequestRef.current = requestId;
+
       getAuthContext()
         .then((ctx) => {
+          if (requestId !== coordinatorTabSyncRequestRef.current) return;
+
           const expectedDepartmentId = Number(authContext?.department?.id || 0);
           const returnedDepartmentId = Number(ctx.department?.id || 0);
-          if (expectedDepartmentId && returnedDepartmentId !== expectedDepartmentId) return;
-          setCoordinatorTabAccess(ctx.coordinator_tabs ?? {});
-          setEnabledFeatures(ctx.features ?? {});
+          if (expectedDepartmentId && returnedDepartmentId && returnedDepartmentId !== expectedDepartmentId) return;
+
+          if (ctx.coordinator_tabs && typeof ctx.coordinator_tabs === "object") {
+            setCoordinatorTabAccess(ctx.coordinator_tabs);
+          }
+          if (ctx.features && typeof ctx.features === "object") {
+            setEnabledFeatures(ctx.features);
+          }
+          if (ctx.maintenance) {
+            setMaintenanceState(ctx.maintenance);
+          }
         })
         .catch((err) => console.warn("Could not refresh coordinator tab access:", err));
     };
 
     window.addEventListener("ivs-coordinator-tab-access-refresh", refreshCoordinatorTabs);
     return () => window.removeEventListener("ivs-coordinator-tab-access-refresh", refreshCoordinatorTabs);
-  }, [authContext?.department?.id, session?.access]);
+  }, [authContext?.department?.id, session?.access, session?.user?.id]);
 
   useEffect(() => {
     const currentDepartmentId = Number(authContext?.department?.id || 0);
@@ -1126,9 +1156,6 @@ export default function App() {
   const isTeacher = session?.role === "teacher";
   const isStudent = session?.role === "student";
 
-  const activeMeta = NAV_META[activeTab];
-  const ActiveTopIcon = activeMeta.icon;
-
   const isSuperAdmin = Boolean((session as any)?.user?.is_superuser);
   const sessionUsername = String((session as any)?.user?.username || (session as any)?.username || "").toLowerCase();
   const isPlatformAdmin =
@@ -1230,6 +1257,19 @@ export default function App() {
 
     return coordinatorNavItems.find((tab) => !isTabLocked(tab)) || coordinatorNavItems[0] || null;
   }, [coordinatorNavItems, featureContextLoaded, isPlatformAdmin, isTabLocked, isTuitionFeatureContext]);
+
+  const effectiveActiveTab: TabId = useMemo(() => {
+    if (isPlatformAdmin || isTuitionFeatureContext || !featureContextLoaded || session?.role !== "coordinator") {
+      return activeTab;
+    }
+    if (coordinatorNavItems.length > 0 && (isTabHiddenByDepartmentAdmin(activeTab) || !coordinatorNavItems.includes(activeTab))) {
+      return firstEnabledCoordinatorTab || coordinatorNavItems[0] || activeTab;
+    }
+    return activeTab;
+  }, [activeTab, coordinatorNavItems, featureContextLoaded, firstEnabledCoordinatorTab, isPlatformAdmin, isTabHiddenByDepartmentAdmin, isTuitionFeatureContext, session?.role]);
+
+  const activeMeta = NAV_META[effectiveActiveTab];
+  const ActiveTopIcon = activeMeta.icon;
 
   const handleSidebarTabClick = useCallback(
     (tab: TabId) => {
@@ -1536,56 +1576,44 @@ export default function App() {
     if (
       isPlatformAdmin ||
       isTuitionFeatureContext ||
-      !featureContextLoaded ||
-      coordinatorNavItems.length === 0
+      !featureContextLoaded
     ) {
       return;
     }
 
-    if (!coordinatorNavItems.includes(activeTab)) {
-      navigateToTab(coordinatorNavItems[0]);
-    }
-  }, [
-    activeTab,
-    coordinatorNavItems,
-    featureContextLoaded,
-    isPlatformAdmin,
-    isTuitionFeatureContext,
-  ]);
+    if (session?.role === "coordinator") {
+      if (coordinatorNavItems.length === 0) {
+        return;
+      }
 
-  useEffect(() => {
-    // Direct URL protection applies only to the Quran workspace. Tuition has its
-    // own feature keys and locked-tab handling inside TuitionCoordinatorPortal.
-    if (!featureContextLoaded || isPlatformAdmin || isTuitionFeatureContext) return;
-
-    if (isTabHiddenByDepartmentAdmin(activeTab)) {
-      const fallback = firstEnabledCoordinatorTab;
-      if (fallback && fallback !== activeTab) navigateToTab(fallback);
-      return;
+      if (effectiveActiveTab !== activeTab) {
+        navigateToTab(effectiveActiveTab);
+        return;
+      }
     }
 
     const featureKey = tabFeatureKey[activeTab];
-    if (!featureKey || hasFeature(featureKey)) return;
+    if (featureKey && !hasFeature(featureKey)) {
+      showFeatureLocked(
+        NAV_META[activeTab]?.label || "This section",
+        `${NAV_META[activeTab]?.label || "This section"} is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
+      );
 
-    showFeatureLocked(
-      NAV_META[activeTab]?.label || "This section",
-      `${NAV_META[activeTab]?.label || "This section"} is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
-    );
-
-    const fallback = firstEnabledCoordinatorTab;
-
-    if (fallback && fallback !== activeTab) {
-      navigateToTab(fallback);
+      const fallback = firstEnabledCoordinatorTab || coordinatorNavItems[0];
+      if (fallback && fallback !== activeTab) {
+        navigateToTab(fallback);
+      }
     }
   }, [
     activeTab,
     coordinatorNavItems,
+    effectiveActiveTab,
     featureContextLoaded,
     firstEnabledCoordinatorTab,
     hasFeature,
     isPlatformAdmin,
-    isTabHiddenByDepartmentAdmin,
     isTuitionFeatureContext,
+    session?.role,
   ]);
 
 
@@ -1693,14 +1721,14 @@ export default function App() {
 
   // Fetch full state when leaving dashboard
   useEffect(() => {
-    if (!isMainAdminSession(session) && activeTab !== "dashboard" && appState.isPartial) {
+    if (!isMainAdminSession(session) && effectiveActiveTab !== "dashboard" && appState.isPartial) {
       loadState(false)
         .then(loaded => {
           setAppState(loaded);
         })
         .catch(console.error);
     }
-  }, [activeTab, appState.isPartial, session]);
+  }, [effectiveActiveTab, appState.isPartial, session]);
 
 
   useEffect(() => {
@@ -3805,7 +3833,7 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
                   {coordinatorNavItems.map((id) => {
                     const item = NAV_META[id];
                     const Icon = item.icon;
-                    const active = activeTab === id;
+                    const active = effectiveActiveTab === id;
                     const locked = isTabLocked(id);
                     return (
                       <button
@@ -3838,7 +3866,7 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
                   {coordinatorNavItems.map((id) => {
                     const item = NAV_META[id];
                     const Icon = item.icon;
-                    const active = activeTab === id;
+                    const active = effectiveActiveTab === id;
                     const locked = isTabLocked(id);
                     return (
                       <button
@@ -4114,7 +4142,7 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
 
             <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-16 md:pb-8">
 
-              {activeTab === "dashboard" && canAccessPortalTab("dashboard") && hasFeature("tab_daily_classes") && (
+              {effectiveActiveTab === "dashboard" && canAccessPortalTab("dashboard") && hasFeature("tab_daily_classes") && (
                 !hydrated ? (
                   <div className="w-full max-w-none mx-auto">
                     <PageSkeleton
@@ -4602,7 +4630,7 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
 
 
               {/* SCHEDULING */}
-              {activeTab === "scheduling" && canAccessPortalTab("scheduling") && hasFeature("tab_scheduling") && (
+              {effectiveActiveTab === "scheduling" && canAccessPortalTab("scheduling") && hasFeature("tab_scheduling") && (
                 <Suspense fallback={<TabLoading />}>
 <SchedulingTab
                   appState={viewAppState}
@@ -4619,7 +4647,7 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
 
 
               {/* ATTENDANCE */}
-              {activeTab === "attendance" && canAccessPortalTab("attendance") && hasFeature("tab_attendance") && (
+              {effectiveActiveTab === "attendance" && canAccessPortalTab("attendance") && hasFeature("tab_attendance") && (
                 <div className="w-full max-w-none mx-auto space-y-6">
                   <div className="bg-white/85 backdrop-blur-xl p-6 rounded-[28px] shadow-[0_18px_55px_rgba(15,23,42,0.08)] border border-slate-200/80">
                     <h3 className="font-bold text-lg text-slate-950">Attendance</h3>
@@ -4640,7 +4668,7 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
               )}
 
               {/* ACCOUNTS */}
-              {activeTab === "accounts" && canAccessPortalTab("accounts") && hasFeature("tab_accounts_enrollment") && (
+              {effectiveActiveTab === "accounts" && canAccessPortalTab("accounts") && hasFeature("tab_accounts_enrollment") && (
                 <Suspense fallback={<TabLoading />}>
                   <CoordinatorAccounts
                     canBulkImport={hasFeature("bulk_import")}
@@ -4653,14 +4681,14 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
               )}
 
               {/* DROPPED & LEAVE */}
-              {activeTab === "dropped-leave" && canAccessPortalTab("dropped-leave") && hasFeature("tab_dropped_leave") && (
+              {effectiveActiveTab === "dropped-leave" && canAccessPortalTab("dropped-leave") && hasFeature("tab_dropped_leave") && (
                 <Suspense fallback={<TabLoading />}>
                   <QuranDroppedLeave />
                 </Suspense>
               )}
 
               {/* TEACHER SALARY MANAGEMENT */}
-              {activeTab === "teacher-salary" && session?.role !== "coordinator" && hasFeature("tab_teacher_salary") && (
+              {effectiveActiveTab === "teacher-salary" && session?.role !== "coordinator" && hasFeature("tab_teacher_salary") && (
                 <Suspense fallback={<TabLoading />}>
                   <TeacherSalaryManagement
                     departmentName={quranDepartmentDisplayName}
@@ -4678,7 +4706,7 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
               )}
 
               {/* PLATFORM ADMIN */}
-              {activeTab === "platform-admin" && isPlatformAdmin && (
+              {effectiveActiveTab === "platform-admin" && isPlatformAdmin && (
                 <Suspense fallback={<TabLoading />}>
                   <PlatformAdmin />
                 </Suspense>
@@ -4686,7 +4714,7 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
 
 
               {/* LESSONS CONTROL */}
-              {activeTab === "lessons" && canAccessPortalTab("lessons") && hasFeature("tab_lessons_control") && (
+              {effectiveActiveTab === "lessons" && canAccessPortalTab("lessons") && hasFeature("tab_lessons_control") && (
                 <div className="w-full max-w-none mx-auto">
                   <Suspense fallback={<TabLoading />}>
                     <CoordinatorLessons notificationRequestsVersion={notificationRequestsVersion} />
@@ -4695,7 +4723,7 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
               )}
 
               {/* REPORTS */}
-              {activeTab === "reports" && canAccessPortalTab("reports") && hasFeature("tab_reports") && (
+              {effectiveActiveTab === "reports" && canAccessPortalTab("reports") && hasFeature("tab_reports") && (
                 <div className="w-full max-w-none mx-auto">
                   <Suspense fallback={<TabLoading />}>
                     <ReportsTab
@@ -4712,6 +4740,19 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
                       }
                     />
                   </Suspense>
+                </div>
+              )}
+
+              {/* EXPLICIT NO-ACCESS STATE IF ALL COORDINATOR TABS ARE REVOKED */}
+              {session?.role === "coordinator" && featureContextLoaded && coordinatorNavItems.length === 0 && (
+                <div className="flex flex-col items-center justify-center p-12 text-center my-auto min-h-[400px]">
+                  <div className="w-16 h-16 rounded-3xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600 mb-4 shadow-sm">
+                    <LockKeyhole size={28} />
+                  </div>
+                  <h3 className="text-xl font-extrabold text-slate-900">No Tab Access Assigned</h3>
+                  <p className="mt-2 max-w-md text-sm text-slate-500">
+                    Your Department Administrator has not granted access to any workspace tabs for your coordinator account. Please contact your department admin to assign tab permissions.
+                  </p>
                 </div>
               )}
 

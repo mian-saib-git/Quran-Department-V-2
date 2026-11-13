@@ -125,7 +125,7 @@ function createHeaders(
 
   if (options.headers) {
     new Headers(options.headers).forEach((value, key) => {
-      headers[key] = value;
+      headers[key === "content-type" ? "Content-Type" : key] = value;
     });
   }
 
