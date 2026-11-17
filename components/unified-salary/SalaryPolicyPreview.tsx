@@ -22,11 +22,13 @@ import {
 interface Props {
   version: SalaryPolicyVersionDetail;
   onVersionPublished: (published: SalaryPolicyVersionDetail) => void;
+  compensationModel?: string;
 }
 
 export default function SalaryPolicyPreview({
   version,
   onVersionPublished,
+  compensationModel,
 }: Props) {
   const [validation, setValidation] = useState<DraftValidationResponse | null>(null);
   const [validating, setValidating] = useState(false);
@@ -135,7 +137,10 @@ export default function SalaryPolicyPreview({
                     <div>
                       <div className="text-sm font-black text-emerald-950">Configuration Valid & Contiguous</div>
                       <div className="text-xs text-emerald-700">
-                        {validation.tiers_count} student tier(s), {validation.plans_count} teaching plan(s), and all {validation.rates_count} rate matrix cells are verified.
+                        {validation.tiers_count} student tier(s), {validation.plans_count} teaching plan(s) verified.
+                        {compensationModel !== "per_class"
+                          ? ` Basic Salary: ${validation.basic_salaries_count ?? 0}/${validation.total_matrix_cells} cells · Per-Class: ${validation.rates_count}/${validation.total_matrix_cells} cells.`
+                          : ` Per-Class: ${validation.rates_count}/${validation.total_matrix_cells} cells.`}
                       </div>
                     </div>
                   </div>
@@ -160,6 +165,67 @@ export default function SalaryPolicyPreview({
                   </ul>
                 </div>
               )}
+
+              {/* Separate completeness indicators for Matrix A & Matrix B */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                {/* Per-Class Matrix completeness indicator */}
+                <div className={`rounded-xl border p-3 flex items-center justify-between ${
+                  (validation.rates_count ?? 0) === (validation.total_matrix_cells ?? 0) && (validation.total_matrix_cells ?? 0) > 0
+                    ? "border-emerald-200 bg-emerald-50/50 text-emerald-950"
+                    : "border-amber-200 bg-amber-50/50 text-amber-950"
+                }`}>
+                  <div>
+                    <div className="text-xs font-black">Per-Class Salary Matrix</div>
+                    <div className="text-[11px] opacity-80 mt-0.5">
+                      {validation.rates_count} / {validation.total_matrix_cells ?? (validation.plans_count * validation.tiers_count)} cells complete
+                    </div>
+                  </div>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                    (validation.rates_count ?? 0) === (validation.total_matrix_cells ?? 0) && (validation.total_matrix_cells ?? 0) > 0
+                      ? "bg-emerald-100 text-emerald-800"
+                      : "bg-amber-100 text-amber-800"
+                  }`}>
+                    {(validation.rates_count ?? 0) === (validation.total_matrix_cells ?? 0) && (validation.total_matrix_cells ?? 0) > 0
+                      ? "Complete"
+                      : "Incomplete"}
+                  </span>
+                </div>
+
+                {/* Basic Salary Matrix completeness indicator */}
+                {compensationModel !== "per_class" ? (
+                  <div className={`rounded-xl border p-3 flex items-center justify-between ${
+                    (validation.basic_salaries_count ?? 0) === (validation.total_matrix_cells ?? 0) && (validation.total_matrix_cells ?? 0) > 0
+                      ? "border-indigo-200 bg-indigo-50/50 text-indigo-950"
+                      : "border-rose-200 bg-rose-50/50 text-rose-950"
+                  }`}>
+                    <div>
+                      <div className="text-xs font-black">Basic Salary Matrix</div>
+                      <div className="text-[11px] opacity-80 mt-0.5">
+                        {validation.basic_salaries_count ?? 0} / {validation.total_matrix_cells ?? (validation.plans_count * validation.tiers_count)} cells complete
+                      </div>
+                    </div>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                      (validation.basic_salaries_count ?? 0) === (validation.total_matrix_cells ?? 0) && (validation.total_matrix_cells ?? 0) > 0
+                        ? "bg-indigo-100 text-indigo-800"
+                        : "bg-rose-100 text-rose-800"
+                    }`}>
+                      {(validation.basic_salaries_count ?? 0) === (validation.total_matrix_cells ?? 0) && (validation.total_matrix_cells ?? 0) > 0
+                        ? "Complete"
+                        : "Missing Cells"}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 flex items-center justify-between text-slate-500">
+                    <div>
+                      <div className="text-xs font-bold">Basic Salary Matrix</div>
+                      <div className="text-[11px] mt-0.5">Not Applicable (Per-Class Model)</div>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-600">
+                      N/A
+                    </span>
+                  </div>
+                )}
+              </div>
 
               {/* Warnings */}
               {validation.warnings.length > 0 && (
@@ -208,7 +274,13 @@ export default function SalaryPolicyPreview({
           <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-3">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Rate Matrix Dimensions</span>
             <div className="text-xs font-black text-slate-900 mt-1">
-              {version.teaching_plans.length} plans × {version.rate_tiers.length} tiers ({version.plan_tier_rates.length} rates)
+              {version.teaching_plans.length} plans × {version.rate_tiers.length} tiers
+            </div>
+            <div className="text-[10px] text-slate-500 font-semibold mt-0.5">
+              Per-Class: {version.plan_tier_rates.length} cells
+              {compensationModel !== "per_class" && (
+                <> · Basic: {version.plan_tier_basic_salaries?.length || 0} cells</>
+              )}
             </div>
           </div>
         </div>

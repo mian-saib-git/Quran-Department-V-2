@@ -23,6 +23,7 @@ Validates:
 from datetime import date
 from decimal import Decimal
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -37,6 +38,8 @@ from salary.models import (
     SalaryRateTier,
     SalaryTeachingPlan,
     TeacherPayroll,
+    TeacherPolicyAssignment,
+    TeacherSalaryOverride,
 )
 
 
@@ -593,17 +596,17 @@ class SalaryPolicyApiTests(TestCase):
         version.refresh_from_db()
         self.assertEqual(version.status, SalaryPolicyVersion.Status.PUBLISHED)
 
-        # 1. Revert to draft endpoint
+        # 1. Revert to draft strictly blocked to enforce published version immutability
         revert_res = self.client.post(f"/api/salary/versions/{version.id}/revert-to-draft/")
-        self.assertEqual(revert_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(revert_res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("immutable", str(revert_res.data).lower())
         version.refresh_from_db()
-        self.assertEqual(version.status, SalaryPolicyVersion.Status.DRAFT)
-        self.assertIsNone(version.published_at)
+        self.assertEqual(version.status, SalaryPolicyVersion.Status.PUBLISHED)
 
-        # 2. Permanent deletion of unreferenced draft
+        # 2. Permanent deletion of published version is strictly blocked
         del_res = self.client.delete(f"/api/salary/versions/{version.id}/")
-        self.assertEqual(del_res.status_code, status.HTTP_200_OK)
-        self.assertFalse(SalaryPolicyVersion.objects.filter(id=version.id).exists())
+        self.assertEqual(del_res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(SalaryPolicyVersion.objects.filter(id=version.id).exists())
 
     # 21. Non-admin roles and cross-department admins forbidden from deletion
     def test_21_non_admin_and_cross_department_deletion_forbidden(self):
@@ -673,3 +676,439 @@ class SalaryPolicyApiTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("payroll", str(res.data).lower())
         self.assertTrue(SalaryPolicyVersion.objects.filter(id=draft.id).exists())
+
+    # 23. Authorized Department Admin permanently deletes unused salary policy
+    def test_23_department_admin_deletes_unused_policy_safely(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="UNUSED_DRAFT_2026",
+            name="Unused Draft Policy",
+            compensation_model=SalaryPolicy.CompensationModel.PER_CLASS,
+        )
+        policy_id = policy.id
+
+        res = self.client.delete(f"/api/salary/policies/{policy_id}/")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertFalse(SalaryPolicy.objects.filter(id=policy_id).exists())
+
+    # 24. Authorized Institution Admin permanently deletes unused policy within their institution
+    def test_24_institution_admin_deletes_unused_policy_in_institution(self):
+        self.client.force_authenticate(user=self.inst_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_tuition,
+            code="TUITION_UNUSED_2026",
+            name="Tuition Unused Policy",
+            compensation_model=SalaryPolicy.CompensationModel.BASIC,
+        )
+        policy_id = policy.id
+
+        res = self.client.delete(f"/api/salary/policies/{policy_id}/")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertFalse(SalaryPolicy.objects.filter(id=policy_id).exists())
+
+    # 25. Unauthorized roles (teacher, student, coordinator) receive HTTP 403 Forbidden
+    def test_25_unauthorized_roles_policy_deletion_forbidden(self):
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="POLICY_FOR_UNAUTH_TEST",
+            name="Policy For Unauthorized Test",
+        )
+
+        for unauth_user in [self.teacher, self.student, self.coordinator]:
+            self.client.force_authenticate(user=unauth_user)
+            res = self.client.delete(f"/api/salary/policies/{policy.id}/")
+            self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+            self.assertTrue(SalaryPolicy.objects.filter(id=policy.id).exists())
+
+    # 26. Cross-department and cross-institution deletion rejection
+    def test_26_cross_department_and_cross_institution_deletion_rejection(self):
+        # Tuition Admin cannot delete Quran policy (cross-department)
+        policy_quran = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="QURAN_CROSS_DEPT_TEST",
+            name="Quran Cross Dept Test",
+        )
+        self.client.force_authenticate(user=self.tuition_admin)
+        res_cross_dept = self.client.delete(f"/api/salary/policies/{policy_quran.id}/")
+        self.assertEqual(res_cross_dept.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(SalaryPolicy.objects.filter(id=policy_quran.id).exists())
+
+        # Inst1 Admin cannot delete Inst2 policy (cross-institution)
+        policy_other = SalaryPolicy.objects.create(
+            institution=self.inst2,
+            department=self.dept_other,
+            code="OTHER_INST_POLICY_2026",
+            name="Other Institution Policy",
+        )
+        self.client.force_authenticate(user=self.inst_admin)
+        res_cross_inst = self.client.delete(f"/api/salary/policies/{policy_other.id}/")
+        self.assertEqual(res_cross_inst.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(SalaryPolicy.objects.filter(id=policy_other.id).exists())
+
+    # 27. Policy with draft versions and configurations cleaned up correctly
+    def test_27_policy_deletion_cleans_up_draft_versions_and_matrix(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="POLICY_WITH_DRAFTS_2026",
+            name="Policy With Drafts",
+        )
+        v1 = SalaryPolicyVersion.objects.create(
+            policy=policy,
+            version_number=1,
+            effective_from=date(2026, 1, 1),
+            status=SalaryPolicyVersion.Status.DRAFT,
+        )
+        tier = SalaryRateTier.objects.create(
+            policy_version=v1,
+            tier_name="Tier 1",
+            min_students=1,
+            max_students=5,
+            sort_order=1,
+        )
+        plan = SalaryTeachingPlan.objects.create(
+            policy_version=v1,
+            plan_code="PLAN_2D",
+            plan_name="2 Days Plan",
+            days_per_week=2,
+            sort_order=1,
+        )
+        SalaryPlanTierRate.objects.create(
+            policy_version=v1,
+            teaching_plan=plan,
+            rate_tier=tier,
+            rate_per_class=Decimal("200.00"),
+        )
+
+        res = self.client.delete(f"/api/salary/policies/{policy.id}/")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Confirm policy and all owned configurations deleted
+        self.assertFalse(SalaryPolicy.objects.filter(id=policy.id).exists())
+        self.assertFalse(SalaryPolicyVersion.objects.filter(id=v1.id).exists())
+        self.assertFalse(SalaryRateTier.objects.filter(id=tier.id).exists())
+        self.assertFalse(SalaryTeachingPlan.objects.filter(id=plan.id).exists())
+        self.assertFalse(SalaryPlanTierRate.objects.filter(teaching_plan=plan).exists())
+
+    # 28. Policy with protected payroll references blocked from permanent deletion
+    def test_28_policy_with_published_version_protected_from_deletion(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="PUBLISHED_PROTECTED_2026",
+            name="Published Protected Policy",
+        )
+        SalaryPolicyVersion.objects.create(
+            policy=policy,
+            version_number=1,
+            effective_from=date(2026, 1, 1),
+            status=SalaryPolicyVersion.Status.PUBLISHED,
+        )
+        period = SalaryPayrollPeriod.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            payroll_year=2026,
+            payroll_month=1,
+        )
+        teacher_prof = TeacherProfile.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            user=self.teacher,
+        )
+        TeacherPayroll.objects.create(
+            payroll_period=period,
+            teacher=teacher_prof,
+            applied_policy=policy,
+            net_salary=Decimal("5000.00"),
+        )
+
+        res = self.client.delete(f"/api/salary/policies/{policy.id}/")
+        self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
+        self.assertIn("payroll", str(res.data).lower())
+        self.assertTrue(SalaryPolicy.objects.filter(id=policy.id).exists())
+
+    # 29. Policy with teacher assignments protected from permanent deletion
+    def test_29_policy_with_teacher_assignments_protected_from_deletion(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="ASSIGNED_PROTECTED_2026",
+            name="Assigned Protected Policy",
+        )
+        teacher_prof = TeacherProfile.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            user=self.teacher,
+        )
+        TeacherPolicyAssignment.objects.create(
+            department=self.dept_quran,
+            teacher=teacher_prof,
+            policy=policy,
+            effective_from=date(2026, 1, 1),
+        )
+
+        res = self.client.delete(f"/api/salary/policies/{policy.id}/")
+        self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
+        self.assertIn("assignment", str(res.data).lower())
+        self.assertTrue(SalaryPolicy.objects.filter(id=policy.id).exists())
+
+    # 30. Policy with teacher payroll references protected from permanent deletion
+    def test_30_policy_with_payroll_dependencies_protected_from_deletion(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="PAYROLL_PROTECTED_2026",
+            name="Payroll Protected Policy",
+        )
+        teacher_prof = TeacherProfile.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            user=self.teacher,
+        )
+        period = SalaryPayrollPeriod.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            payroll_year=2026,
+            payroll_month=9,
+        )
+        TeacherPayroll.objects.create(
+            payroll_period=period,
+            teacher=teacher_prof,
+            applied_policy=policy,
+        )
+
+        res = self.client.delete(f"/api/salary/policies/{policy.id}/")
+        self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
+        self.assertIn("payroll", str(res.data).lower())
+        self.assertTrue(SalaryPolicy.objects.filter(id=policy.id).exists())
+
+    # 31. PlatformAuditLog written upon permanent deletion
+    def test_31_policy_deletion_preserves_platform_audit_log(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="AUDIT_VERIFY_2026",
+            name="Audit Verify Policy",
+        )
+        policy_id = policy.id
+
+        res = self.client.delete(f"/api/salary/policies/{policy_id}/")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        audit = PlatformAuditLog.objects.filter(
+            action="policy_deleted",
+            target_id=str(policy_id),
+        ).first()
+        self.assertIsNotNone(audit)
+        self.assertEqual(audit.actor, self.quran_admin)
+        self.assertEqual(audit.category, "salary_policy")
+        self.assertIn("Audit Verify Policy", audit.summary)
+
+    # 32. Repeated deletion requests are safe (404 Not Found)
+    def test_32_repeated_deletion_returns_safe_404(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="REPEAT_DEL_2026",
+            name="Repeat Delete Policy",
+        )
+        policy_id = policy.id
+
+        # First deletion -> 200 OK
+        res1 = self.client.delete(f"/api/salary/policies/{policy_id}/")
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+
+        # Repeated deletion -> 404 Not Found
+        res2 = self.client.delete(f"/api/salary/policies/{policy_id}/")
+        self.assertEqual(res2.status_code, status.HTTP_404_NOT_FOUND)
+
+    # 33. Policy deactivate/activate workflow via toggle-active action
+    def test_33_policy_toggle_active_workflow(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="TOGGLE_ACT_2026",
+            name="Toggle Active Policy",
+            is_active=True,
+        )
+
+        # 1. Deactivate
+        res = self.client.post(f"/api/salary/policies/{policy.id}/toggle-active/")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertFalse(res.data["is_active"])
+        policy.refresh_from_db()
+        self.assertFalse(policy.is_active)
+
+        # 2. Reactivate
+        res2 = self.client.post(f"/api/salary/policies/{policy.id}/toggle-active/")
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        self.assertTrue(res2.data["is_active"])
+        policy.refresh_from_db()
+        self.assertTrue(policy.is_active)
+
+    # 34. Existing policies remain intact during testing
+    def test_34_existing_quran_policy_remains_intact(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        self.assertTrue(SalaryPolicy.objects.filter(id=self.quran_policy.id).exists())
+
+    # 35. Published version cannot be deleted via API
+    def test_35_published_version_cannot_be_deleted(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="PUB_DEL_2026",
+            name="Pub Del Test Policy",
+        )
+        v_pub = SalaryPolicyVersion.objects.create(
+            policy=policy,
+            version_number=1,
+            status=SalaryPolicyVersion.Status.PUBLISHED,
+            effective_from=date(2026, 1, 1),
+        )
+        res = self.client.delete(f"/api/salary/versions/{v_pub.id}/")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("immutable", str(res.data).lower())
+        self.assertTrue(SalaryPolicyVersion.objects.filter(id=v_pub.id).exists())
+
+    # 36. Reverting published version to draft blocked when teacher assignments exist
+    def test_36_revert_to_draft_blocked_when_teacher_assignments_exist(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="REV_ASSIGN_2026",
+            name="Rev Assign Test Policy",
+        )
+        v_pub = SalaryPolicyVersion.objects.create(
+            policy=policy,
+            version_number=1,
+            status=SalaryPolicyVersion.Status.PUBLISHED,
+            effective_from=date(2026, 1, 1),
+        )
+        prof = TeacherProfile.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            user=self.teacher,
+        )
+        TeacherPolicyAssignment.objects.create(
+            department=self.dept_quran,
+            teacher=prof,
+            policy=policy,
+            effective_from=date(2026, 9, 1),
+            is_active=True,
+        )
+        res = self.client.post(f"/api/salary/versions/{v_pub.id}/revert-to-draft/")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("immutable", str(res.data).lower())
+        v_pub.refresh_from_db()
+        self.assertEqual(v_pub.status, SalaryPolicyVersion.Status.PUBLISHED)
+
+    # 37. Previously published version cannot be deleted even if status is draft
+    def test_37_previously_published_version_cannot_be_deleted_even_if_draft(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="PREV_PUB_2026",
+            name="Prev Pub Test Policy",
+        )
+        ver = SalaryPolicyVersion.objects.create(
+            policy=policy,
+            version_number=1,
+            status=SalaryPolicyVersion.Status.DRAFT,
+            published_at=timezone.now(),  # Has historical publication timestamp
+            effective_from=date(2026, 1, 1),
+        )
+        res = self.client.delete(f"/api/salary/versions/{ver.id}/")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("previously published", str(res.data).lower())
+        self.assertTrue(SalaryPolicyVersion.objects.filter(id=ver.id).exists())
+
+    # 38. Draft version deletion succeeds when policy has teacher assignments if draft is not referenced
+    def test_38_draft_version_deletion_allowed_when_policy_has_teacher_assignments(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="ASSIGN_VER_2026",
+            name="Assign Ver Test Policy",
+        )
+        ver = SalaryPolicyVersion.objects.create(
+            policy=policy,
+            version_number=1,
+            status=SalaryPolicyVersion.Status.DRAFT,
+            effective_from=date(2026, 1, 1),
+        )
+        prof = TeacherProfile.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            user=self.teacher,
+        )
+        TeacherPolicyAssignment.objects.create(
+            department=self.dept_quran,
+            teacher=prof,
+            policy=policy,
+            effective_from=date(2026, 1, 1),
+            is_active=True,
+        )
+        res = self.client.delete(f"/api/salary/versions/{ver.id}/")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertFalse(SalaryPolicyVersion.objects.filter(id=ver.id).exists())
+
+    # 39. Policy with previously published versions can be safely deleted if no active assignments or payroll exist
+    def test_39_policy_cannot_be_deleted_if_previously_published_versions_exist(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="PREV_PUB_POL_2026",
+            name="Prev Pub Policy Test",
+        )
+        SalaryPolicyVersion.objects.create(
+            policy=policy,
+            version_number=1,
+            status=SalaryPolicyVersion.Status.DRAFT,
+            published_at=timezone.now(),
+            effective_from=date(2026, 1, 1),
+        )
+        res = self.client.delete(f"/api/salary/policies/{policy.id}/")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertFalse(SalaryPolicy.objects.filter(id=policy.id).exists())
+
+    # 40. Genuine unused draft version can be deleted safely
+    def test_40_genuine_unused_draft_version_can_be_deleted(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        policy = SalaryPolicy.objects.create(
+            institution=self.inst1,
+            department=self.dept_quran,
+            code="UNUSED_VER_2026",
+            name="Unused Version Policy",
+        )
+        ver = SalaryPolicyVersion.objects.create(
+            policy=policy,
+            version_number=1,
+            status=SalaryPolicyVersion.Status.DRAFT,
+            effective_from=date(2026, 1, 1),
+        )
+        res = self.client.delete(f"/api/salary/versions/{ver.id}/")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertFalse(SalaryPolicyVersion.objects.filter(id=ver.id).exists())
+
+    # 41. Non-existent version returns 404 Not Found
+    def test_41_non_existent_version_returns_404(self):
+        self.client.force_authenticate(user=self.quran_admin)
+        res = self.client.get("/api/salary/versions/999999/")
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)

@@ -30,6 +30,7 @@ from salary.models import (
     get_policy_published_coverage_intervals,
     resolve_teacher_policy_coverage,
     SalaryPlanTierRate,
+    SalaryPlanTierBasicSalary,
     SalaryPolicy,
     SalaryPolicyVersion,
     SalaryRateTier,
@@ -89,6 +90,7 @@ from salary.serializers import (
     SalaryAttendanceVerificationSerializer,
     SalaryCalculationPreviewRequestSerializer,
     SalaryPlanTierRateSerializer,
+    SalaryPlanTierBasicSalarySerializer,
     SalaryPolicySerializer,
     SalaryPolicyVersionDetailSerializer,
     SalaryPolicyVersionSerializer,
@@ -96,6 +98,7 @@ from salary.serializers import (
     SalaryTeachingPlanSerializer,
     TeacherPolicyAssignmentSerializer,
     BulkTeacherPolicyAssignmentSerializer,
+    BulkTeacherPolicyUnassignSerializer,
     TeacherSalaryOverrideSerializer,
     SalaryAdjustmentCategorySerializer,
     PayrollAdjustmentSerializer,
@@ -179,44 +182,53 @@ class SalaryPolicyViewSet(viewsets.ModelViewSet):
         # Super Admin / Platform Admin
         if getattr(user, "is_superuser", False) or role == User.Role.PLATFORM_ADMIN:
             dept_id = self.request.query_params.get("department_id")
-            if dept_id:
-                return self.queryset.filter(department_id=dept_id)
-            return self.queryset
+            qs = self.queryset.filter(department_id=dept_id) if dept_id else self.queryset
 
         # Institution Admin
-        if role == User.Role.INSTITUTION_ADMIN:
+        elif role == User.Role.INSTITUTION_ADMIN:
             qs = self.queryset.filter(institution_id=user.institution_id)
             dept_id = self.request.query_params.get("department_id")
             if dept_id:
                 qs = qs.filter(department_id=dept_id)
-            return qs
 
         # Department Admin
-        user_dept_ids = []
-        if role == User.Role.DEPARTMENT_ADMIN and user.department_id:
-            user_dept_ids.append(user.department_id)
-        sec_dept_ids = list(
-            UserDepartmentRole.objects.filter(
-                user=user, role=UserDepartmentRole.Role.DEPARTMENT_ADMIN
-            ).values_list("department_id", flat=True)
-        )
-        user_dept_ids.extend(sec_dept_ids)
-        user_dept_ids = list(set(user_dept_ids))
+        else:
+            user_dept_ids = []
+            if role == User.Role.DEPARTMENT_ADMIN and user.department_id:
+                user_dept_ids.append(user.department_id)
+            sec_dept_ids = list(
+                UserDepartmentRole.objects.filter(
+                    user=user, role=UserDepartmentRole.Role.DEPARTMENT_ADMIN
+                ).values_list("department_id", flat=True)
+            )
+            user_dept_ids.extend(sec_dept_ids)
+            user_dept_ids = list(set(user_dept_ids))
 
-        if not user_dept_ids:
-            return self.queryset.none()
-
-        requested_dept = self.request.query_params.get("department_id")
-        if requested_dept:
-            try:
-                requested_id = int(requested_dept)
-                if requested_id in user_dept_ids:
-                    return self.queryset.filter(department_id=requested_id)
-                return self.queryset.none()
-            except (ValueError, TypeError):
+            if not user_dept_ids:
                 return self.queryset.none()
 
-        return self.queryset.filter(department_id__in=user_dept_ids)
+            requested_dept = self.request.query_params.get("department_id")
+            if requested_dept:
+                try:
+                    requested_id = int(requested_dept)
+                    if requested_id in user_dept_ids:
+                        qs = self.queryset.filter(department_id=requested_id)
+                    else:
+                        return self.queryset.none()
+                except (ValueError, TypeError):
+                    return self.queryset.none()
+            else:
+                qs = self.queryset.filter(department_id__in=user_dept_ids)
+
+        status_param = (self.request.query_params.get("status") or "").lower()
+        if status_param == "active":
+            qs = qs.filter(is_active=True, is_archived=False)
+        elif status_param == "inactive":
+            qs = qs.filter(is_active=False, is_archived=False)
+        elif status_param == "archived":
+            qs = qs.filter(is_archived=True)
+
+        return qs
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -235,12 +247,595 @@ class SalaryPolicyViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         serializer.save()
 
+    def destroy(self, request, *args, **kwargs):
+        user = request.user
+        policy_id = kwargs.get("pk")
+
+        try:
+            policy = SalaryPolicy.objects.select_related("department", "institution").get(pk=policy_id)
+        except SalaryPolicy.DoesNotExist:
+            return Response(
+                {"detail": "Salary policy not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        self.check_object_permissions(request, policy)
+
+        dept = policy.department
+        inst = policy.institution
+        role = str(getattr(user, "role", "") or "").lower()
+        is_super = getattr(user, "is_superuser", False) or role == User.Role.PLATFORM_ADMIN
+        is_inst_admin = (role == User.Role.INSTITUTION_ADMIN and user.institution_id is not None and user.institution_id == inst.id)
+        is_dept_admin = is_user_department_admin_for_department(user, dept.id)
+
+        if not (is_super or is_inst_admin or is_dept_admin):
+            raise PermissionDenied("You do not have administrative permission to delete salary policies for this department.")
+
+        with transaction.atomic():
+            locked_policy = (
+                SalaryPolicy.objects.select_for_update()
+                .select_related("department", "institution")
+                .get(pk=policy.id)
+            )
+
+            # Central authoritative deletion eligibility check
+            eligibility = locked_policy.get_deletion_eligibility()
+            if not eligibility["can_delete"]:
+                code = "policy_deletion_blocked"
+                if eligibility["active_teacher_assignments"] > 0:
+                    code = "active_teacher_assignments_exist"
+                elif eligibility["teacher_overrides_count"] > 0:
+                    code = "salary_overrides_exist"
+                elif eligibility["protected_payroll_references_count"] > 0:
+                    code = "payroll_records_exist"
+
+                return Response(
+                    {
+                        "detail": eligibility["blocking_reasons"][0],
+                        "blocking_reasons": eligibility["blocking_reasons"],
+                        "code": code,
+                        "eligibility": eligibility,
+                        "assignments_count": eligibility["total_teacher_assignments"],
+                        "active_assignments_count": eligibility["active_teacher_assignments"],
+                        "historical_assignments_count": eligibility["historical_teacher_assignments"],
+                        "published_versions_count": eligibility["published_versions_count"],
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            policy_name = locked_policy.name
+            policy_code = locked_policy.code
+            policy_id_val = locked_policy.id
+            dept_name = dept.name
+            dept_id_val = dept.id
+            inst_name = inst.name
+            inst_id_val = inst.id
+            total_versions_count = locked_policy.versions.count()
+            actor_name = getattr(user, "username", str(user))
+            detach_timestamp = timezone.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # 1. Build complete immutable historical snapshot before deletion
+            complete_snapshot = locked_policy.build_complete_snapshot(
+                actor_user=user,
+                deletion_reason=f"Admin permanent policy deletion by {actor_name}",
+            )
+
+            # 2. Safely snapshot and detach all historical teacher assignments
+            historical_assignments = TeacherPolicyAssignment.objects.filter(policy=locked_policy)
+            detached_assignments_count = historical_assignments.count()
+
+            for assignment in historical_assignments:
+                assignment.policy_snapshot_name = policy_name
+                assignment.policy_snapshot_code = policy_code
+                assignment.archived_policy_snapshot = complete_snapshot
+                note_entry = f"[Detached upon permanent policy deletion by {actor_name} on {detach_timestamp}]"
+                if note_entry not in (assignment.notes or ""):
+                    assignment.notes = f"{assignment.notes.rstrip()}\n{note_entry}".strip() if assignment.notes else note_entry
+                assignment.policy = None
+                assignment.save(update_fields=[
+                    "policy",
+                    "policy_snapshot_name",
+                    "policy_snapshot_code",
+                    "archived_policy_snapshot",
+                    "notes",
+                ])
+
+            # 3. Record audit event before deletion with full snapshot
+            try:
+                PlatformAuditLog.objects.create(
+                    actor=user,
+                    category="salary_policy",
+                    action="policy_deleted",
+                    summary=(
+                        f"Permanently deleted salary policy '{policy_name}' (ID {policy_id_val}) "
+                        f"in {dept_name} ({inst_name})"
+                    ),
+                    target_type="SalaryPolicy",
+                    target_id=str(policy_id_val),
+                    target_label=f"{policy_name} ({policy_code})",
+                    details={
+                        "policy_id": policy_id_val,
+                        "policy_name": policy_name,
+                        "policy_code": policy_code,
+                        "department_id": dept_id_val,
+                        "department_name": dept_name,
+                        "institution_id": inst_id_val,
+                        "institution_name": inst_name,
+                        "versions_count": total_versions_count,
+                        "historical_assignments_detached_count": detached_assignments_count,
+                        "deleted_by_id": user.id,
+                        "deleted_by_username": actor_name,
+                        "deleted_at": timezone.now().isoformat(),
+                        "complete_policy_snapshot": complete_snapshot,
+                    },
+                )
+            except Exception as e:
+                logger.warning(
+                    f"PlatformAuditLog creation failed during policy {policy_id_val} deletion: {e}"
+                )
+
+            # 4. Mark policy as deleting and permanently delete instance from PostgreSQL
+            locked_policy._deleting_policy = True
+            for version in locked_policy.versions.all():
+                version._allow_policy_delete = True
+                for t in version.rate_tiers.all():
+                    t._allow_policy_delete = True
+                for p in version.teaching_plans.all():
+                    p._allow_policy_delete = True
+                for r in version.plan_tier_rates.all():
+                    r._allow_policy_delete = True
+
+            locked_policy.delete(actor_user=user, deletion_reason="API permanent deletion")
+
+        detail_msg = f"Salary policy '{policy_name}' has been permanently deleted."
+        if detached_assignments_count > 0:
+            detail_msg += f" {detached_assignments_count} historical teacher assignment record(s) and full audit history were safely preserved."
+        elif total_versions_count > 0:
+            detail_msg += f" {total_versions_count} version(s) were removed."
+
+        return Response(
+            {
+                "detail": detail_msg,
+                "deleted_id": policy_id_val,
+                "historical_assignments_preserved": detached_assignments_count,
+            },
+            status=status.HTTP_200_OK,
+        )
+
     def perform_destroy(self, instance):
-        if instance.versions.filter(status=SalaryPolicyVersion.Status.PUBLISHED).exists():
-            raise DRFValidationError("Cannot delete a salary policy that has published versions.")
-        if instance.teacher_assignments.exists():
-            raise DRFValidationError("Cannot delete a salary policy that has teacher assignments.")
+        eligibility = instance.get_deletion_eligibility()
+        if not eligibility["can_delete"]:
+            raise DRFValidationError(eligibility["blocking_reasons"][0])
         instance.delete()
+
+    @action(detail=True, methods=["get"], url_path="deletion-eligibility")
+    def deletion_eligibility(self, request, pk=None):
+        policy = self.get_object()
+        self.check_object_permissions(request, policy)
+        eligibility = policy.get_deletion_eligibility()
+        return Response(eligibility, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="unassign-all")
+    def unassign_all(self, request, pk=None):
+        """Admin action: Safely unassign all teachers currently actively assigned to this policy.
+
+        Requires Department Admin, Institution Admin, or Superuser permissions.
+        Enforces payroll protection locks, sets effective_to cutoff, preserves historical snapshots,
+        and records individual/bulk PlatformAuditLog entries.
+        """
+        policy = self.get_object()
+        self.check_object_permissions(request, policy)
+        user = request.user
+        dept = policy.department
+        inst = policy.institution
+        role = str(getattr(user, "role", "") or "").lower()
+        is_super = getattr(user, "is_superuser", False) or role == User.Role.PLATFORM_ADMIN
+        is_inst_admin = (role == User.Role.INSTITUTION_ADMIN and user.institution_id is not None and user.institution_id == inst.id)
+        is_dept_admin = is_user_department_admin_for_department(user, dept.id)
+
+        if not (is_super or is_inst_admin or is_dept_admin):
+            raise PermissionDenied("You do not have administrative permission to unassign teachers for this department.")
+
+        cutoff_date_str = request.data.get("effective_cutoff")
+        reason = (request.data.get("reason") or "").strip()
+
+        today = timezone.localdate()
+        cutoff_date = today
+        if cutoff_date_str:
+            try:
+                cutoff_date = date.fromisoformat(str(cutoff_date_str))
+            except ValueError:
+                return Response(
+                    {"detail": f"Invalid date format '{cutoff_date_str}'. Expected YYYY-MM-DD."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # Check protected payroll lock for cutoff_date
+        locked_period = SalaryPayrollPeriod.objects.filter(
+            department=dept,
+            payroll_year=cutoff_date.year,
+            payroll_month=cutoff_date.month,
+            status__in=[
+                SalaryPayrollPeriod.Status.DEPARTMENT_REVIEW,
+                SalaryPayrollPeriod.Status.PENDING_APPROVAL,
+                SalaryPayrollPeriod.Status.APPROVED,
+                SalaryPayrollPeriod.Status.PAID,
+            ],
+        ).first()
+        if locked_period:
+            return Response(
+                {
+                    "detail": (
+                        f"Cannot unassign teachers effective {cutoff_date}: Payroll for "
+                        f"{locked_period.payroll_year}-{locked_period.payroll_month:02d} is in "
+                        f"'{locked_period.get_status_display()}' status and is protected against modifications. "
+                        "Historical and submitted payroll cannot be altered."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            lock_kwargs = {"of": ("self",)} if getattr(connection.features, "has_select_for_update_of", False) else {}
+            # Target ONLY assignments for this specific policy that are active covering cutoff_date
+            assignments = (
+                TeacherPolicyAssignment.objects.select_for_update(**lock_kwargs)
+                .filter(
+                    policy=policy,
+                    is_active=True,
+                )
+                .filter(
+                    models.Q(effective_to__isnull=True) | models.Q(effective_to__gte=cutoff_date)
+                )
+                .select_related("teacher")
+            )
+
+            count = assignments.count()
+            unassigned_list = []
+
+            for assignment in assignments:
+                t = assignment.teacher
+                t_name = getattr(t, "historical_name", None) or (
+                    t.user.get_full_name() if getattr(t, "user", None) else f"Teacher #{t.id}"
+                )
+                unassigned_list.append({"id": t.id, "name": t_name})
+
+                if cutoff_date > assignment.effective_from:
+                    assignment.effective_to = cutoff_date - timedelta(days=1)
+                else:
+                    assignment.effective_to = assignment.effective_from
+                assignment.is_active = False
+
+                audit_note = f"[Unassigned all from policy '{policy.name}' effective {cutoff_date} by {user.username}]"
+                if reason:
+                    audit_note += f" Reason: {reason}"
+                assignment.notes = f"{assignment.notes.rstrip()}\n{audit_note}".strip() if assignment.notes else audit_note
+                assignment.save()
+
+                try:
+                    PlatformAuditLog.objects.create(
+                        actor=user,
+                        category="salary_assignment",
+                        action="unassign_policy",
+                        summary=(
+                            f"Unassigned salary policy '{policy.name}' from {t_name} "
+                            f"(effective cutoff: {cutoff_date})"
+                        ),
+                        target_type="TeacherPolicyAssignment",
+                        target_id=str(assignment.id),
+                        target_label=f"{t_name} -> {policy.name}",
+                        details={
+                            "teacher_id": t.id,
+                            "teacher_name": t_name,
+                            "policy_id": policy.id,
+                            "policy_name": policy.name,
+                            "department_id": dept.id,
+                            "effective_cutoff": cutoff_date.isoformat(),
+                            "reason": reason,
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"PlatformAuditLog creation failed during unassign_all: {e}")
+
+            if count > 0:
+                try:
+                    PlatformAuditLog.objects.create(
+                        actor=user,
+                        category="salary_assignment",
+                        action="policy_unassign_all",
+                        summary=(
+                            f"Unassigned all {count} active teacher(s) from salary policy '{policy.name}' "
+                            f"in {dept.name} ({inst.name}) effective {cutoff_date}"
+                        ),
+                        target_type="SalaryPolicy",
+                        target_id=str(policy.id),
+                        target_label=f"{policy.name} ({policy.code})",
+                        details={
+                            "policy_id": policy.id,
+                            "policy_name": policy.name,
+                            "department_id": dept.id,
+                            "department_name": dept.name,
+                            "institution_id": inst.id,
+                            "institution_name": inst.name,
+                            "unassigned_count": count,
+                            "unassigned_teachers": unassigned_list,
+                            "effective_cutoff": cutoff_date.isoformat(),
+                            "reason": reason,
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"PlatformAuditLog creation failed: {e}")
+
+        eligibility = policy.get_deletion_eligibility()
+        return Response(
+            {
+                "detail": f"Successfully unassigned {count} teacher(s) from policy '{policy.name}'.",
+                "unassigned_count": count,
+                "policy_id": policy.id,
+                "effective_cutoff": cutoff_date.isoformat(),
+                "eligibility": eligibility,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="toggle-active")
+    def toggle_active(self, request, pk=None):
+        policy = self.get_object()
+        user = request.user
+        dept = policy.department
+        inst = policy.institution
+        role = str(getattr(user, "role", "") or "").lower()
+        is_super = getattr(user, "is_superuser", False) or role == User.Role.PLATFORM_ADMIN
+        is_inst_admin = (role == User.Role.INSTITUTION_ADMIN and user.institution_id is not None and user.institution_id == inst.id)
+        is_dept_admin = is_user_department_admin_for_department(user, dept.id)
+
+        if not (is_super or is_inst_admin or is_dept_admin):
+            raise PermissionDenied("You do not have administrative permission to modify salary policies for this department.")
+
+        with transaction.atomic():
+            locked_policy = (
+                SalaryPolicy.objects.select_for_update()
+                .select_related("department", "institution")
+                .get(pk=policy.id)
+            )
+            if locked_policy.is_archived and not locked_policy.is_active:
+                raise DRFValidationError("Cannot activate an archived salary policy. Restore the policy first.")
+
+            locked_policy.is_active = not locked_policy.is_active
+            locked_policy.save(update_fields=["is_active", "updated_at"])
+
+            try:
+                PlatformAuditLog.objects.create(
+                    actor=user,
+                    category="salary_policy",
+                    action="policy_deactivated" if not locked_policy.is_active else "policy_activated",
+                    summary=(
+                        f"{'Deactivated' if not locked_policy.is_active else 'Activated'} salary policy "
+                        f"'{locked_policy.name}' (ID {locked_policy.id}) in {dept.name}"
+                    ),
+                    target_type="SalaryPolicy",
+                    target_id=str(locked_policy.id),
+                    target_label=f"{locked_policy.name} ({locked_policy.code})",
+                    details={
+                        "policy_id": locked_policy.id,
+                        "policy_name": locked_policy.name,
+                        "is_active": locked_policy.is_active,
+                        "department_id": dept.id,
+                        "institution_id": inst.id,
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"PlatformAuditLog creation failed during policy toggle active: {e}")
+
+        serializer = self.get_serializer(locked_policy)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="deactivate")
+    def deactivate(self, request, pk=None):
+        policy = self.get_object()
+        user = request.user
+        dept = policy.department
+        inst = policy.institution
+        role = str(getattr(user, "role", "") or "").lower()
+        is_super = getattr(user, "is_superuser", False) or role == User.Role.PLATFORM_ADMIN
+        is_inst_admin = (role == User.Role.INSTITUTION_ADMIN and user.institution_id is not None and user.institution_id == inst.id)
+        is_dept_admin = is_user_department_admin_for_department(user, dept.id)
+
+        if not (is_super or is_inst_admin or is_dept_admin):
+            raise PermissionDenied("You do not have administrative permission to modify salary policies for this department.")
+
+        with transaction.atomic():
+            locked_policy = (
+                SalaryPolicy.objects.select_for_update()
+                .select_related("department", "institution")
+                .get(pk=policy.id)
+            )
+            locked_policy.is_active = False
+            locked_policy.save(update_fields=["is_active", "updated_at"])
+
+            try:
+                PlatformAuditLog.objects.create(
+                    actor=user,
+                    category="salary_policy",
+                    action="policy_deactivated",
+                    summary=f"Deactivated salary policy '{locked_policy.name}' (ID {locked_policy.id}) in {dept.name}",
+                    target_type="SalaryPolicy",
+                    target_id=str(locked_policy.id),
+                    target_label=f"{locked_policy.name} ({locked_policy.code})",
+                    details={
+                        "policy_id": locked_policy.id,
+                        "policy_name": locked_policy.name,
+                        "is_active": False,
+                        "department_id": dept.id,
+                        "institution_id": inst.id,
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"PlatformAuditLog creation failed during policy deactivate: {e}")
+
+        serializer = self.get_serializer(locked_policy)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="activate")
+    def activate(self, request, pk=None):
+        policy = self.get_object()
+        user = request.user
+        dept = policy.department
+        inst = policy.institution
+        role = str(getattr(user, "role", "") or "").lower()
+        is_super = getattr(user, "is_superuser", False) or role == User.Role.PLATFORM_ADMIN
+        is_inst_admin = (role == User.Role.INSTITUTION_ADMIN and user.institution_id is not None and user.institution_id == inst.id)
+        is_dept_admin = is_user_department_admin_for_department(user, dept.id)
+
+        if not (is_super or is_inst_admin or is_dept_admin):
+            raise PermissionDenied("You do not have administrative permission to modify salary policies for this department.")
+
+        with transaction.atomic():
+            locked_policy = (
+                SalaryPolicy.objects.select_for_update()
+                .select_related("department", "institution")
+                .get(pk=policy.id)
+            )
+            if locked_policy.is_archived:
+                raise DRFValidationError("Cannot activate an archived salary policy. Restore the policy first.")
+
+            locked_policy.is_active = True
+            locked_policy.save(update_fields=["is_active", "updated_at"])
+
+            try:
+                PlatformAuditLog.objects.create(
+                    actor=user,
+                    category="salary_policy",
+                    action="policy_activated",
+                    summary=f"Activated salary policy '{locked_policy.name}' (ID {locked_policy.id}) in {dept.name}",
+                    target_type="SalaryPolicy",
+                    target_id=str(locked_policy.id),
+                    target_label=f"{locked_policy.name} ({locked_policy.code})",
+                    details={
+                        "policy_id": locked_policy.id,
+                        "policy_name": locked_policy.name,
+                        "is_active": True,
+                        "department_id": dept.id,
+                        "institution_id": inst.id,
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"PlatformAuditLog creation failed during policy activate: {e}")
+
+        serializer = self.get_serializer(locked_policy)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="archive")
+    def archive(self, request, pk=None):
+        policy = self.get_object()
+        user = request.user
+        dept = policy.department
+        inst = policy.institution
+        role = str(getattr(user, "role", "") or "").lower()
+        is_super = getattr(user, "is_superuser", False) or role == User.Role.PLATFORM_ADMIN
+        is_inst_admin = (role == User.Role.INSTITUTION_ADMIN and user.institution_id is not None and user.institution_id == inst.id)
+        is_dept_admin = is_user_department_admin_for_department(user, dept.id)
+
+        if not (is_super or is_inst_admin or is_dept_admin):
+            raise PermissionDenied("You do not have administrative permission to archive salary policies for this department.")
+
+        with transaction.atomic():
+            locked_policy = (
+                SalaryPolicy.objects.select_for_update()
+                .select_related("department", "institution")
+                .get(pk=policy.id)
+            )
+            if locked_policy.is_archived:
+                return Response(
+                    {"detail": f"Salary policy '{locked_policy.name}' is already archived."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            locked_policy.is_archived = True
+            locked_policy.archived_at = timezone.now()
+            locked_policy.archived_by = user
+            locked_policy.is_active = False  # Archived policies are deactivated from new assignments
+            locked_policy.save(update_fields=["is_archived", "archived_at", "archived_by", "is_active", "updated_at"])
+
+            try:
+                PlatformAuditLog.objects.create(
+                    actor=user,
+                    category="salary_policy",
+                    action="policy_archived",
+                    summary=f"Archived salary policy '{locked_policy.name}' (ID {locked_policy.id}) in {dept.name}",
+                    target_type="SalaryPolicy",
+                    target_id=str(locked_policy.id),
+                    target_label=f"{locked_policy.name} ({locked_policy.code})",
+                    details={
+                        "policy_id": locked_policy.id,
+                        "policy_name": locked_policy.name,
+                        "department_id": dept.id,
+                        "institution_id": inst.id,
+                        "archived_by": getattr(user, "username", str(user)),
+                        "archived_at": locked_policy.archived_at.isoformat(),
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"PlatformAuditLog creation failed during policy archive: {e}")
+
+        serializer = self.get_serializer(locked_policy)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="restore")
+    def restore(self, request, pk=None):
+        policy = self.get_object()
+        user = request.user
+        dept = policy.department
+        inst = policy.institution
+        role = str(getattr(user, "role", "") or "").lower()
+        is_super = getattr(user, "is_superuser", False) or role == User.Role.PLATFORM_ADMIN
+        is_inst_admin = (role == User.Role.INSTITUTION_ADMIN and user.institution_id is not None and user.institution_id == inst.id)
+        is_dept_admin = is_user_department_admin_for_department(user, dept.id)
+
+        if not (is_super or is_inst_admin or is_dept_admin):
+            raise PermissionDenied("You do not have administrative permission to restore salary policies for this department.")
+
+        with transaction.atomic():
+            locked_policy = (
+                SalaryPolicy.objects.select_for_update()
+                .select_related("department", "institution")
+                .get(pk=policy.id)
+            )
+            if not locked_policy.is_archived:
+                return Response(
+                    {"detail": f"Salary policy '{locked_policy.name}' is not archived."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            locked_policy.is_archived = False
+            locked_policy.archived_at = None
+            locked_policy.archived_by = None
+            locked_policy.is_active = False  # Restored to inactive state; does not automatically reactivate or assign teachers
+            locked_policy.save(update_fields=["is_archived", "archived_at", "archived_by", "is_active", "updated_at"])
+
+            try:
+                PlatformAuditLog.objects.create(
+                    actor=user,
+                    category="salary_policy",
+                    action="policy_restored",
+                    summary=f"Restored archived salary policy '{locked_policy.name}' (ID {locked_policy.id}) to inactive state in {dept.name}",
+                    target_type="SalaryPolicy",
+                    target_id=str(locked_policy.id),
+                    target_label=f"{locked_policy.name} ({locked_policy.code})",
+                    details={
+                        "policy_id": locked_policy.id,
+                        "policy_name": locked_policy.name,
+                        "department_id": dept.id,
+                        "institution_id": inst.id,
+                        "restored_by": getattr(user, "username", str(user)),
+                        "restored_at": timezone.now().isoformat(),
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"PlatformAuditLog creation failed during policy restore: {e}")
+
+        serializer = self.get_serializer(locked_policy)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"], url_path="versions")
     def versions(self, request, pk=None):
@@ -293,19 +888,36 @@ class SalaryPolicyVersionViewSet(viewsets.ModelViewSet):
         policy = version.policy
         department = policy.department
 
-        # 1. Authorization: Only authorized Department Administrators for this department
-        if not is_user_department_admin_for_department(user, department.id):
+        inst = policy.institution
+
+        # 1. Authorization: Only authorized Department Administrators or Platform Admin / Superuser
+        role = str(getattr(user, "role", "") or "").lower()
+        is_super = getattr(user, "is_superuser", False) or role == User.Role.PLATFORM_ADMIN
+        is_dept_admin = is_user_department_admin_for_department(user, department.id)
+
+        if not (is_super or is_dept_admin):
             raise PermissionDenied("Only authorized department administrators can delete salary policy versions.")
 
-        # 2. Check relationship integrity: Cannot delete if referenced by historical payroll or earning lines
+        # 2. Immutable published version safeguards
+        if version.status == SalaryPolicyVersion.Status.PUBLISHED:
+            raise DRFValidationError(
+                "Cannot delete a published salary policy version. Published versions must remain immutable for accounting audit integrity."
+            )
+        if version.published_at is not None:
+            raise DRFValidationError(
+                "Cannot delete a previously published salary policy version. Historical publication records must remain immutable."
+            )
+
+        # 3. Check relationship integrity: Cannot delete if referenced by overrides, historical payroll or earning lines
+        from salary.models import TeacherSalaryOverride
+        if TeacherSalaryOverride.objects.filter(teaching_plan__policy_version=version).exists():
+            raise DRFValidationError("Cannot discard draft policy version because teacher salary overrides reference it.")
         if TeacherPayroll.objects.filter(applied_policy_version=version).exists():
             raise DRFValidationError("Cannot delete policy version because teacher payroll records reference it.")
         if PayrollEarningLine.objects.filter(policy_version=version).exists():
             raise DRFValidationError("Cannot delete policy version because payroll earning lines reference it.")
 
-        was_published = (version.status == SalaryPolicyVersion.Status.PUBLISHED)
-
-        # 3. Atomic permanent deletion with platform audit trail
+        # 5. Atomic permanent deletion with platform audit trail
         with transaction.atomic():
             try:
                 PlatformAuditLog.objects.create(
@@ -313,7 +925,7 @@ class SalaryPolicyVersionViewSet(viewsets.ModelViewSet):
                     category="salary_policy",
                     action="policy_version_deleted",
                     summary=(
-                        f"Permanently deleted {'published' if was_published else 'draft'} salary policy version "
+                        f"Permanently deleted draft salary policy version "
                         f"v{version.version_number} for policy '{policy.name}' (ID {policy.id}) in {department.name}"
                     ),
                     target_type="SalaryPolicyVersion",
@@ -340,11 +952,6 @@ class SalaryPolicyVersionViewSet(viewsets.ModelViewSet):
                     f"PlatformAuditLog creation failed during version {version.id} deletion: {e}"
                 )
 
-            # If published but unreferenced, reset status first so model delete() succeeds
-            if was_published:
-                version.status = SalaryPolicyVersion.Status.DRAFT
-                version.save(update_fields=["status"])
-
             # Cascade delete owned configuration records and the version itself
             version.plan_tier_rates.all().delete()
             version.rate_tiers.all().delete()
@@ -358,59 +965,10 @@ class SalaryPolicyVersionViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="revert-to-draft")
     def revert_to_draft(self, request, pk=None):
-        version = self.get_object()
-        user = request.user
-        policy = version.policy
-        department = policy.department
-
-        # 1. Authorization: Only authorized Department Administrators
-        if not is_user_department_admin_for_department(user, department.id):
-            raise PermissionDenied("Only authorized department administrators can revert policy versions to draft.")
-
-        # 2. Status check
-        if version.status != SalaryPolicyVersion.Status.PUBLISHED:
-            raise DRFValidationError(f"Only published versions can be reverted to draft. Current status is '{version.status}'.")
-
-        # 3. Relationship checks: Cannot revert if payroll records already generated
-        if TeacherPayroll.objects.filter(applied_policy_version=version).exists():
-            raise DRFValidationError("Cannot revert policy version to draft because teacher payroll records already reference it.")
-        if PayrollEarningLine.objects.filter(policy_version=version).exists():
-            raise DRFValidationError("Cannot revert policy version to draft because payroll earning lines already reference it.")
-
-        # 4. Atomic revert to draft
-        with transaction.atomic():
-            version.status = SalaryPolicyVersion.Status.DRAFT
-            version.published_at = None
-            version.published_by = None
-            version.save(update_fields=["status", "published_at", "published_by"])
-
-            try:
-                PlatformAuditLog.objects.create(
-                    actor=user,
-                    category="salary_policy",
-                    action="policy_version_reverted_to_draft",
-                    summary=(
-                        f"Reverted published salary policy version v{version.version_number} "
-                        f"to draft for policy '{policy.name}' (ID {policy.id}) in {department.name}"
-                    ),
-                    target_type="SalaryPolicyVersion",
-                    target_id=str(version.id),
-                    target_label=f"v{version.version_number} [{policy.name}]",
-                    details={
-                        "policy_id": policy.id,
-                        "policy_name": policy.name,
-                        "version_number": version.version_number,
-                        "department_id": department.id,
-                        "reverted_by": getattr(user, "username", str(user)),
-                        "reverted_at": timezone.now().isoformat(),
-                    },
-                )
-            except Exception as e:
-                import logging
-                logging.getLogger("salary.views").warning(f"PlatformAuditLog creation failed: {e}")
-
-        serializer = self.get_serializer(version)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        raise DRFValidationError(
+            "Published salary policy versions are immutable and cannot be reverted to draft. "
+            "To adjust rates or parameters, clone this version into a new draft."
+        )
 
     def perform_update(self, serializer):
         instance = self.get_object()
@@ -482,6 +1040,38 @@ class SalaryPolicyVersionViewSet(viewsets.ModelViewSet):
             if negative_rates:
                 errors.append(f"Negative rate values found: {', '.join(negative_rates)}.")
 
+            # 3b. Basic monthly salary matrix completeness
+            comp_model = version.policy.compensation_model
+            is_basic_applicable = comp_model in (
+                SalaryPolicy.CompensationModel.BASIC_PLUS_PER_CLASS,
+                SalaryPolicy.CompensationModel.BASIC,
+            )
+            basic_salaries_count = version.plan_tier_basic_salaries.count()
+            if is_basic_applicable:
+                basic_map = {
+                    (b.teaching_plan_id, b.rate_tier_id): b.basic_salary_amount
+                    for b in version.plan_tier_basic_salaries.all()
+                }
+                missing_basic = []
+                negative_basic = []
+                for p in plans:
+                    for t in tiers:
+                        key = (p.id, t.id)
+                        if key not in basic_map:
+                            missing_basic.append(f"{p.plan_name} × {t.tier_name}")
+                        elif basic_map[key] < Decimal("0.00"):
+                            negative_basic.append(f"{p.plan_name} × {t.tier_name} ({basic_map[key]})")
+
+                if missing_basic:
+                    errors.append(
+                        f"Basic salary matrix is incomplete. {len(missing_basic)} cell(s) have no basic salary entered: {', '.join(missing_basic[:5])}"
+                        + (f" and {len(missing_basic)-5} more." if len(missing_basic) > 5 else ".")
+                    )
+                if negative_basic:
+                    errors.append(f"Negative basic salary values found: {', '.join(negative_basic)}.")
+            else:
+                basic_salaries_count = 0
+
         # 4. Effective date range overlap check with sibling published versions
         sibling_published = SalaryPolicyVersion.objects.filter(
             policy_id=version.policy_id,
@@ -504,6 +1094,8 @@ class SalaryPolicyVersionViewSet(viewsets.ModelViewSet):
             "tiers_count": len(tiers),
             "plans_count": len(plans),
             "rates_count": version.plan_tier_rates.count(),
+            "basic_salaries_count": version.plan_tier_basic_salaries.count(),
+            "total_matrix_cells": len(tiers) * len(plans),
         })
 
     @action(detail=True, methods=["post"], url_path="publish")
@@ -553,6 +1145,23 @@ class SalaryPolicyVersionViewSet(viewsets.ModelViewSet):
                 raise DRFValidationError(
                     f"Cannot publish: rate matrix incomplete. Missing {len(missing)} rate cell(s): {', '.join(missing[:4])}."
                 )
+
+            if locked_version.policy.compensation_model in (
+                SalaryPolicy.CompensationModel.BASIC_PLUS_PER_CLASS,
+                SalaryPolicy.CompensationModel.BASIC,
+            ):
+                basic_set = set(
+                    locked_version.plan_tier_basic_salaries.values_list("teaching_plan_id", "rate_tier_id")
+                )
+                missing_b = []
+                for p in plans:
+                    for t in tiers:
+                        if (p.id, t.id) not in basic_set:
+                            missing_b.append(f"{p.plan_name} × {t.tier_name}")
+                if missing_b:
+                    raise DRFValidationError(
+                        f"Cannot publish: basic salary matrix incomplete. Missing {len(missing_b)} basic salary cell(s): {', '.join(missing_b[:4])}."
+                    )
 
             # Check overlap with existing published versions
             for other in SalaryPolicyVersion.objects.filter(
@@ -650,6 +1259,16 @@ class SalaryPolicyVersionViewSet(viewsets.ModelViewSet):
                         rate_per_class=r.rate_per_class,
                     )
 
+            # Deep copy basic salary cells
+            for b in source.plan_tier_basic_salaries.all():
+                if b.teaching_plan_id in plan_map and b.rate_tier_id in tier_map:
+                    SalaryPlanTierBasicSalary.objects.create(
+                        policy_version=new_version,
+                        teaching_plan=plan_map[b.teaching_plan_id],
+                        rate_tier=tier_map[b.rate_tier_id],
+                        basic_salary_amount=b.basic_salary_amount,
+                    )
+
         detail_serializer = SalaryPolicyVersionDetailSerializer(new_version)
         return Response(detail_serializer.data, status=status.HTTP_201_CREATED)
 
@@ -666,6 +1285,7 @@ class SalaryPolicyVersionViewSet(viewsets.ModelViewSet):
 
         with transaction.atomic():
             version.plan_tier_rates.all().delete()
+            version.plan_tier_basic_salaries.all().delete()
             version.rate_tiers.all().delete()
             version.teaching_plans.all().delete()
 
@@ -793,6 +1413,7 @@ class SalaryRateMatrixView(APIView):
         plans = SalaryTeachingPlanSerializer(version.teaching_plans.all().order_by("sort_order"), many=True).data
         tiers = SalaryRateTierSerializer(version.rate_tiers.all().order_by("sort_order"), many=True).data
         rates = SalaryPlanTierRateSerializer(version.plan_tier_rates.all(), many=True).data
+        basic_salaries = SalaryPlanTierBasicSalarySerializer(version.plan_tier_basic_salaries.all(), many=True).data
 
         return Response({
             "version_id": version.id,
@@ -800,6 +1421,7 @@ class SalaryRateMatrixView(APIView):
             "teaching_plans": plans,
             "rate_tiers": tiers,
             "rates": rates,
+            "basic_salaries": basic_salaries,
         })
 
     def post(self, request, version_id):
@@ -816,12 +1438,21 @@ class SalaryRateMatrixView(APIView):
         serializer = BatchRateMatrixUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        rates_data = serializer.validated_data["rates"]
+        rates_data = serializer.validated_data.get("rates", [])
+        basic_salaries_data = serializer.validated_data.get("basic_salaries", [])
 
         valid_plan_ids = set(version.teaching_plans.values_list("id", flat=True))
         valid_tier_ids = set(version.rate_tiers.values_list("id", flat=True))
 
         for entry in rates_data:
+            p_id = entry["teaching_plan_id"]
+            t_id = entry["rate_tier_id"]
+            if p_id not in valid_plan_ids:
+                raise DRFValidationError(f"Teaching plan ID {p_id} does not belong to this policy version.")
+            if t_id not in valid_tier_ids:
+                raise DRFValidationError(f"Rate tier ID {t_id} does not belong to this policy version.")
+
+        for entry in basic_salaries_data:
             p_id = entry["teaching_plan_id"]
             t_id = entry["rate_tier_id"]
             if p_id not in valid_plan_ids:
@@ -843,10 +1474,26 @@ class SalaryRateMatrixView(APIView):
                 )
                 saved_count += 1
 
+            saved_basic_count = 0
+            for entry in basic_salaries_data:
+                p_id = entry["teaching_plan_id"]
+                t_id = entry["rate_tier_id"]
+                basic_val = entry["basic_salary_amount"]
+                SalaryPlanTierBasicSalary.objects.update_or_create(
+                    policy_version=version,
+                    teaching_plan_id=p_id,
+                    rate_tier_id=t_id,
+                    defaults={"basic_salary_amount": basic_val},
+                )
+                saved_basic_count += 1
+
         all_rates = SalaryPlanTierRateSerializer(version.plan_tier_rates.all(), many=True).data
+        all_basic_salaries = SalaryPlanTierBasicSalarySerializer(version.plan_tier_basic_salaries.all(), many=True).data
         return Response({
             "saved_count": saved_count,
+            "saved_basic_count": saved_basic_count,
             "rates": all_rates,
+            "basic_salaries": all_basic_salaries,
         }, status=status.HTTP_200_OK)
 
 
@@ -1024,6 +1671,9 @@ class TeacherPolicyAssignmentViewSet(viewsets.ModelViewSet):
                 {"detail": "Salary policy belongs to a different department than authorized department."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        if getattr(policy, "is_archived", False):
+            return Response({"detail": "Cannot assign an archived salary policy."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not policy.is_active:
             return Response({"detail": "Cannot assign an inactive salary policy."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1288,6 +1938,268 @@ class TeacherPolicyAssignmentViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+    @action(detail=False, methods=["post"], url_path="bulk-unassign")
+    def bulk_unassign(self, request):
+        """
+        Safely ends active salary policy assignments for multiple department teachers.
+        Preserves historical assignments, rates, and approved payroll records.
+        Enforces department ownership, payroll protection rules, transaction atomicity,
+        and generates individual PlatformAuditLog entries.
+        """
+        user = request.user
+        serializer = BulkTeacherPolicyUnassignSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        req_dept_id = data.get("department")
+        teacher_ids = data["teacher_ids"]
+        cutoff_date = data.get("effective_cutoff") or timezone.localdate()
+        reason = data.get("reason", "").strip()
+
+        # 1. Authorize requesting administrator's department
+        auth_dept_id = get_authorized_department_id_for_user(user, req_dept_id)
+        if not auth_dept_id:
+            raise PermissionDenied("You are not authorized to perform policy unassignments for this department.")
+
+        department = Department.objects.filter(pk=auth_dept_id).first()
+        if not department:
+            return Response({"detail": "Department not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # 2. Check protected payroll lock (Step 6)
+        locked_period = SalaryPayrollPeriod.objects.filter(
+            department_id=auth_dept_id,
+            payroll_year=cutoff_date.year,
+            payroll_month=cutoff_date.month,
+            status__in=[
+                SalaryPayrollPeriod.Status.DEPARTMENT_REVIEW,
+                SalaryPayrollPeriod.Status.PENDING_APPROVAL,
+                SalaryPayrollPeriod.Status.APPROVED,
+                SalaryPayrollPeriod.Status.PAID,
+            ],
+        ).first()
+        if locked_period:
+            return Response(
+                {
+                    "detail": (
+                        f"Cannot unassign policies effective {cutoff_date}: Payroll for "
+                        f"{locked_period.payroll_year}-{locked_period.payroll_month:02d} is in "
+                        f"'{locked_period.get_status_display()}' status and is protected against modifications. "
+                        "Historical and submitted payroll cannot be altered."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        successful = []
+        skipped = []
+        failed = []
+
+        try:
+            with transaction.atomic():
+                lock_kwargs = {"of": ("self",)} if getattr(connection.features, "has_select_for_update_of", False) else {}
+                teachers_qs = (
+                    TeacherProfile.objects.select_for_update(**lock_kwargs)
+                    .filter(pk__in=teacher_ids)
+                    .select_related("user")
+                )
+                teacher_map = {t.id: t for t in teachers_qs}
+
+                # Verify every teacher exists
+                missing_ids = [tid for tid in teacher_ids if tid not in teacher_map]
+                if missing_ids:
+                    return Response(
+                        {"detail": f"Teacher profiles with IDs {missing_ids} not found."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # Reject cross-department teachers
+                foreign_dept_teachers = [
+                    t for t in teacher_map.values()
+                    if t.department_id and t.department_id != auth_dept_id
+                ]
+                if foreign_dept_teachers:
+                    return Response(
+                        {"detail": "One or more selected teachers belong to a different department than authorized department."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # Process deduplicated teacher IDs preserving order
+                seen_teacher_ids = set()
+                for teacher_id in teacher_ids:
+                    if teacher_id in seen_teacher_ids:
+                        continue
+                    seen_teacher_ids.add(teacher_id)
+
+                    teacher = teacher_map[teacher_id]
+                    teacher_name = getattr(teacher, "historical_name", None) or (
+                        teacher.user.get_full_name() if teacher.user else f"Teacher #{teacher.pk}"
+                    )
+
+                    # Identify the teacher's active assignment covering cutoff_date
+                    active_assignment = (
+                        TeacherPolicyAssignment.objects.select_for_update(**lock_kwargs)
+                        .filter(
+                            teacher=teacher,
+                            department_id=auth_dept_id,
+                            is_active=True,
+                            effective_from__lte=cutoff_date,
+                        )
+                        .filter(models.Q(effective_to__isnull=True) | models.Q(effective_to__gte=cutoff_date))
+                        .select_related("policy")
+                        .order_by("-effective_from")
+                        .first()
+                    )
+
+                    if not active_assignment:
+                        skipped.append({
+                            "teacher_id": teacher.id,
+                            "teacher_name": teacher_name,
+                            "reason": f"No active salary policy assignment covering {cutoff_date}.",
+                        })
+                        continue
+
+                    policy_name = active_assignment.policy.name if active_assignment.policy else "Unknown"
+                    policy_id = active_assignment.policy_id
+                    prev_eff_from = active_assignment.effective_from
+                    prev_eff_to = active_assignment.effective_to
+
+                    # Safely end assignment through authorized lifecycle preserving history
+                    if cutoff_date > active_assignment.effective_from:
+                        active_assignment.effective_to = cutoff_date - timedelta(days=1)
+                    else:
+                        active_assignment.effective_to = active_assignment.effective_from
+                    active_assignment.is_active = False
+
+                    audit_note = f"[Unassigned effective {cutoff_date} by {user.username}]"
+                    if reason:
+                        audit_note += f" Reason: {reason}"
+                    if active_assignment.notes:
+                        active_assignment.notes = f"{active_assignment.notes}\n{audit_note}"
+                    else:
+                        active_assignment.notes = audit_note
+
+                    try:
+                        active_assignment.save()
+                    except (DjangoValidationError, DRFValidationError) as ve:
+                        err_msg = str(ve.message_dict if hasattr(ve, "message_dict") else ve)
+                        failed.append({
+                            "teacher_id": teacher.id,
+                            "teacher_name": teacher_name,
+                            "reason": f"Unassignment validation failed: {err_msg}",
+                        })
+                        continue
+
+                    # PlatformAuditLog for each unassigned teacher
+                    try:
+                        PlatformAuditLog.objects.create(
+                            actor=user,
+                            category="salary_assignment",
+                            action="unassign_policy",
+                            summary=(
+                                f"Bulk unassigned salary policy '{policy_name}' from {teacher_name} "
+                                f"(effective cutoff: {cutoff_date})"
+                            ),
+                            target_type="TeacherPolicyAssignment",
+                            target_id=str(active_assignment.id),
+                            target_label=f"{teacher_name} -> {policy_name}",
+                            details={
+                                "assignment_id": active_assignment.id,
+                                "department_id": department.id,
+                                "teacher_id": teacher.id,
+                                "teacher_name": teacher_name,
+                                "policy_id": policy_id,
+                                "policy_name": policy_name,
+                                "effective_cutoff": cutoff_date.isoformat(),
+                                "previous_effective_from": prev_eff_from.isoformat(),
+                                "previous_effective_to": prev_eff_to.isoformat() if prev_eff_to else None,
+                                "new_effective_to": active_assignment.effective_to.isoformat() if active_assignment.effective_to else None,
+                                "is_active": active_assignment.is_active,
+                                "reason": reason,
+                                "is_bulk": True,
+                            },
+                        )
+                    except Exception as log_err:
+                        logger.warning(f"PlatformAuditLog creation failed: {log_err}")
+
+                    successful.append({
+                        "teacher_id": teacher.id,
+                        "teacher_name": teacher_name,
+                        "assignment_id": active_assignment.id,
+                        "policy_id": policy_id,
+                        "policy_name": policy_name,
+                        "effective_from": prev_eff_from.isoformat(),
+                        "effective_to": active_assignment.effective_to.isoformat() if active_assignment.effective_to else None,
+                        "is_active": active_assignment.is_active,
+                    })
+
+                # If any assignments were unassigned, update affected draft payroll (Step 7)
+                if successful:
+                    draft_period = SalaryPayrollPeriod.objects.filter(
+                        department_id=auth_dept_id,
+                        payroll_year=cutoff_date.year,
+                        payroll_month=cutoff_date.month,
+                        status__in=[
+                            SalaryPayrollPeriod.Status.DRAFT,
+                            SalaryPayrollPeriod.Status.RETURNED_FOR_CORRECTION,
+                        ],
+                    ).first()
+                    if draft_period:
+                        draft_period.is_calculation_complete = False
+                        recalc_note = "Teacher policy assignments unassigned. Recalculation required before submission."
+                        if recalc_note not in draft_period.incompleteness_reasons:
+                            draft_period.incompleteness_reasons.append(recalc_note)
+                        draft_period.save(update_fields=["is_calculation_complete", "incompleteness_reasons", "updated_at"])
+
+                    # Batch summary audit log
+                    try:
+                        PlatformAuditLog.objects.create(
+                            actor=user,
+                            category="salary_assignment",
+                            action="bulk_unassign_policy",
+                            summary=(
+                                f"Bulk unassigned salary policies in {department.name}: "
+                                f"{len(successful)} unassigned, {len(skipped)} skipped, {len(failed)} failed "
+                                f"(effective cutoff: {cutoff_date})."
+                            ),
+                            target_type="Department",
+                            target_id=str(department.id),
+                            target_label=department.name,
+                            details={
+                                "department_id": department.id,
+                                "effective_cutoff": cutoff_date.isoformat(),
+                                "unassigned_count": len(successful),
+                                "skipped_count": len(skipped),
+                                "failed_count": len(failed),
+                                "unassigned_teacher_ids": [s["teacher_id"] for s in successful],
+                                "skipped_teacher_ids": [s["teacher_id"] for s in skipped],
+                                "reason": reason,
+                            },
+                        )
+                    except Exception as log_err:
+                        logger.warning(f"PlatformAuditLog batch creation failed: {log_err}")
+
+        except Exception as exc:
+            logger.exception(f"Unexpected error in bulk_unassign: {exc}")
+            return Response(
+                {"detail": "Bulk unassignment could not be completed. No changes were saved."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                "total_requested": len(seen_teacher_ids),
+                "unassigned_count": len(successful),
+                "skipped_count": len(skipped),
+                "failed_count": len(failed),
+                "effective_cutoff": cutoff_date.isoformat(),
+                "successful": successful,
+                "skipped": skipped,
+                "failed": failed,
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
 class TeacherSalaryOverrideViewSet(viewsets.ModelViewSet):
     """
@@ -1379,6 +2291,71 @@ class TeacherSalaryOverrideViewSet(viewsets.ModelViewSet):
         )
 
 
+class AuthorizedSalaryDepartmentsView(APIView):
+    """
+    Returns departments the authenticated user is authorized to manage or view in Unified Salary.
+    - Department Admin: departments where they have the department_admin role.
+    - Institution Admin: all active departments in their institution.
+    - Platform Admin / Superuser: all active departments across institutions.
+    - Teachers / Students / Coordinators: 403 Forbidden.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        role = str(getattr(user, "role", "") or "").lower()
+
+        if role in {User.Role.TEACHER, User.Role.STUDENT, User.Role.COORDINATOR}:
+            return Response(
+                {"detail": "You do not have permission to access the Unified Salary Management system."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        departments_qs = Department.objects.filter(is_active=True).select_related("institution")
+
+        if getattr(user, "is_superuser", False) or role == User.Role.PLATFORM_ADMIN:
+            departments = departments_qs.order_by("institution__name", "name")
+        elif role == User.Role.INSTITUTION_ADMIN:
+            if not user.institution_id:
+                return Response([], status=status.HTTP_200_OK)
+            departments = departments_qs.filter(institution_id=user.institution_id).order_by("name")
+        else:
+            authorized_dept_ids = set()
+            if role == User.Role.DEPARTMENT_ADMIN and user.department_id:
+                authorized_dept_ids.add(user.department_id)
+
+            secondary_ids = UserDepartmentRole.objects.filter(
+                user=user,
+                is_active=True,
+                role=UserDepartmentRole.Role.DEPARTMENT_ADMIN,
+            ).values_list("department_id", flat=True)
+            authorized_dept_ids.update(secondary_ids)
+
+            if not authorized_dept_ids:
+                return Response(
+                    {"detail": "You are not authorized for any department salary management."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            departments = departments_qs.filter(id__in=authorized_dept_ids).order_by("institution__name", "name")
+
+        primary_dept_id = getattr(user, "department_id", None)
+
+        data = [
+            {
+                "id": dept.id,
+                "name": dept.name,
+                "code": dept.code,
+                "department_type": dept.department_type,
+                "institution_id": dept.institution_id,
+                "institution_name": dept.institution.name if dept.institution else "",
+                "is_primary": dept.id == primary_dept_id,
+            }
+            for dept in departments
+        ]
+        return Response(data, status=status.HTTP_200_OK)
+
+
 class DepartmentTeachersView(APIView):
     """
     Returns department teachers eligible for salary policies,
@@ -1390,8 +2367,6 @@ class DepartmentTeachersView(APIView):
         user = request.user
         dept_id = request.query_params.get("department_id")
         auth_dept_id = get_authorized_department_id_for_user(user, dept_id)
-        if not auth_dept_id and (getattr(user, "is_superuser", False) or str(getattr(user, "role", "")).lower() in {"platform_admin", "institution_admin"}):
-            auth_dept_id = dept_id
 
         if not auth_dept_id:
             return Response({"detail": "Department ID is required and must be authorized."}, status=status.HTTP_403_FORBIDDEN)
@@ -1437,7 +2412,7 @@ class DepartmentTeachersView(APIView):
 
         teacher_list = []
         for t in teachers:
-            t_name = getattr(t, "historical_name", None) or (t.user.get_full_name() if t.user else f"Teacher #{t.pk}")
+            t_name = (getattr(t, "historical_name", "") or "").strip() or (t.user.get_full_name() if t.user else "").strip() or (t.user.username if t.user else f"Teacher #{t.pk}")
             t_email = t.user.email if t.user else ""
 
             current_assignment = active_assignments.get(t.id)
@@ -1517,8 +2492,6 @@ class DepartmentStudentsView(APIView):
         user = request.user
         dept_id = request.query_params.get("department_id")
         auth_dept_id = get_authorized_department_id_for_user(user, dept_id)
-        if not auth_dept_id and (getattr(user, "is_superuser", False) or str(getattr(user, "role", "")).lower() in {"platform_admin", "institution_admin"}):
-            auth_dept_id = dept_id
 
         if not auth_dept_id:
             return Response({"detail": "Department ID is required and must be authorized."}, status=status.HTTP_403_FORBIDDEN)
@@ -1561,11 +2534,11 @@ class RatePreviewView(APIView):
 
         # Scope validation
         auth_dept_id = get_authorized_department_id_for_user(user, dept_id)
-        if not auth_dept_id and not (getattr(user, "is_superuser", False) or str(getattr(user, "role", "")).lower() in {"platform_admin", "institution_admin"}):
+        if not auth_dept_id:
             return Response({"detail": "You are not authorized for this department."}, status=status.HTTP_403_FORBIDDEN)
 
         result = resolve_teacher_class_rate(
-            department_id=dept_id,
+            department_id=auth_dept_id,
             teacher_id=data["teacher_id"],
             class_date=data.get("class_date"),
             teaching_plan_id=data.get("teaching_plan_id"),
@@ -1981,11 +2954,11 @@ class AttendanceReconciliationPreviewView(APIView):
 
         # Scope validation
         auth_dept_id = get_authorized_department_id_for_user(user, dept_id)
-        if not auth_dept_id and not (getattr(user, "is_superuser", False) or str(getattr(user, "role", "")).lower() in {"platform_admin", "institution_admin"}):
+        if not auth_dept_id:
             raise PermissionDenied("You are not authorized for this department.")
 
         try:
-            dept = Department.objects.get(pk=dept_id)
+            dept = Department.objects.get(pk=auth_dept_id)
         except Department.DoesNotExist:
             return Response({"detail": "Department not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -2066,10 +3039,10 @@ class AttendanceVerificationSummaryView(APIView):
 
         user = request.user
         auth_dept_id = get_authorized_department_id_for_user(user, dept_id)
-        if not auth_dept_id and not (getattr(user, "is_superuser", False) or str(getattr(user, "role", "")).lower() in {"platform_admin", "institution_admin"}):
+        if not auth_dept_id:
             raise PermissionDenied("You are not authorized for this department.")
 
-        target_dept_id = auth_dept_id or dept_id
+        target_dept_id = auth_dept_id
         if not target_dept_id:
             return Response({"detail": "department_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -2105,10 +3078,10 @@ class AttendanceApprovalReadinessView(APIView):
 
         user = request.user
         auth_dept_id = get_authorized_department_id_for_user(user, dept_id)
-        if not auth_dept_id and not (getattr(user, "is_superuser", False) or str(getattr(user, "role", "")).lower() in {"platform_admin", "institution_admin"}):
+        if not auth_dept_id:
             raise PermissionDenied("You are not authorized for this department.")
 
-        target_dept_id = auth_dept_id or dept_id
+        target_dept_id = auth_dept_id
         if not target_dept_id or not year or not month:
             return Response({"detail": "department_id, year, and month are required."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -2146,10 +3119,10 @@ class SalaryCalculationPreviewView(APIView):
         auth_dept_id = get_authorized_department_id_for_user(user, req_dept_id)
 
         # Non-admin roles (teachers, students, coordinators) cannot preview department salary
-        if not auth_dept_id and not (getattr(user, "is_superuser", False) or role in {"platform_admin", "institution_admin"}):
+        if not auth_dept_id:
             raise PermissionDenied("You are not authorized to view salary calculations for this department.")
 
-        target_dept_id = auth_dept_id or req_dept_id
+        target_dept_id = auth_dept_id
         if not target_dept_id:
             return Response({"detail": "department_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -2290,15 +3263,11 @@ class PayrollAdjustmentViewSet(viewsets.ModelViewSet):
         if role in {User.Role.TEACHER, User.Role.STUDENT, User.Role.COORDINATOR}:
             return PayrollAdjustment.objects.none()
 
-        auth_dept_id = get_authorized_department_id_for_user(user)
         req_dept_id = self.request.query_params.get("department_id")
-
-        if auth_dept_id:
-            target_dept_id = auth_dept_id
-        elif getattr(user, "is_superuser", False) or role in {"platform_admin", "institution_admin"}:
-            target_dept_id = req_dept_id
-        else:
+        auth_dept_id = get_authorized_department_id_for_user(user, req_dept_id)
+        if not auth_dept_id:
             return PayrollAdjustment.objects.none()
+        target_dept_id = auth_dept_id
 
         qs = PayrollAdjustment.objects.all().select_related("teacher", "teacher__user", "department", "created_by", "cancelled_by")
         if target_dept_id:
@@ -2890,15 +3859,11 @@ class SalaryBulkAdjustmentBatchViewSet(viewsets.ReadOnlyModelViewSet):
         if role in {User.Role.TEACHER, User.Role.STUDENT, User.Role.COORDINATOR}:
             return SalaryBulkAdjustmentBatch.objects.none()
 
-        auth_dept_id = get_authorized_department_id_for_user(user)
         req_dept_id = self.request.query_params.get("department_id")
-
-        if auth_dept_id:
-            target_dept_id = auth_dept_id
-        elif getattr(user, "is_superuser", False) or role in {"platform_admin", "institution_admin"}:
-            target_dept_id = req_dept_id
-        else:
+        auth_dept_id = get_authorized_department_id_for_user(user, req_dept_id)
+        if not auth_dept_id:
             return SalaryBulkAdjustmentBatch.objects.none()
+        target_dept_id = auth_dept_id
 
         qs = SalaryBulkAdjustmentBatch.objects.all().select_related("department", "created_by", "confirmed_by")
         if target_dept_id:
@@ -2942,9 +3907,11 @@ class RecurringSalaryAdjustmentViewSet(viewsets.ModelViewSet):
         if role in {User.Role.TEACHER, User.Role.STUDENT, User.Role.COORDINATOR}:
             return RecurringSalaryAdjustment.objects.none()
 
-        auth_dept_id = get_authorized_department_id_for_user(user)
         req_dept_id = self.request.query_params.get("department_id")
-        target_dept_id = auth_dept_id or req_dept_id
+        auth_dept_id = get_authorized_department_id_for_user(user, req_dept_id)
+        if not auth_dept_id:
+            return RecurringSalaryAdjustment.objects.none()
+        target_dept_id = auth_dept_id
 
         qs = RecurringSalaryAdjustment.objects.all().select_related("teacher", "teacher__user", "department")
         if target_dept_id:
@@ -3104,9 +4071,11 @@ class SalaryAdvanceRecoveryViewSet(viewsets.ModelViewSet):
         if role in {User.Role.TEACHER, User.Role.STUDENT, User.Role.COORDINATOR}:
             return SalaryAdvanceRecovery.objects.none()
 
-        auth_dept_id = get_authorized_department_id_for_user(user)
         req_dept_id = self.request.query_params.get("department_id")
-        target_dept_id = auth_dept_id or req_dept_id
+        auth_dept_id = get_authorized_department_id_for_user(user, req_dept_id)
+        if not auth_dept_id:
+            return RecurringSalaryAdjustment.objects.none()
+        target_dept_id = auth_dept_id
 
         qs = SalaryAdvanceRecovery.objects.all().select_related("teacher", "teacher__user", "department")
         if target_dept_id:
@@ -3240,19 +4209,9 @@ class SalaryPayrollPeriodViewSet(viewsets.ReadOnlyModelViewSet):
         if role in {User.Role.TEACHER, User.Role.STUDENT, User.Role.COORDINATOR}:
             return SalaryPayrollPeriod.objects.none()
 
-        auth_dept_id = get_authorized_department_id_for_user(user)
-        req_dept_id = self.request.query_params.get("department_id")
-
-        if auth_dept_id:
-            target_dept_id = auth_dept_id
-        elif getattr(user, "is_superuser", False) or role in {"platform_admin", "institution_admin"}:
-            target_dept_id = req_dept_id
-        else:
-            return SalaryPayrollPeriod.objects.none()
-
         qs = SalaryPayrollPeriod.objects.all().select_related("department", "institution", "submitted_by", "created_by", "approved_by")
         if getattr(self, "action", None) == "retrieve":
-            qs = qs.prefetch_related(
+            return qs.prefetch_related(
                 Prefetch(
                     "teacher_payrolls",
                     queryset=TeacherPayroll.objects.select_related(
@@ -3263,6 +4222,13 @@ class SalaryPayrollPeriodViewSet(viewsets.ReadOnlyModelViewSet):
                     ).prefetch_related("earning_lines"),
                 )
             )
+
+        req_dept_id = self.request.query_params.get("department_id")
+        auth_dept_id = get_authorized_department_id_for_user(user, req_dept_id)
+        if not auth_dept_id:
+            return SalaryPayrollPeriod.objects.none()
+        target_dept_id = auth_dept_id
+
         if target_dept_id:
             qs = qs.filter(department_id=target_dept_id)
 
@@ -3638,9 +4604,11 @@ class TeacherPayrollViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action != "list":
             return self.queryset
 
-        auth_dept_id = get_authorized_department_id_for_user(user)
         req_dept_id = self.request.query_params.get("department_id")
-        target_dept_id = auth_dept_id or req_dept_id
+        auth_dept_id = get_authorized_department_id_for_user(user, req_dept_id)
+        if not auth_dept_id:
+            return RecurringSalaryAdjustment.objects.none()
+        target_dept_id = auth_dept_id
 
         qs = self.queryset
         if target_dept_id:
@@ -3748,9 +4716,11 @@ class PayrollCorrectionRequestViewSet(viewsets.ReadOnlyModelViewSet):
         if role in {User.Role.TEACHER, User.Role.STUDENT, User.Role.COORDINATOR}:
             return self.queryset.none()
 
-        auth_dept_id = get_authorized_department_id_for_user(user)
         req_dept_id = self.request.query_params.get("department_id")
-        target_dept_id = auth_dept_id or req_dept_id
+        auth_dept_id = get_authorized_department_id_for_user(user, req_dept_id)
+        if not auth_dept_id:
+            return RecurringSalaryAdjustment.objects.none()
+        target_dept_id = auth_dept_id
 
         qs = self.queryset
         if target_dept_id:
@@ -3809,9 +4779,11 @@ class SalaryEngineCutoverViewSet(viewsets.ReadOnlyModelViewSet):
         role = str(getattr(user, "role", "") or "").lower()
         if role in {User.Role.TEACHER, User.Role.STUDENT, User.Role.COORDINATOR}:
             return self.queryset.none()
-        auth_dept_id = get_authorized_department_id_for_user(user)
         req_dept_id = self.request.query_params.get("department_id")
-        target_dept_id = auth_dept_id or req_dept_id
+        auth_dept_id = get_authorized_department_id_for_user(user, req_dept_id)
+        if not auth_dept_id:
+            return RecurringSalaryAdjustment.objects.none()
+        target_dept_id = auth_dept_id
         qs = self.queryset
         if target_dept_id:
             qs = qs.filter(department_id=target_dept_id)

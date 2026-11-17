@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Save, Lock, AlertCircle, CheckCircle2, Calendar, Settings2, ShieldAlert } from "lucide-react";
+import { Save, Lock, AlertCircle, CheckCircle2, Calendar, Settings2, ShieldAlert, Coins } from "lucide-react";
 import {
   type SalaryPolicyVersionDetail,
   updateDraftVersion,
@@ -8,6 +8,7 @@ import {
 interface Props {
   version: SalaryPolicyVersionDetail;
   isReadOnly: boolean;
+  compensationModel?: "per_class" | "basic" | "basic_plus_per_class";
   onVersionUpdated: (updated: SalaryPolicyVersionDetail) => void;
 }
 
@@ -24,6 +25,7 @@ const WEEKDAYS = [
 export default function SalaryPolicyEditor({
   version,
   isReadOnly,
+  compensationModel = "basic_plus_per_class",
   onVersionUpdated,
 }: Props) {
   const [effectiveFrom, setEffectiveFrom] = useState(version.effective_from || "");
@@ -279,22 +281,55 @@ export default function SalaryPolicyEditor({
             <span className="text-[10px] text-slate-400 mt-0.5 block">Governance for scheduled class cancellations</span>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              Policy Basic Monthly Salary (Rs.)
-            </label>
-            <input
-              type="number"
-              min="0"
-              step="100"
-              placeholder="e.g. 25000"
-              disabled={isReadOnly}
-              value={basicSalaryAmount}
-              onChange={(e) => setBasicSalaryAmount(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-100 disabled:text-slate-500"
-            />
-            <span className="text-[10px] text-slate-400 mt-0.5 block">Default base for basic & basic+per-class models</span>
-          </div>
+          {compensationModel === "basic_plus_per_class" ? (
+            isReadOnly && version.basic_salary_amount ? (
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Historical Basic Monthly Salary (Rs.)
+                </label>
+                <div className="w-full rounded-xl border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600">
+                  Rs. {Number(version.basic_salary_amount).toLocaleString("en-PK", { minimumFractionDigits: 2 })}
+                </div>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">Historical policy default preserved for this published version</span>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
+                <div className="text-xs font-bold text-indigo-900 flex items-center gap-1.5">
+                  <Coins size={14} className="text-indigo-600" />
+                  Basic Monthly Salary
+                </div>
+                <p className="text-[11px] text-indigo-700 mt-1 leading-snug">
+                  Configured through <strong>Matrix A: Basic Monthly Salary</strong> under the <em>2D Rate Matrix &amp; Plans</em> tab (per Teaching Package and Student-Count Tier).
+                </p>
+              </div>
+            )
+          ) : compensationModel === "per_class" ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div className="text-xs font-bold text-slate-600">
+                Pure Per-Class Policy
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1 leading-snug">
+                This policy operates strictly on per-class compensation. Basic monthly salary is not applicable.
+              </p>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Policy Basic Monthly Salary (Rs.)
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="100"
+                placeholder="e.g. 25000"
+                disabled={isReadOnly}
+                value={basicSalaryAmount}
+                onChange={(e) => setBasicSalaryAmount(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-100 disabled:text-slate-500"
+              />
+              <span className="text-[10px] text-slate-400 mt-0.5 block">Default base for basic compensation model</span>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">

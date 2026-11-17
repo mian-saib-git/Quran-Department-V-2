@@ -291,15 +291,23 @@ class PayrollLifecycleService:
 
             # 1. Basic salary line if applicable
             if b_salary > Decimal("0.00"):
+                matrix_rate_val = to_decimal(tp_data.get("basic_salary_matrix_rate")) if tp_data.get("basic_salary_matrix_rate") else b_salary
                 earning_lines_to_create.append(
                     PayrollEarningLine(
                         teacher_payroll=tp,
                         earning_type=PayrollEarningLine.EarningType.BASIC_SALARY,
-                        rate=b_salary,
+                        rate=matrix_rate_val,
                         quantity=Decimal("1.00"),
                         amount=b_salary,
                         policy_version=applied_version,
-                        metadata={"notes": tp_data.get("basic_salary_notes", [])},
+                        metadata={
+                            "notes": tp_data.get("basic_salary_notes", []),
+                            "teaching_plan_name": tp_data.get("basic_salary_package"),
+                            "rate_tier_name": tp_data.get("basic_salary_tier"),
+                            "matrix_rate": tp_data.get("basic_salary_matrix_rate"),
+                            "policy_version": tp_data.get("basic_salary_policy_version"),
+                            "cell_id": tp_data.get("basic_salary_cell_id"),
+                        },
                     )
                 )
 

@@ -1212,10 +1212,11 @@ export default function App() {
 
   const isTabLocked = useCallback(
     (tab: TabId) => {
+      if (tab === "teacher-salary" && (isSuperAdmin || isDepartmentAdmin)) return false;
       const featureKey = tabFeatureKey[tab];
       return Boolean(featureKey && featureContextLoaded && !hasFeature(featureKey));
     },
-    [featureContextLoaded, hasFeature]
+    [featureContextLoaded, hasFeature, isDepartmentAdmin, isSuperAdmin]
   );
 
   const isTabHiddenByDepartmentAdmin = useCallback(
@@ -4688,10 +4689,13 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
               )}
 
               {/* TEACHER SALARY MANAGEMENT */}
-              {effectiveActiveTab === "teacher-salary" && session?.role !== "coordinator" && hasFeature("tab_teacher_salary") && (
+              {effectiveActiveTab === "teacher-salary" && session?.role !== "coordinator" && (isSuperAdmin || isDepartmentAdmin || hasFeature("tab_teacher_salary")) && (
                 <Suspense fallback={<TabLoading />}>
                   <TeacherSalaryManagement
+                    departmentId={Number(activeDepartment?.id || 0)}
                     departmentName={quranDepartmentDisplayName}
+                    institutionId={Number(authContext?.institution?.id || (session as any)?.user?.institution_id || 0)}
+                    institutionName={String(authContext?.institution?.name || "")}
                     salaryLifecycleRole={
                       isSuperAdmin
                         ? "super_admin"

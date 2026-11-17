@@ -138,6 +138,11 @@ export interface TeacherSalaryPreview {
   }>;
   is_net_negative?: boolean;
   basic_salary_notes: string | null;
+  basic_salary_package?: string | null;
+  basic_salary_tier?: string | null;
+  basic_salary_matrix_rate?: string | null;
+  basic_salary_policy_version?: string | null;
+  basic_salary_cell_id?: number | null;
   student_count_timeline: StudentCountTimelineEntry[];
   teaching_plan_timeline: string[];
   applied_overrides: Array<{

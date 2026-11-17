@@ -156,6 +156,15 @@ class SalaryPolicy(models.Model):
         default=CompensationModel.PER_CLASS,
     )
     is_active = models.BooleanField(default=True, db_index=True)
+    is_archived = models.BooleanField(default=False, db_index=True)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -207,11 +216,298 @@ class SalaryPolicy(models.Model):
             return None
         return intervals[-1][1]
 
+    def build_complete_snapshot(self, actor_user=None, deletion_reason=""):
+        """Construct a complete, immutable snapshot of the salary policy, all its versions,
+        teaching plans, student rate tiers, 2D rate matrices, teacher assignment history, and audit metadata.
+        """
+        actor_name = getattr(actor_user, "username", str(actor_user)) if actor_user else "system"
+        actor_id = getattr(actor_user, "id", None)
+        now_iso = timezone.now().isoformat()
+
+        versions_data = []
+        for v in self.versions.all().order_by("version_number"):
+            plans_data = [
+                {
+                    "id": p.id,
+                    "plan_code": p.plan_code,
+                    "plan_name": p.plan_name,
+                    "days_per_week": p.days_per_week,
+                    "is_coordinator_special": p.is_coordinator_special,
+                    "sort_order": p.sort_order,
+                }
+                for p in v.teaching_plans.all().order_by("sort_order")
+            ]
+            tiers_data = [
+                {
+                    "id": t.id,
+                    "tier_name": t.tier_name,
+                    "min_students": t.min_students,
+                    "max_students": t.max_students,
+                    "sort_order": t.sort_order,
+                }
+                for t in v.rate_tiers.all().order_by("sort_order", "min_students")
+            ]
+            matrix_data = []
+            matrix_map = {}
+            for r in v.plan_tier_rates.select_related("teaching_plan", "rate_tier").all():
+                rate_str = str(r.rate_per_class)
+                p_code = r.teaching_plan.plan_code
+                t_name = r.rate_tier.tier_name
+                matrix_data.append({
+                    "teaching_plan_id": r.teaching_plan_id,
+                    "plan_code": p_code,
+                    "plan_name": r.teaching_plan.plan_name,
+                    "rate_tier_id": r.rate_tier_id,
+                    "tier_name": t_name,
+                    "min_students": r.rate_tier.min_students,
+                    "max_students": r.rate_tier.max_students,
+                    "rate_per_class": rate_str,
+                })
+                matrix_map[f"{p_code}_{r.rate_tier_id}"] = rate_str
+                matrix_map[f"{p_code}_{t_name}"] = rate_str
+                matrix_map[f"{r.teaching_plan_id}_{r.rate_tier_id}"] = rate_str
+
+            versions_data.append({
+                "id": v.id,
+                "version_number": v.version_number,
+                "status": v.status,
+                "effective_from": v.effective_from.isoformat() if v.effective_from else None,
+                "effective_to": v.effective_to.isoformat() if v.effective_to else None,
+                "week_start_day": v.week_start_day,
+                "min_qualifying_weeks": v.min_qualifying_weeks,
+                "lesson_plan_bonus_per_class": str(v.lesson_plan_bonus_per_class),
+                "substitute_rate_per_class": str(v.substitute_rate_per_class),
+                "cancellation_rate_per_class": str(v.cancellation_rate_per_class),
+                "cancellation_payment_rule": v.cancellation_payment_rule,
+                "basic_salary_amount": str(v.basic_salary_amount) if v.basic_salary_amount is not None else None,
+                "basic_salary_partial_month_proration": v.basic_salary_partial_month_proration,
+                "coordinator_qualifying_weekdays": v.coordinator_qualifying_weekdays or [],
+                "requires_completed_lesson_for_bonus": v.requires_completed_lesson_for_bonus,
+                "notes": v.notes,
+                "published_at": v.published_at.isoformat() if v.published_at else None,
+                "published_by": str(v.published_by) if v.published_by else None,
+                "teaching_plans": plans_data,
+                "rate_tiers": tiers_data,
+                "rate_matrix": matrix_data,
+                "matrix_rates_map": matrix_map,
+            })
+
+        assignments_data = []
+        for a in self.teacher_assignments.select_related("teacher", "teacher__user").all():
+            t_name = getattr(a.teacher, "historical_name", None) or (
+                a.teacher.user.get_full_name() if getattr(a.teacher, "user", None) else f"Teacher #{a.teacher_id}"
+            )
+            assignments_data.append({
+                "assignment_id": a.id,
+                "teacher_id": a.teacher_id,
+                "teacher_name": t_name,
+                "department_id": a.department_id,
+                "effective_from": a.effective_from.isoformat() if a.effective_from else None,
+                "effective_to": a.effective_to.isoformat() if a.effective_to else None,
+                "is_active": a.is_active,
+                "basic_salary_override": str(a.basic_salary_override) if a.basic_salary_override is not None else None,
+                "basic_salary_eligibility": a.basic_salary_eligibility,
+                "notes": a.notes,
+                "assigned_at": a.assigned_at.isoformat() if a.assigned_at else None,
+                "assigned_by": str(a.assigned_by) if a.assigned_by else None,
+            })
+
+        return {
+            "policy_id": self.id,
+            "policy_name": self.name,
+            "policy_code": self.code,
+            "department_id": self.department_id,
+            "department_name": getattr(self.department, "name", ""),
+            "institution_id": self.institution_id,
+            "institution_name": getattr(self.institution, "name", ""),
+            "compensation_model": self.compensation_model,
+            "policy_type": self.policy_type,
+            "policy": {
+                "id": self.id,
+                "name": self.name,
+                "code": self.code,
+                "description": self.description,
+                "policy_type": self.policy_type,
+                "compensation_model": self.compensation_model,
+                "institution_id": self.institution_id,
+                "institution_name": getattr(self.institution, "name", ""),
+                "department_id": self.department_id,
+                "department_name": getattr(self.department, "name", ""),
+                "is_active": self.is_active,
+                "is_archived": getattr(self, "is_archived", False),
+                "created_at": self.created_at.isoformat() if self.created_at else None,
+                "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            },
+            "versions": versions_data,
+            "teacher_assignments": assignments_data,
+            "audit": {
+                "snapshot_created_at": now_iso,
+                "deleted_by_id": actor_id,
+                "deleted_by_username": actor_name,
+                "deletion_reason": deletion_reason or "Admin permanent policy deletion",
+            },
+        }
+
+    def get_deletion_eligibility(self):
+        """Authoritative deletion eligibility check for this SalaryPolicy.
+
+        Shared across:
+        - GET /api/salary/policies/{id}/deletion-eligibility/
+        - DELETE /api/salary/policies/{id}/
+        - policy.delete()
+
+        Eligible for permanent deletion when:
+        1. 0 active teacher assignments (historical assignments are preserved as immutable snapshots)
+        2. 0 protected payroll references (TeacherPayroll, PayrollEarningLine)
+        3. 0 teacher salary overrides referencing this policy or its version teaching plans
+        Published versions do NOT block deletion if historical records can be preserved safely.
+        """
+        from django.apps import apps
+        TeacherPayroll = apps.get_model("salary", "TeacherPayroll")
+        TeacherSalaryOverride = apps.get_model("salary", "TeacherSalaryOverride")
+        PayrollEarningLine = apps.get_model("salary", "PayrollEarningLine")
+
+        blocking_reasons = []
+
+        # 1. Version counts for reporting (published versions do NOT block deletion if safely preserved)
+        published_versions_count = self.versions.filter(
+            status=SalaryPolicyVersion.Status.PUBLISHED
+        ).count()
+        previously_published_versions_count = self.versions.filter(
+            published_at__isnull=False
+        ).exclude(status=SalaryPolicyVersion.Status.PUBLISHED).count()
+
+        # 2. Teacher assignments check: active assignments block deletion
+        # An assignment is genuinely active if is_active=True and effective_to is open-ended or in current/future range
+        today = timezone.localdate()
+        active_assignments = self.teacher_assignments.filter(
+            is_active=True,
+        ).filter(
+            models.Q(effective_to__isnull=True) | models.Q(effective_to__gte=today)
+        ).select_related("teacher", "teacher__user")
+        active_teacher_assignments = active_assignments.count()
+        historical_teacher_assignments = self.teacher_assignments.exclude(
+            id__in=active_assignments.values_list("id", flat=True)
+        ).count()
+        total_teacher_assignments = active_teacher_assignments + historical_teacher_assignments
+
+        if active_teacher_assignments > 0:
+            active_names = [
+                getattr(a.teacher, "historical_name", None) or (
+                    a.teacher.user.get_full_name() if getattr(a.teacher, "user", None) else f"Teacher #{a.teacher_id}"
+                )
+                for a in active_assignments[:5]
+            ]
+            names_str = ", ".join(active_names)
+            if active_teacher_assignments > 5:
+                names_str += f" and {active_teacher_assignments - 5} more"
+            blocking_reasons.append(
+                f"Cannot delete salary policy that has active teacher assignments. "
+                f"Policy is actively assigned to {active_teacher_assignments} teacher(s): {names_str}. "
+                "Existing teacher assignments must be unassigned or reassigned before deleting."
+            )
+
+        # 3. Teacher salary overrides check: identify exact override records
+        overrides = TeacherSalaryOverride.objects.filter(
+            models.Q(salary_policy=self) | models.Q(teaching_plan__policy_version__policy=self)
+        ).distinct().select_related("teacher", "teacher__user")
+        teacher_overrides_count = overrides.count()
+        if teacher_overrides_count > 0:
+            override_samples = [
+                f"{getattr(o.teacher, 'historical_name', None) or (o.teacher.user.get_full_name() if getattr(o.teacher, 'user', None) else f'Teacher #{o.teacher_id}')} "
+                f"({o.get_override_level_display()}: Rs. {o.rate_per_class})"
+                for o in overrides[:5]
+            ]
+            records_str = ", ".join(override_samples)
+            if teacher_overrides_count > 5:
+                records_str += f" and {teacher_overrides_count - 5} more"
+            blocking_reasons.append(
+                f"Cannot delete salary policy referenced by {teacher_overrides_count} teacher salary override(s): {records_str}."
+            )
+
+        # 4. Payroll and financial dependencies check: identify exact records
+        version_ids = list(self.versions.values_list("id", flat=True))
+        payrolls = TeacherPayroll.objects.filter(
+            models.Q(applied_policy=self) | models.Q(applied_policy_version_id__in=version_ids)
+        ).select_related("teacher", "teacher__user", "payroll_period")
+        payroll_count = payrolls.count()
+
+        earning_lines = PayrollEarningLine.objects.filter(policy_version_id__in=version_ids).select_related(
+            "teacher_payroll", "teacher_payroll__teacher", "teacher_payroll__teacher__user"
+        )
+        earning_lines_count = earning_lines.count()
+        protected_payroll_references_count = payroll_count + earning_lines_count
+
+        if protected_payroll_references_count > 0:
+            records = []
+            if payroll_count > 0:
+                for tp in payrolls[:5]:
+                    t_name = getattr(tp.teacher, "historical_name", None) or (
+                        tp.teacher.user.get_full_name() if getattr(tp.teacher, "user", None) else f"Teacher #{tp.teacher_id}"
+                    )
+                    records.append(f"{tp.payroll_period} ({t_name}, Net Rs. {tp.net_salary})")
+                if payroll_count > 5:
+                    records.append(f"...and {payroll_count - 5} more payroll record(s)")
+            elif earning_lines_count > 0:
+                for el in earning_lines[:5]:
+                    records.append(f"{el.get_earning_type_display()} on {el.effective_date} (Rs. {el.amount})")
+                if earning_lines_count > 5:
+                    records.append(f"...and {earning_lines_count - 5} more line(s)")
+            records_str = "; ".join(records)
+            blocking_reasons.append(
+                f"Cannot delete salary policy referenced by {protected_payroll_references_count} historical payroll record(s): {records_str}."
+            )
+
+        can_delete = len(blocking_reasons) == 0
+
+        return {
+            "can_delete": can_delete,
+            "policy_id": self.id,
+            "policy_name": self.name,
+            "policy_code": self.code,
+            "is_active": self.is_active,
+            "is_archived": getattr(self, "is_archived", False),
+            "total_teacher_assignments": total_teacher_assignments,
+            "active_teacher_assignments": active_teacher_assignments,
+            "historical_teacher_assignments": historical_teacher_assignments,
+            "published_versions_count": published_versions_count,
+            "previously_published_versions_count": previously_published_versions_count,
+            "teacher_overrides_count": teacher_overrides_count,
+            "protected_payroll_references_count": protected_payroll_references_count,
+            "blocking_reasons": blocking_reasons,
+        }
+
     def delete(self, *args, **kwargs):
-        if self.versions.filter(status=SalaryPolicyVersion.Status.PUBLISHED).exists():
-            raise ValidationError("Cannot delete a salary policy that contains published versions.")
-        if self.teacher_assignments.exists():
-            raise ValidationError("Cannot delete a salary policy that has teacher assignments.")
+        actor_user = kwargs.pop("actor_user", None)
+        deletion_reason = kwargs.pop("deletion_reason", "")
+        eligibility = self.get_deletion_eligibility()
+        if not eligibility["can_delete"]:
+            raise ValidationError(eligibility["blocking_reasons"][0])
+
+        # Safely preserve complete immutable historical snapshot on all assignments
+        complete_snapshot = self.build_complete_snapshot(actor_user=actor_user, deletion_reason=deletion_reason)
+
+        from django.apps import apps
+        TeacherPolicyAssignment = apps.get_model("salary", "TeacherPolicyAssignment")
+        for assignment in TeacherPolicyAssignment.objects.filter(policy=self):
+            assignment.policy_snapshot_name = self.name
+            assignment.policy_snapshot_code = self.code
+            assignment.archived_policy_snapshot = complete_snapshot
+            actor_name = getattr(actor_user, "username", str(actor_user)) if actor_user else "admin"
+            note_entry = f"[Detached upon permanent policy deletion by {actor_name} on {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}]"
+            if note_entry not in (assignment.notes or ""):
+                assignment.notes = f"{assignment.notes.rstrip()}\n{note_entry}".strip() if assignment.notes else note_entry
+            assignment.policy = None
+            assignment.save(update_fields=[
+                "policy",
+                "policy_snapshot_name",
+                "policy_snapshot_code",
+                "archived_policy_snapshot",
+                "notes",
+            ])
+
+        # Mark policy as deleting to cascade cleanly through published version guards
+        self._deleting_policy = True
         return super().delete(*args, **kwargs)
 
 
@@ -361,6 +657,12 @@ class SalaryPolicyVersion(models.Model):
                 # Allowed transition: published -> archived
                 if self.status == self.Status.ARCHIVED:
                     pass  # Archiving is allowed
+                elif self.status == self.Status.DRAFT:
+                    if self.policy_id and self.policy.teacher_assignments.exists():
+                        raise ValidationError(
+                            "Cannot revert published policy version to draft because teacher assignments exist for this salary policy. "
+                            "Published versions must remain immutable."
+                        )
                 else:
                     # Published versions cannot modify configuration or dates
                     fields_to_check = [
@@ -430,8 +732,27 @@ class SalaryPolicyVersion(models.Model):
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        if self.status == self.Status.PUBLISHED:
-            raise ValidationError("Cannot delete a published salary policy version.")
+        allow_policy_delete = (
+            kwargs.pop("allow_policy_delete", False)
+            or getattr(self, "_allow_policy_delete", False)
+            or getattr(getattr(self, "policy", None), "_deleting_policy", False)
+        )
+        if not allow_policy_delete:
+            if self.status == self.Status.PUBLISHED:
+                raise ValidationError("Cannot delete a published salary policy version. Published versions must remain immutable.")
+            if self.published_at is not None:
+                raise ValidationError("Cannot delete a previously published salary policy version. Historical publication records must remain immutable.")
+
+        from django.apps import apps
+        TeacherSalaryOverride = apps.get_model("salary", "TeacherSalaryOverride")
+        if TeacherSalaryOverride.objects.filter(teaching_plan__policy_version=self).exists():
+            raise ValidationError("Cannot delete policy version because teacher salary overrides reference it.")
+        TeacherPayroll = apps.get_model("salary", "TeacherPayroll")
+        PayrollEarningLine = apps.get_model("salary", "PayrollEarningLine")
+        if TeacherPayroll.objects.filter(applied_policy_version=self).exists():
+            raise ValidationError("Cannot delete policy version because teacher payroll records reference it.")
+        if PayrollEarningLine.objects.filter(policy_version=self).exists():
+            raise ValidationError("Cannot delete policy version because payroll earning lines reference it.")
         return super().delete(*args, **kwargs)
 
 
@@ -508,8 +829,17 @@ class SalaryRateTier(models.Model):
 
 
     def delete(self, *args, **kwargs):
-        if self.policy_version.status == SalaryPolicyVersion.Status.PUBLISHED:
-            raise ValidationError("Cannot delete rate tiers of a published policy version.")
+        pv = getattr(self, "policy_version", None)
+        pol = getattr(pv, "policy", None) if pv else None
+        allow_policy_delete = (
+            kwargs.pop("allow_policy_delete", False)
+            or getattr(self, "_allow_policy_delete", False)
+            or (pv and getattr(pv, "_allow_policy_delete", False))
+            or (pol and getattr(pol, "_deleting_policy", False))
+        )
+        if not allow_policy_delete:
+            if pv and pv.status == SalaryPolicyVersion.Status.PUBLISHED:
+                raise ValidationError("Cannot delete rate tiers of a published policy version.")
         return super().delete(*args, **kwargs)
 
 
@@ -561,8 +891,17 @@ class SalaryTeachingPlan(models.Model):
 
 
     def delete(self, *args, **kwargs):
-        if self.policy_version.status == SalaryPolicyVersion.Status.PUBLISHED:
-            raise ValidationError("Cannot delete teaching plans of a published policy version.")
+        pv = getattr(self, "policy_version", None)
+        pol = getattr(pv, "policy", None) if pv else None
+        allow_policy_delete = (
+            kwargs.pop("allow_policy_delete", False)
+            or getattr(self, "_allow_policy_delete", False)
+            or (pv and getattr(pv, "_allow_policy_delete", False))
+            or (pol and getattr(pol, "_deleting_policy", False))
+        )
+        if not allow_policy_delete:
+            if pv and pv.status == SalaryPolicyVersion.Status.PUBLISHED:
+                raise ValidationError("Cannot delete teaching plans of a published policy version.")
         return super().delete(*args, **kwargs)
 
 
@@ -634,8 +973,96 @@ class SalaryPlanTierRate(models.Model):
 
 
     def delete(self, *args, **kwargs):
-        if self.policy_version.status == SalaryPolicyVersion.Status.PUBLISHED:
-            raise ValidationError("Cannot delete rates of a published policy version.")
+        pv = getattr(self, "policy_version", None)
+        pol = getattr(pv, "policy", None) if pv else None
+        allow_policy_delete = (
+            kwargs.pop("allow_policy_delete", False)
+            or getattr(self, "_allow_policy_delete", False)
+            or (pv and getattr(pv, "_allow_policy_delete", False))
+            or (pol and getattr(pol, "_deleting_policy", False))
+        )
+        if not allow_policy_delete:
+            if pv and pv.status == SalaryPolicyVersion.Status.PUBLISHED:
+                raise ValidationError("Cannot delete rates of a published policy version.")
+        return super().delete(*args, **kwargs)
+
+
+class SalaryPlanTierBasicSalary(models.Model):
+    """Two-dimensional monthly basic salary cell: Teaching Plan x Student-Count Tier."""
+
+    policy_version = models.ForeignKey(
+        SalaryPolicyVersion,
+        on_delete=models.CASCADE,
+        related_name="plan_tier_basic_salaries",
+    )
+    teaching_plan = models.ForeignKey(
+        SalaryTeachingPlan,
+        on_delete=models.CASCADE,
+        related_name="tier_basic_salaries",
+    )
+    rate_tier = models.ForeignKey(
+        SalaryRateTier,
+        on_delete=models.CASCADE,
+        related_name="plan_basic_salaries",
+    )
+    basic_salary_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        help_text="PKR monthly basic salary amount for this teaching package and student tier.",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["policy_version", "teaching_plan", "rate_tier"],
+                name="unique_plan_tier_basic_salary_entry",
+            ),
+            models.CheckConstraint(
+                check=models.Q(basic_salary_amount__gte=Decimal("0.00")),
+                name="check_positive_basic_salary_amount",
+            ),
+        ]
+        ordering = ["policy_version", "teaching_plan", "rate_tier"]
+        verbose_name = "Salary Plan Tier Basic Salary"
+        verbose_name_plural = "Salary Plan Tier Basic Salaries"
+
+    def __str__(self):
+        return f"{self.teaching_plan.plan_code} x {self.rate_tier.tier_name}: Rs. {self.basic_salary_amount}/mo"
+
+    def clean(self):
+        super().clean()
+        if self.policy_version_id and self.policy_version.status == SalaryPolicyVersion.Status.PUBLISHED:
+            raise ValidationError("Cannot modify basic salary cells of a published policy version.")
+
+        if self.basic_salary_amount is not None and self.basic_salary_amount < Decimal("0.00"):
+            raise ValidationError({"basic_salary_amount": "Basic salary amount must be non-negative."})
+
+        # Foreign version integrity: teaching plan must belong to the same policy version
+        if self.teaching_plan_id and self.policy_version_id:
+            if self.teaching_plan.policy_version_id != self.policy_version_id:
+                raise ValidationError({"teaching_plan": "Teaching plan does not belong to the specified policy version."})
+
+        # Foreign version integrity: rate tier must belong to the same policy version
+        if self.rate_tier_id and self.policy_version_id:
+            if self.rate_tier.policy_version_id != self.policy_version_id:
+                raise ValidationError({"rate_tier": "Rate tier does not belong to the specified policy version."})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        pv = getattr(self, "policy_version", None)
+        pol = getattr(pv, "policy", None) if pv else None
+        allow_policy_delete = (
+            kwargs.pop("allow_policy_delete", False)
+            or getattr(self, "_allow_policy_delete", False)
+            or (pv and getattr(pv, "_allow_policy_delete", False))
+            or (pol and getattr(pol, "_deleting_policy", False))
+        )
+        if not allow_policy_delete:
+            if pv and pv.status == SalaryPolicyVersion.Status.PUBLISHED:
+                raise ValidationError("Cannot delete basic salary rates of a published policy version.")
         return super().delete(*args, **kwargs)
 
 
@@ -654,8 +1081,27 @@ class TeacherPolicyAssignment(models.Model):
     )
     policy = models.ForeignKey(
         SalaryPolicy,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="teacher_assignments",
+    )
+    policy_snapshot_name = models.CharField(
+        max_length=150,
+        blank=True,
+        default="",
+        help_text="Immutable policy name snapshot preserved if policy is permanently deleted.",
+    )
+    policy_snapshot_code = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+        help_text="Immutable policy code snapshot preserved if policy is permanently deleted.",
+    )
+    archived_policy_snapshot = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Full immutable snapshot of the salary policy details when safely detached upon deletion.",
     )
     effective_from = models.DateField(db_index=True)
     effective_to = models.DateField(null=True, blank=True, db_index=True)
@@ -704,7 +1150,8 @@ class TeacherPolicyAssignment(models.Model):
 
     def __str__(self):
         teacher_name = getattr(self.teacher, "historical_name", None) or str(self.teacher)
-        return f"{teacher_name} -> {self.policy.name} ({self.department.name})"
+        pol_name = self.policy.name if self.policy else (self.policy_snapshot_name or "Detached Policy")
+        return f"{teacher_name} -> {pol_name} ({self.department.name})"
 
     def clean(self):
         super().clean()
@@ -723,6 +1170,10 @@ class TeacherPolicyAssignment(models.Model):
         if self.policy_id and self.department_id:
             if self.policy.department_id != self.department_id:
                 raise ValidationError({"policy": "Salary policy belongs to a different department than assignment department."})
+
+        # Archived policy check: Cannot assign an archived policy
+        if self.policy_id and getattr(self.policy, "is_archived", False):
+            raise ValidationError({"policy": "Cannot assign an archived salary policy."})
 
         # Prevent ambiguous overlapping active assignments for the same teacher and department
         if self.is_active and self.teacher_id and self.department_id and self.effective_from:

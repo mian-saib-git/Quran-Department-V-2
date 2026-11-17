@@ -47,6 +47,7 @@ from salary.models import (
     PayrollAdjustment,
     SalaryAttendanceVerification,
     SalaryPlanTierRate,
+    SalaryPlanTierBasicSalary,
     SalaryPolicy,
     SalaryPolicyVersion,
     SalaryRateTier,
@@ -160,6 +161,10 @@ class CalculationPrefetchContext:
 
     # Reconciliation batch
     batch: Optional[SalaryReconciliationBatch] = None
+
+    # 2D Basic salary matrix cache: (version_id, plan_id, tier_id) -> Decimal
+    matrix_basic_salaries: Dict[Tuple[int, int, int], Decimal] = field(default_factory=dict)
+    matrix_basic_salary_cell_ids: Dict[Tuple[int, int, int], int] = field(default_factory=dict)
 
 
 def build_calculation_prefetch_context(
@@ -326,11 +331,10 @@ def build_calculation_prefetch_context(
         TeacherPolicyAssignment.objects.filter(
             teacher_id__in=teacher_ids,
             department=department,
-            is_active=True,
             effective_from__lte=last_date,
         ).filter(Q(effective_to__isnull=True) | Q(effective_to__gte=first_date))
         .select_related("policy")
-        .order_by("-effective_from")
+        .order_by("-is_active", "-effective_from")
     )
     assign_by_teacher = {}
     policy_ids = set()
@@ -346,11 +350,13 @@ def build_calculation_prefetch_context(
             status=SalaryPolicyVersion.Status.PUBLISHED,
             effective_from__lte=last_date,
         ).filter(Q(effective_to__isnull=True) | Q(effective_to__gte=first_date))
-        .prefetch_related("rate_tiers", "teaching_plans", "plan_tier_rates")
+        .prefetch_related("rate_tiers", "teaching_plans", "plan_tier_rates", "plan_tier_basic_salaries")
         .order_by("-effective_from", "-version_number")
     )
     versions_by_policy = defaultdict(list)
     matrix_rates = {}
+    matrix_basic_salaries = {}
+    matrix_basic_salary_cell_ids = {}
     for v in published_versions:
         sorted_plans = sorted(v.teaching_plans.all(), key=lambda p: getattr(p, "sort_order", 0))
         setattr(v, "_cached_sorted_plans", sorted_plans)
@@ -359,6 +365,11 @@ def build_calculation_prefetch_context(
         versions_by_policy[v.policy_id].append(v)
         for cell in v.plan_tier_rates.all():
             matrix_rates[(v.id, cell.teaching_plan_id, cell.rate_tier_id)] = cell.rate_per_class
+        for bcell in v.plan_tier_basic_salaries.all():
+            matrix_basic_salaries[(v.id, bcell.teaching_plan_id, bcell.rate_tier_id)] = bcell.basic_salary_amount
+            matrix_basic_salary_cell_ids[(v.id, bcell.teaching_plan_id, bcell.rate_tier_id)] = bcell.id
+    ctx.matrix_basic_salaries = matrix_basic_salaries
+    ctx.matrix_basic_salary_cell_ids = matrix_basic_salary_cell_ids
 
     overrides = list(
         TeacherSalaryOverride.objects.filter(
@@ -397,6 +408,8 @@ def build_calculation_prefetch_context(
             assignment=assign,
             versions=v_list,
             matrix_rates=matrix_rates,
+            matrix_basic_salaries=matrix_basic_salaries,
+            matrix_basic_salary_cell_ids=matrix_basic_salary_cell_ids,
             overrides=overrides_by_teacher.get(t.id, []),
             is_coordinator=is_coord,
         )
@@ -971,6 +984,11 @@ def calculate_teacher_salary_preview(
             "adjustments": adjustment_items,
             "is_net_negative": (Decimal("0.00") + total_pos_adjustments - total_cut_adjustments) < Decimal("0.00"),
             "basic_salary_notes": "No salary policy assigned.",
+            "basic_salary_package": None,
+            "basic_salary_tier": None,
+            "basic_salary_matrix_rate": None,
+            "basic_salary_policy_version": None,
+            "basic_salary_cell_id": None,
             "student_count_timeline": [],
             "teaching_plan_timeline": [],
             "applied_overrides": [],
@@ -980,6 +998,19 @@ def calculate_teacher_salary_preview(
         }
 
     policy = assignment.policy
+    if not policy and assignment.archived_policy_snapshot:
+        snap_p = assignment.archived_policy_snapshot.get("policy", {})
+        policy_id = snap_p.get("id")
+        policy_name = snap_p.get("name") or assignment.policy_snapshot_name or "Preserved Policy"
+        policy_code = snap_p.get("code") or assignment.policy_snapshot_code or "PRESERVED"
+        policy_type = snap_p.get("policy_type", "standard")
+        compensation_model = snap_p.get("compensation_model", "per_class")
+    else:
+        policy_id = policy.id if policy else None
+        policy_name = policy.name if policy else "Unknown"
+        policy_code = policy.code if policy else "UNKNOWN"
+        policy_type = policy.policy_type if policy else "standard"
+        compensation_model = policy.compensation_model if policy else "per_class"
 
     # 2. Lookup published SalaryPolicyVersions covering the month from prefetch context
     published_versions = rate_ctx.versions if rate_ctx else []
@@ -994,14 +1025,14 @@ def calculate_teacher_salary_preview(
             "payroll_month": month,
             "is_calculation_complete": False,
             "incompleteness_reasons": [
-                f"Policy '{policy.name}' has no published version effective for period {year}-{month:02d}."
+                f"Policy '{policy_name}' has no published version effective for period {year}-{month:02d}."
             ],
             "salary_policy": {
-                "id": policy.id,
-                "name": policy.name,
-                "code": policy.code,
-                "policy_type": policy.policy_type,
-                "compensation_model": policy.compensation_model,
+                "id": policy_id,
+                "name": policy_name,
+                "code": policy_code,
+                "policy_type": policy_type,
+                "compensation_model": compensation_model,
             },
             "policy_version": None,
             "summary_counts": {
@@ -1029,6 +1060,11 @@ def calculate_teacher_salary_preview(
             "adjustments": adjustment_items,
             "is_net_negative": (Decimal("0.00") + total_pos_adjustments - total_cut_adjustments) < Decimal("0.00"),
             "basic_salary_notes": "No published policy version found.",
+            "basic_salary_package": None,
+            "basic_salary_tier": None,
+            "basic_salary_matrix_rate": None,
+            "basic_salary_policy_version": None,
+            "basic_salary_cell_id": None,
             "student_count_timeline": [],
             "teaching_plan_timeline": [],
             "applied_overrides": [],
@@ -1582,55 +1618,245 @@ def calculate_teacher_salary_preview(
     # 9. Basic Monthly Salary Evaluation
     basic_salary_earnings = Decimal("0.00")
     basic_salary_notes = None
+    primary_package_name = None
+    primary_tier_name = None
+    primary_matrix_rate = None
+    primary_cell_id = None
+    primary_version_label = f"v{version.version_number}" if version else None
 
     if policy.compensation_model == SalaryPolicy.CompensationModel.PER_CLASS:
         basic_salary_notes = "Policy operates on pure per-class compensation model. Basic salary not applicable."
     else:
         # Policy is configured as basic or basic_plus_per_class
-        base_amount = None
-        amount_source = None
+        proration_mode = getattr(version, "basic_salary_partial_month_proration", "calendar_days")
+        assign_start = assignment.effective_from
+        assign_end = assignment.effective_to
+        active_start = max(first_date, assign_start)
+        active_end = min(last_date, assign_end) if assign_end else last_date
 
-        if assignment.basic_salary_override is not None:
+        if active_start > active_end:
+            basic_salary_earnings = Decimal("0.00")
+            basic_salary_notes = "Assignment was not active during the payroll period."
+        elif assignment.basic_salary_override is not None:
+            # Teacher agreement override takes precedence
             base_amount = assignment.basic_salary_override
             amount_source = f"teacher agreement override ({teacher_name})"
-        elif version.basic_salary_amount is not None:
-            base_amount = version.basic_salary_amount
-            amount_source = f"policy default ({policy.name} v{version.version_number})"
-
-        if base_amount is None:
-            basic_salary_notes = (
-                f"Configuration missing: Policy compensation model is '{policy.get_compensation_model_display()}', "
-                f"but no basic salary amount is configured on TeacherPolicyAssignment or SalaryPolicyVersion (v{version.version_number})."
-            )
-            incompleteness_reasons.append(
-                f"Basic salary amount is not configured for teacher {teacher_name} under policy '{policy.name}'."
-            )
-        else:
-            proration_mode = getattr(version, "basic_salary_partial_month_proration", "calendar_days")
-            assign_start = assignment.effective_from
-            assign_end = assignment.effective_to
-            active_start = max(first_date, assign_start)
-            active_end = min(last_date, assign_end) if assign_end else last_date
-
-            if active_start > active_end:
-                basic_salary_earnings = Decimal("0.00")
-                basic_salary_notes = "Assignment was not active during the payroll period."
+            primary_matrix_rate = base_amount
+            total_month_days = last_date.day
+            active_days_count = (active_end - active_start).days + 1
+            if active_days_count < total_month_days and proration_mode == "calendar_days":
+                prorated_amount = (to_decimal(base_amount) * Decimal(active_days_count) / Decimal(total_month_days)).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+                basic_salary_earnings = prorated_amount
+                basic_salary_notes = (
+                    f"Basic salary from {amount_source}: Rs. {base_amount} prorated for "
+                    f"{active_days_count}/{total_month_days} active calendar days ({active_start.isoformat()} to {active_end.isoformat()}) "
+                    f"to Rs. {basic_salary_earnings}."
+                )
             else:
-                total_month_days = last_date.day
-                active_days_count = (active_end - active_start).days + 1
-                if active_days_count < total_month_days and proration_mode == "calendar_days":
-                    prorated_amount = (to_decimal(base_amount) * Decimal(active_days_count) / Decimal(total_month_days)).quantize(
-                        Decimal("0.01"), rounding=ROUND_HALF_UP
-                    )
-                    basic_salary_earnings = prorated_amount
-                    basic_salary_notes = (
-                        f"Basic salary from {amount_source}: Rs. {base_amount} prorated for "
-                        f"{active_days_count}/{total_month_days} active calendar days ({active_start.isoformat()} to {active_end.isoformat()}) "
-                        f"to Rs. {basic_salary_earnings}."
-                    )
+                basic_salary_earnings = to_decimal(base_amount)
+                basic_salary_notes = f"Full month basic salary from {amount_source}: Rs. {basic_salary_earnings}."
+        else:
+            # Determine basic salary via 2D Rate Matrix (Matrix A: Plan × Tier)
+            teacher_plans = getattr(version, "_cached_sorted_plans", None)
+            if not teacher_plans:
+                teacher_plans = list(version.teaching_plans.all().order_by("sort_order", "plan_code"))
+            default_plan = teacher_plans[0] if teacher_plans else None
+
+            # Occurrence plan lookup by date
+            occ_plan_by_date = {}
+            for occ in parsed_occurrences:
+                m_plan = resolve_occurrence_teaching_plan(occ, version, prefetch_context=prefetch_context, plan_cache=plan_cache)
+                if m_plan:
+                    occ_plan_by_date[occ["class_date"]] = m_plan
+
+            total_month_days = last_date.day
+            active_days_count = (active_end - active_start).days + 1
+
+            # Build daily evaluations across active assignment days
+            daily_evaluations = []
+            curr_d = active_start
+            missing_basic_matrix = False
+
+            while curr_d <= active_end:
+                day_ver = get_effective_version(curr_d)
+                day_tiers = getattr(day_ver, "_cached_sorted_tiers", None)
+                if not day_tiers:
+                    day_tiers = list(day_ver.rate_tiers.all().order_by("sort_order", "min_students"))
+
+                day_cnt, _ = student_count_cache.get(curr_d, (0, []))
+                matched_t = None
+                for t in day_tiers:
+                    if t.min_students <= day_cnt and (t.max_students is None or day_cnt <= t.max_students):
+                        matched_t = t
+                        break
+                if not matched_t and day_tiers:
+                    matched_t = day_tiers[0]
+
+                # Determine teaching package for this date
+                day_plan = occ_plan_by_date.get(curr_d)
+                if not day_plan:
+                    st_schedules = prefetch_context.schedules_by_teacher.get(teacher.id, []) if prefetch_context else []
+                    act_weekdays = set()
+                    for s in st_schedules:
+                        if s.is_active:
+                            if (s.effective_from is None or s.effective_from <= curr_d) and (s.effective_to is None or s.effective_to >= curr_d):
+                                act_weekdays.add(s.weekday)
+                    if act_weekdays:
+                        days_pw = len(act_weekdays)
+                        for p in teacher_plans:
+                            if not p.is_coordinator_special and p.days_per_week == days_pw:
+                                day_plan = p
+                                break
+                    if not day_plan:
+                        day_plan = default_plan
+
+                # Lookup basic salary in matrix
+                b_cell_amount = None
+                b_cell_id = None
+                cell_key = (day_ver.id, day_plan.id if day_plan else None, matched_t.id if matched_t else None)
+                if prefetch_context and cell_key in prefetch_context.matrix_basic_salaries:
+                    b_cell_amount = prefetch_context.matrix_basic_salaries[cell_key]
+                    b_cell_id = prefetch_context.matrix_basic_salary_cell_ids.get(cell_key)
+                elif rate_ctx and cell_key in rate_ctx.matrix_basic_salaries:
+                    b_cell_amount = rate_ctx.matrix_basic_salaries[cell_key]
+                    b_cell_id = getattr(rate_ctx, "matrix_basic_salary_cell_ids", {}).get(cell_key)
                 else:
-                    basic_salary_earnings = to_decimal(base_amount)
-                    basic_salary_notes = f"Full month basic salary from {amount_source}: Rs. {basic_salary_earnings}."
+                    b_cell = SalaryPlanTierBasicSalary.objects.filter(
+                        policy_version=day_ver,
+                        teaching_plan=day_plan,
+                        rate_tier=matched_t,
+                    ).first()
+                    if b_cell:
+                        b_cell_amount = b_cell.basic_salary_amount
+                        b_cell_id = b_cell.id
+
+                if b_cell_amount is not None:
+                    src = f"matrix cell ({day_plan.plan_name if day_plan else 'Default'} × {matched_t.tier_name if matched_t else 'Default'} v{day_ver.version_number})"
+                    daily_evaluations.append({
+                        "date": curr_d,
+                        "version": day_ver,
+                        "plan": day_plan,
+                        "tier": matched_t,
+                        "monthly_rate": b_cell_amount,
+                        "cell_id": b_cell_id,
+                        "source": src,
+                    })
+                elif day_ver.basic_salary_amount is not None:
+                    # Legacy published policy version fallback
+                    src = f"legacy policy default ({policy.name} v{day_ver.version_number})"
+                    daily_evaluations.append({
+                        "date": curr_d,
+                        "version": day_ver,
+                        "plan": day_plan,
+                        "tier": matched_t,
+                        "monthly_rate": day_ver.basic_salary_amount,
+                        "cell_id": None,
+                        "source": src,
+                    })
+                else:
+                    missing_basic_matrix = True
+                    daily_evaluations.append({
+                        "date": curr_d,
+                        "version": day_ver,
+                        "plan": day_plan,
+                        "tier": matched_t,
+                        "monthly_rate": Decimal("0.00"),
+                        "cell_id": None,
+                        "source": "missing",
+                    })
+
+                curr_d += timedelta(days=1)
+
+            if missing_basic_matrix:
+                basic_salary_notes = (
+                    f"Configuration missing: Basic monthly salary matrix cell is not configured for "
+                    f"teacher {teacher_name} under policy '{policy.name}' (v{version.version_number})."
+                )
+                incompleteness_reasons.append(
+                    f"Basic monthly salary matrix cell is missing for teacher {teacher_name} under policy '{policy.name}'."
+                )
+            elif daily_evaluations:
+                # Group consecutive identical evaluations into segments
+                segments = []
+                cur_seg = None
+                for ev in daily_evaluations:
+                    key = (ev["version"].id, ev["plan"].id if ev["plan"] else None, ev["tier"].id if ev["tier"] else None, ev["monthly_rate"])
+                    if cur_seg is None or cur_seg["key"] != key:
+                        if cur_seg is not None:
+                            segments.append(cur_seg)
+                        cur_seg = {
+                            "key": key,
+                            "version": ev["version"],
+                            "plan": ev["plan"],
+                            "tier": ev["tier"],
+                            "monthly_rate": ev["monthly_rate"],
+                            "source": ev["source"],
+                            "cell_id": ev["cell_id"],
+                            "days": 1,
+                            "start_date": ev["date"],
+                            "end_date": ev["date"],
+                        }
+                    else:
+                        cur_seg["days"] += 1
+                        cur_seg["end_date"] = ev["date"]
+                if cur_seg is not None:
+                    segments.append(cur_seg)
+
+                # Primary plan/tier display metadata from predominant or final segment
+                primary_seg = max(segments, key=lambda s: s["days"])
+                primary_package_name = primary_seg["plan"].plan_name if primary_seg["plan"] else None
+                primary_tier_name = primary_seg["tier"].tier_name if primary_seg["tier"] else None
+                primary_matrix_rate = primary_seg["monthly_rate"]
+                primary_cell_id = primary_seg["cell_id"]
+                primary_version_label = f"v{primary_seg['version'].version_number}"
+
+                if proration_mode == "none":
+                    basic_salary_earnings = to_decimal(primary_seg["monthly_rate"])
+                    basic_salary_notes = f"Full month basic salary from {primary_seg['source']}: Rs. {basic_salary_earnings} (no proration)."
+                elif len(segments) == 1:
+                    seg = segments[0]
+                    if active_days_count >= total_month_days:
+                        basic_salary_earnings = to_decimal(seg["monthly_rate"])
+                        basic_salary_notes = f"Full month basic salary from {seg['source']}: Rs. {basic_salary_earnings}."
+                    else:
+                        prorated = (to_decimal(seg["monthly_rate"]) * Decimal(active_days_count) / Decimal(total_month_days)).quantize(
+                            Decimal("0.01"), rounding=ROUND_HALF_UP
+                        )
+                        basic_salary_earnings = prorated
+                        basic_salary_notes = (
+                            f"Basic salary from {seg['source']}: Rs. {seg['monthly_rate']} prorated for "
+                            f"{active_days_count}/{total_month_days} active calendar days ({active_start.isoformat()} to {active_end.isoformat()}) "
+                            f"to Rs. {basic_salary_earnings}."
+                        )
+                else:
+                    # Multiple segments (plan or tier changed mid-month)
+                    total_prorated = Decimal("0.00")
+                    seg_notes_list = []
+                    for seg in segments:
+                        seg_amt = (to_decimal(seg["monthly_rate"]) * Decimal(seg["days"]) / Decimal(total_month_days)).quantize(
+                            Decimal("0.01"), rounding=ROUND_HALF_UP
+                        )
+                        total_prorated += seg_amt
+                        p_name = seg["plan"].plan_name if seg["plan"] else "Plan"
+                        t_name = seg["tier"].tier_name if seg["tier"] else "Tier"
+                        seg_notes_list.append(
+                            f"{seg['days']} days at Rs. {seg['monthly_rate']}/mo ({p_name} × {t_name}) = Rs. {seg_amt}"
+                        )
+                    basic_salary_earnings = total_prorated
+                    basic_salary_notes = (
+                        f"Basic salary calculated across {len(segments)} segment(s): "
+                        + "; ".join(seg_notes_list)
+                        + f". Total basic salary: Rs. {basic_salary_earnings}."
+                    )
+
+    if primary_package_name is None and teaching_plans_seen:
+        primary_package_name = next(iter(teaching_plans_seen))
+    if primary_tier_name is None and version:
+        v_tiers = getattr(version, "_cached_sorted_tiers", None) or list(version.rate_tiers.all().order_by("sort_order"))
+        if v_tiers:
+            primary_tier_name = v_tiers[0].tier_name
 
     # 10. Gross Draft Sum
     gross_draft_earnings = (
@@ -1726,6 +1952,11 @@ def calculate_teacher_salary_preview(
         "adjustments": adjustment_items,
         "is_net_negative": (gross_draft_earnings + total_pos_adjustments - total_cut_adjustments) < Decimal("0.00"),
         "basic_salary_notes": basic_salary_notes,
+        "basic_salary_package": primary_package_name,
+        "basic_salary_tier": primary_tier_name,
+        "basic_salary_matrix_rate": str(to_decimal(primary_matrix_rate)) if primary_matrix_rate is not None else None,
+        "basic_salary_policy_version": primary_version_label,
+        "basic_salary_cell_id": primary_cell_id,
         "student_count_timeline": [] if summary_only else student_count_timeline,
         "teaching_plan_timeline": list(teaching_plans_seen),
         "applied_overrides": list(applied_overrides_dict.values()),

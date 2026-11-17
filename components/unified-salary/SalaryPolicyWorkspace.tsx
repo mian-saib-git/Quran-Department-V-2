@@ -14,6 +14,12 @@ import {
   AlertCircle,
   CheckCircle2,
   RotateCcw,
+  Trash2,
+  Power,
+  AlertTriangle,
+  ShieldAlert,
+  Archive,
+  ArchiveRestore,
 } from "lucide-react";
 import {
   type SalaryPolicy,
@@ -24,11 +30,16 @@ import {
   fetchPolicyVersions,
   fetchPolicyVersionDetail,
   createDraftVersion,
-  revertPolicyVersionToDraft,
+  deleteDraftVersion,
+  deleteSalaryPolicy,
+  toggleSalaryPolicyActive,
+  archiveSalaryPolicy,
+  restoreSalaryPolicy,
 } from "../../services/salaryPolicyService";
 import { loadSession } from "../../services/sessionService";
 
 import SalaryPolicyList from "./SalaryPolicyList";
+import SalaryPolicyDeleteModal from "./SalaryPolicyDeleteModal";
 import SalaryStudentTierEditor from "./SalaryStudentTierEditor";
 import SalaryTeachingPlanEditor from "./SalaryTeachingPlanEditor";
 import SalaryRateMatrixEditor from "./SalaryRateMatrixEditor";
@@ -64,33 +75,112 @@ export default function SalaryPolicyWorkspace({
     userRole === "department_admin" ||
     Boolean(session?.user?.is_superuser) ||
     userRole === "platform_admin";
+  const isAuthorizedAdmin =
+    isDepartmentAdmin ||
+    userRole === "institution_admin";
 
   const [revertingCurrent, setRevertingCurrent] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  const handleRevertCurrentVersion = async () => {
-    if (!currentVersion) return;
+  // Active policy deletion dialog state
+  const [activePolicyToDelete, setActivePolicyToDelete] = useState<SalaryPolicy | null>(null);
+  const [togglingActiveId, setTogglingActiveId] = useState<number | null>(null);
+
+  const handleToggleActivePolicy = async (policy: SalaryPolicy) => {
+    setTogglingActiveId(policy.id);
+    try {
+      const updated = await toggleSalaryPolicyActive(policy.id);
+      setPolicies((prev) =>
+        prev.map((p) => (p.id === updated.id ? updated : p))
+      );
+      if (selectedPolicy?.id === updated.id) {
+        setSelectedPolicy(updated);
+      }
+      setSuccessMsg(
+        `Salary policy '${updated.name}' is now ${
+          updated.is_active ? "Active" : "Inactive"
+        }.`
+      );
+      if (activePolicyToDelete?.id === policy.id) {
+        setActivePolicyToDelete(null);
+      }
+    } catch (err: any) {
+      setError(err?.message || "Failed to toggle policy active status.");
+    } finally {
+      setTogglingActiveId(null);
+    }
+  };
+
+  const [discardingDraft, setDiscardingDraft] = useState(false);
+  const [archivingPolicy, setArchivingPolicy] = useState(false);
+  const [restoringPolicy, setRestoringPolicy] = useState(false);
+
+  const handleDiscardCurrentDraft = async () => {
+    if (!currentVersion || currentVersion.status !== "draft" || !selectedPolicy) return;
     if (
       !window.confirm(
-        `Move version v${currentVersion.version_number} back to Draft? This will unpublish the version and allow it to be edited or permanently deleted.`
+        `Are you sure you want to permanently discard draft version v${currentVersion.version_number}? All tiers, plans, and matrix rates configured for this draft will be permanently deleted. This action cannot be undone.`
       )
     ) {
       return;
     }
-    setRevertingCurrent(true);
+    setDiscardingDraft(true);
     setError(null);
     try {
-      const reverted = await revertPolicyVersionToDraft(currentVersion.id);
-      setCurrentVersion(reverted);
-      if (selectedPolicy) {
-        const vList = await fetchPolicyVersions(selectedPolicy.id);
-        setVersions(vList);
+      await deleteDraftVersion(currentVersion.id);
+      setSuccessMsg(`Draft version v${currentVersion.version_number} was permanently discarded.`);
+      const vList = await fetchPolicyVersions(selectedPolicy.id);
+      setVersions(vList);
+      if (vList.length > 0) {
+        await loadVersionDetail(vList[0].id);
+      } else {
+        setCurrentVersion(null);
       }
-      setSuccessMsg(`Version v${currentVersion.version_number} successfully moved back to Draft.`);
+      await refreshPolicies();
     } catch (err: any) {
-      setError(err?.message || "Failed to revert version to draft.");
+      setError(err?.message || "Failed to discard draft version.");
     } finally {
-      setRevertingCurrent(false);
+      setDiscardingDraft(false);
+    }
+  };
+
+  const handleArchiveSelectedPolicy = async (policy: SalaryPolicy) => {
+    setArchivingPolicy(true);
+    setError(null);
+    try {
+      const updated = await archiveSalaryPolicy(policy.id);
+      setPolicies((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      if (selectedPolicy?.id === updated.id) {
+        setSelectedPolicy(updated);
+      }
+      setSuccessMsg(`Salary policy '${updated.name}' has been archived.`);
+      if (activePolicyToDelete?.id === policy.id) {
+        setActivePolicyToDelete(null);
+      }
+    } catch (err: any) {
+      setError(err?.message || "Failed to archive policy.");
+    } finally {
+      setArchivingPolicy(false);
+    }
+  };
+
+  const handleRestoreSelectedPolicy = async (policy: SalaryPolicy) => {
+    setRestoringPolicy(true);
+    setError(null);
+    try {
+      const updated = await restoreSalaryPolicy(policy.id);
+      setPolicies((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      if (selectedPolicy?.id === updated.id) {
+        setSelectedPolicy(updated);
+      }
+      setSuccessMsg(`Salary policy '${updated.name}' has been restored (inactive state).`);
+      if (activePolicyToDelete?.id === policy.id) {
+        setActivePolicyToDelete(null);
+      }
+    } catch (err: any) {
+      setError(err?.message || "Failed to restore policy.");
+    } finally {
+      setRestoringPolicy(false);
     }
   };
 
@@ -98,16 +188,31 @@ export default function SalaryPolicyWorkspace({
   const loadPolicies = async () => {
     setLoadingPolicies(true);
     setError(null);
+    setSelectedPolicy(null);
+    setCurrentVersion(null);
     try {
       const data = await fetchSalaryPolicies(departmentId);
       setPolicies(data);
-      if (data.length > 0 && !selectedPolicy) {
+      if (data.length > 0) {
         handleSelectPolicy(data[0]);
       }
     } catch (err: any) {
       setError(err?.message || "Failed to load salary policies.");
     } finally {
       setLoadingPolicies(false);
+    }
+  };
+
+  const refreshPolicies = async () => {
+    try {
+      const data = await fetchSalaryPolicies(departmentId);
+      setPolicies(data);
+      if (selectedPolicy) {
+        const updated = data.find((p) => p.id === selectedPolicy.id);
+        if (updated) setSelectedPolicy(updated);
+      }
+    } catch {
+      // ignore
     }
   };
 
@@ -121,8 +226,37 @@ export default function SalaryPolicyWorkspace({
     try {
       const detail = await fetchPolicyVersionDetail(versionId);
       setCurrentVersion(detail);
+      setError(null);
     } catch (err: any) {
-      setError(err?.message || "Failed to load version details.");
+      const status = err?.status;
+      const is404 = status === 404 || err?.message?.includes("404");
+      if (is404) {
+        setError(`Policy version (ID ${versionId}) does not exist or has been removed.`);
+        if (selectedPolicy) {
+          try {
+            const vList = await fetchPolicyVersions(selectedPolicy.id);
+            setVersions(vList);
+            if (vList.length > 0) {
+              const fallbackId = vList[0].id;
+              if (fallbackId !== versionId) {
+                const fallbackDetail = await fetchPolicyVersionDetail(fallbackId);
+                setCurrentVersion(fallbackDetail);
+              } else {
+                setCurrentVersion(null);
+              }
+            } else {
+              setCurrentVersion(null);
+            }
+          } catch {
+            setCurrentVersion(null);
+            setVersions([]);
+          }
+        } else {
+          setCurrentVersion(null);
+        }
+      } else {
+        setError(err?.message || "Failed to load version details.");
+      }
     } finally {
       setLoadingVersion(false);
     }
@@ -170,6 +304,7 @@ export default function SalaryPolicyWorkspace({
       setVersions(vList);
       setCurrentVersion(newVersion);
       setActiveTab("matrix");
+      await refreshPolicies();
     } catch (err: any) {
       setError(err?.message || "Failed to create draft version.");
     } finally {
@@ -242,10 +377,40 @@ export default function SalaryPolicyWorkspace({
           policies={policies}
           selectedPolicyId={null}
           isLoading={loadingPolicies}
+          departmentId={departmentId}
+          departmentName={departmentName}
+          isAuthorizedAdmin={isAuthorizedAdmin}
           onSelectPolicy={handleSelectPolicy}
-          onPolicyCreated={(newPolicy) => {
-            setPolicies((prev) => [newPolicy, ...prev]);
+          onPolicyCreated={async (newPolicy) => {
+            await refreshPolicies();
             handleSelectPolicy(newPolicy);
+          }}
+          onPolicyDeleted={async (deletedId, deletedName) => {
+            setPolicies((prev) => prev.filter((p) => p.id !== deletedId));
+            if (selectedPolicy?.id === deletedId) {
+              setSelectedPolicy(null);
+              setCurrentVersion(null);
+              setVersions([]);
+            }
+            setSuccessMsg(`Salary policy '${deletedName}' was permanently deleted.`);
+            try {
+              await refreshPolicies();
+            } catch {
+              // Ignore refresh errors
+            }
+          }}
+          onPolicyUpdated={(updatedPolicy) => {
+            setPolicies((prev) =>
+              prev.map((p) => (p.id === updatedPolicy.id ? updatedPolicy : p))
+            );
+            if (selectedPolicy?.id === updatedPolicy.id) {
+              setSelectedPolicy(updatedPolicy);
+            }
+            setSuccessMsg(
+              `Salary policy '${updatedPolicy.name}' status updated to ${
+                updatedPolicy.is_active ? "Active" : "Inactive"
+              }.`
+            );
           }}
         />
       ) : (
@@ -261,6 +426,21 @@ export default function SalaryPolicyWorkspace({
                   <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
                     {selectedPolicy.code}
                   </span>
+                  {selectedPolicy.is_archived ? (
+                    <span className="rounded-full bg-purple-50 px-2 py-0.5 text-[10px] font-bold text-purple-700 border border-purple-200">
+                      Archived Policy
+                    </span>
+                  ) : (
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                        selectedPolicy.is_active
+                          ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                          : "bg-slate-100 text-slate-500"
+                      }`}
+                    >
+                      {selectedPolicy.is_active ? "Active" : "Inactive"}
+                    </span>
+                  )}
                   <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 capitalize">
                     {selectedPolicy.compensation_model.replace(/_/g, " ")}
                   </span>
@@ -271,7 +451,7 @@ export default function SalaryPolicyWorkspace({
               </div>
             </div>
 
-            {/* Version Switcher */}
+            {/* Version Switcher & Policy Actions */}
             <div className="flex items-center gap-2 flex-wrap">
               {versions.length > 0 && currentVersion && (
                 <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
@@ -288,24 +468,39 @@ export default function SalaryPolicyWorkspace({
                     ))}
                   </select>
                   {isReadOnly ? (
-                    <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
-                      <Lock size={10} /> Published
+                    <span
+                      className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800"
+                      title={
+                        !selectedPolicy.is_active
+                          ? "Published version (policy is inactive)"
+                          : (selectedPolicy.active_teacher_assignments_count ?? 0) > 0
+                          ? `Published and active in use (${selectedPolicy.active_teacher_assignments_count} teachers assigned)`
+                          : "Published version (immutable)"
+                      }
+                    >
+                      <Lock size={10} />
+                      {!selectedPolicy.is_active
+                        ? "Published Version (Policy Inactive)"
+                        : (selectedPolicy.active_teacher_assignments_count ?? 0) > 0
+                        ? "Published (Active In Use)"
+                        : "Published"}
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
                       Draft
                     </span>
                   )}
-                  {isReadOnly && isDepartmentAdmin && (
+                  {/* Discard Draft button for draft version */}
+                  {!isReadOnly && currentVersion.status === "draft" && isAuthorizedAdmin && (
                     <button
                       type="button"
-                      onClick={handleRevertCurrentVersion}
-                      disabled={revertingCurrent}
-                      className="ml-1 inline-flex items-center gap-1 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-0.5 text-[11px] font-bold text-amber-800 transition"
-                      title="Move this published version back to editable draft"
+                      onClick={handleDiscardCurrentDraft}
+                      disabled={discardingDraft}
+                      className="ml-1 inline-flex items-center gap-1 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2 py-0.5 text-[11px] font-bold text-rose-700 transition"
+                      title="Permanently discard this draft version"
                     >
-                      {revertingCurrent ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} className="text-amber-700" />}
-                      Move to Draft
+                      {discardingDraft ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} className="text-rose-600" />}
+                      Discard Draft
                     </button>
                   )}
                 </div>
@@ -322,6 +517,72 @@ export default function SalaryPolicyWorkspace({
                   {creatingDraft ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
                   New Draft Version
                 </button>
+              )}
+
+              {/* Policy-level Actions for authorized admins */}
+              {isAuthorizedAdmin && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {/* If policy is archived, show Restore button */}
+                  {selectedPolicy.is_archived ? (
+                    <button
+                      type="button"
+                      onClick={() => handleRestoreSelectedPolicy(selectedPolicy)}
+                      disabled={restoringPolicy}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700 hover:bg-indigo-100 transition shadow-sm disabled:opacity-50"
+                      title="Restore policy to inactive state"
+                    >
+                      {restoringPolicy ? <Loader2 size={13} className="animate-spin" /> : <ArchiveRestore size={13} />}
+                      Restore Policy
+                    </button>
+                  ) : (
+                    <>
+                      {/* Activate / Deactivate Toggle */}
+                      <button
+                        type="button"
+                        onClick={() => handleToggleActivePolicy(selectedPolicy)}
+                        disabled={togglingActiveId === selectedPolicy.id}
+                        className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition shadow-sm disabled:opacity-50 ${
+                          selectedPolicy.is_active
+                            ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                            : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                        }`}
+                        title={selectedPolicy.is_active ? "Deactivate policy (prevents new assignments)" : "Activate policy"}
+                      >
+                        {togglingActiveId === selectedPolicy.id ? (
+                          <Loader2 size={13} className="animate-spin" />
+                        ) : (
+                          <Power size={13} />
+                        )}
+                        {selectedPolicy.is_active ? "Deactivate Policy" : "Activate Policy"}
+                      </button>
+
+                      {/* Archive Policy Button */}
+                      <button
+                        type="button"
+                        onClick={() => handleArchiveSelectedPolicy(selectedPolicy)}
+                        disabled={archivingPolicy}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-purple-200 bg-purple-50 px-3 py-2 text-xs font-bold text-purple-700 hover:bg-purple-100 transition shadow-sm disabled:opacity-50"
+                        title="Archive policy to hide from active lists and assignment dropdowns"
+                      >
+                        {archivingPolicy ? <Loader2 size={13} className="animate-spin" /> : <Archive size={13} />}
+                        Archive Policy
+                      </button>
+                    </>
+                  )}
+
+                  {/* Delete Policy Button in active workspace */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActivePolicyToDelete(selectedPolicy);
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100 transition shadow-sm"
+                    title="Permanently Delete Policy"
+                  >
+                    <Trash2 size={13} className="text-rose-600" />
+                    Delete Policy
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -427,6 +688,7 @@ export default function SalaryPolicyWorkspace({
                   <SalaryRateMatrixEditor
                     versionId={currentVersion.id}
                     isReadOnly={isReadOnly}
+                    compensationModel={selectedPolicy?.compensation_model}
                     teachingPlans={currentVersion.teaching_plans}
                     rateTiers={currentVersion.rate_tiers}
                     onMatrixSaved={refreshCurrentVersion}
@@ -438,6 +700,7 @@ export default function SalaryPolicyWorkspace({
                 <SalaryPolicyEditor
                   version={currentVersion}
                   isReadOnly={isReadOnly}
+                  compensationModel={selectedPolicy?.compensation_model}
                   onVersionUpdated={(updated) => {
                     setCurrentVersion(updated);
                     refreshCurrentVersion();
@@ -448,12 +711,14 @@ export default function SalaryPolicyWorkspace({
               {activeTab === "preview" && (
                 <SalaryPolicyPreview
                   version={currentVersion}
+                  compensationModel={selectedPolicy?.compensation_model}
                   onVersionPublished={async (published) => {
                     setCurrentVersion(published);
                     if (selectedPolicy) {
                       const vList = await fetchPolicyVersions(selectedPolicy.id);
                       setVersions(vList);
                     }
+                    await refreshPolicies();
                   }}
                 />
               )}
@@ -464,6 +729,7 @@ export default function SalaryPolicyWorkspace({
                   policyName={selectedPolicy.name}
                   versions={versions}
                   currentVersionId={currentVersion.id}
+                  teacherAssignmentsCount={selectedPolicy.teacher_assignments_count ?? 0}
                   onSelectVersion={loadVersionDetail}
                   onVersionCloned={async (newVersion) => {
                     setCurrentVersion(newVersion);
@@ -471,6 +737,7 @@ export default function SalaryPolicyWorkspace({
                       const vList = await fetchPolicyVersions(selectedPolicy.id);
                       setVersions(vList);
                     }
+                    await refreshPolicies();
                     setActiveTab("matrix");
                   }}
                   onVersionReverted={async (reverted) => {
@@ -479,6 +746,7 @@ export default function SalaryPolicyWorkspace({
                       const vList = await fetchPolicyVersions(selectedPolicy.id);
                       setVersions(vList);
                     }
+                    await refreshPolicies();
                   }}
                   onVersionDeleted={async (deletedVersionId) => {
                     if (selectedPolicy) {
@@ -492,6 +760,7 @@ export default function SalaryPolicyWorkspace({
                         }
                       }
                     }
+                    await refreshPolicies();
                   }}
                 />
               )}
@@ -499,6 +768,32 @@ export default function SalaryPolicyWorkspace({
           ) : null}
         </div>
       )}
+
+      {/* Delete Confirmation Modal for Active Selected Policy */}
+      <SalaryPolicyDeleteModal
+        policy={activePolicyToDelete}
+        isOpen={Boolean(activePolicyToDelete)}
+        onClose={() => setActivePolicyToDelete(null)}
+        onDeleted={async (deletedId, deletedName) => {
+          setActivePolicyToDelete(null);
+          setSuccessMsg(`Salary policy '${deletedName}' was permanently deleted.`);
+          setPolicies((prev) => prev.filter((p) => p.id !== deletedId));
+          setSelectedPolicy(null);
+          setCurrentVersion(null);
+          setVersions([]);
+          try {
+            await refreshPolicies();
+          } catch {
+            // Ignore refresh errors
+          }
+        }}
+        onPolicyUpdated={(updated) => {
+          setPolicies((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+          if (selectedPolicy?.id === updated.id) {
+            setSelectedPolicy(updated);
+          }
+        }}
+      />
     </div>
   );
 }

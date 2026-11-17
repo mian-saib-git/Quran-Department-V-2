@@ -11,6 +11,7 @@ from .models import (
     SalaryRateTier,
     SalaryTeachingPlan,
     SalaryPlanTierRate,
+    SalaryPlanTierBasicSalary,
     TeacherPolicyAssignment,
     TeacherSalaryOverride,
     SalaryAttendanceVerification,
@@ -170,6 +171,23 @@ class SalaryTeachingPlanAdmin(admin.ModelAdmin):
 @admin.register(SalaryPlanTierRate)
 class SalaryPlanTierRateAdmin(admin.ModelAdmin):
     list_display = ("policy_version", "teaching_plan", "rate_tier", "rate_per_class")
+    list_filter = ("policy_version__policy__department", "policy_version__status")
+    search_fields = ("teaching_plan__plan_name", "rate_tier__tier_name")
+
+    def has_change_permission(self, request, obj=None):
+        if obj and obj.policy_version.status in (SalaryPolicyVersion.Status.PUBLISHED, SalaryPolicyVersion.Status.ARCHIVED):
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        if obj and obj.policy_version.status in (SalaryPolicyVersion.Status.PUBLISHED, SalaryPolicyVersion.Status.ARCHIVED):
+            return False
+        return super().has_delete_permission(request, obj)
+
+
+@admin.register(SalaryPlanTierBasicSalary)
+class SalaryPlanTierBasicSalaryAdmin(admin.ModelAdmin):
+    list_display = ("policy_version", "teaching_plan", "rate_tier", "basic_salary_amount")
     list_filter = ("policy_version__policy__department", "policy_version__status")
     search_fields = ("teaching_plan__plan_name", "rate_tier__tier_name")
 

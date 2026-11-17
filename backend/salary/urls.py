@@ -8,6 +8,7 @@ from salary.views import (
     AttendanceReconciliationPreviewView,
     AttendanceReconcileView,
     AttendanceVerificationSummaryView,
+    AuthorizedSalaryDepartmentsView,
     DepartmentStudentsView,
     DepartmentTeachersView,
     RatePreviewView,
@@ -53,6 +54,7 @@ router.register(r"cutover-registries", SalaryEngineCutoverViewSet, basename="sal
 urlpatterns = [
     # Explicit bulk and verification actions placed before router to avoid <pk> regex collisions
     path("assignments/bulk-assign/", TeacherPolicyAssignmentViewSet.as_view({"post": "bulk_assign"}), name="salary-assignment-bulk-assign"),
+    path("assignments/bulk-unassign/", TeacherPolicyAssignmentViewSet.as_view({"post": "bulk_unassign"}), name="salary-assignment-bulk-unassign"),
     path("assignments/bulk/", TeacherPolicyAssignmentViewSet.as_view({"post": "bulk_assign"}), name="salary-assignment-bulk"),
 
     path("adjustments/bulk/preview/", SalaryBulkAdjustmentPreviewView.as_view(), name="salary-bulk-preview"),
@@ -68,6 +70,9 @@ urlpatterns = [
     path("cutover-audit/", CrossEngineConflictAuditView.as_view(), name="salary-cutover-audit"),
 
     path("", include(router.urls)),
+
+    # Authorized department lookup for salary management
+    path("departments/", AuthorizedSalaryDepartmentsView.as_view(), name="salary-authorized-departments"),
 
     # Teacher and Student lookup for department salary management
     path("teachers/", DepartmentTeachersView.as_view(), name="salary-department-teachers"),

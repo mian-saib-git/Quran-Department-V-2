@@ -273,6 +273,49 @@ export async function bulkAssignSalaryPolicy(payload: BulkAssignPayload): Promis
   });
 }
 
+export interface BulkUnassignPayload {
+  department: number;
+  teacher_ids: number[];
+  effective_cutoff?: string;
+  reason?: string;
+}
+
+export interface BulkUnassignResult {
+  total_requested: number;
+  unassigned_count: number;
+  skipped_count: number;
+  failed_count: number;
+  effective_cutoff: string;
+  successful: Array<{
+    teacher_id: number;
+    teacher_name: string;
+    assignment_id: number;
+    policy_id: number;
+    policy_name: string;
+    effective_from: string;
+    effective_to: string | null;
+    is_active: boolean;
+  }>;
+  skipped: Array<{
+    teacher_id: number;
+    teacher_name: string;
+    reason: string;
+  }>;
+  failed: Array<{
+    teacher_id: number;
+    teacher_name: string;
+    reason: string;
+  }>;
+}
+
+export async function bulkUnassignSalaryPolicy(payload: BulkUnassignPayload): Promise<BulkUnassignResult> {
+  return authenticatedRequest<BulkUnassignResult>("/api/salary/assignments/bulk-unassign/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function updateTeacherAssignment(
   assignmentId: number,
   payload: Partial<{

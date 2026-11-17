@@ -16,8 +16,17 @@ export interface SalaryPolicy {
   policy_type: "standard" | "hifz" | "custom";
   compensation_model: "per_class" | "basic" | "basic_plus_per_class";
   is_active: boolean;
+  is_archived?: boolean;
+  archived_at?: string | null;
+  archived_by?: number | null;
+  archived_by_name?: string | null;
   versions_count: number;
   published_versions_count: number;
+  teacher_assignments_count?: number;
+  active_teacher_assignments_count?: number;
+  historical_teacher_assignments_count?: number;
+  has_financial_dependencies?: boolean;
+  deletion_eligibility?: PolicyDeletionEligibility;
   active_version: {
     id: number;
     version_number: number;
@@ -69,6 +78,17 @@ export interface SalaryPlanTierRate {
   rate_per_class: string;
 }
 
+export interface SalaryPlanTierBasicSalary {
+  id: number;
+  policy_version: number;
+  teaching_plan: number;
+  teaching_plan_code?: string;
+  teaching_plan_name?: string;
+  rate_tier: number;
+  rate_tier_name?: string;
+  basic_salary_amount: string;
+}
+
 export interface SalaryPolicyVersionListItem {
   id: number;
   policy: number;
@@ -95,6 +115,7 @@ export interface SalaryPolicyVersionListItem {
   tiers_count: number;
   plans_count: number;
   rates_count: number;
+  basic_salaries_count?: number;
   created_at: string;
   updated_at: string;
 }
@@ -103,6 +124,7 @@ export interface SalaryPolicyVersionDetail extends SalaryPolicyVersionListItem {
   rate_tiers: SalaryRateTier[];
   teaching_plans: SalaryTeachingPlan[];
   plan_tier_rates: SalaryPlanTierRate[];
+  plan_tier_basic_salaries?: SalaryPlanTierBasicSalary[];
 }
 
 export interface DraftValidationResponse {
@@ -114,6 +136,8 @@ export interface DraftValidationResponse {
   tiers_count: number;
   plans_count: number;
   rates_count: number;
+  basic_salaries_count?: number;
+  total_matrix_cells?: number;
 }
 
 export interface RateMatrixResponse {
@@ -122,9 +146,11 @@ export interface RateMatrixResponse {
   teaching_plans: SalaryTeachingPlan[];
   rate_tiers: SalaryRateTier[];
   rates: SalaryPlanTierRate[];
+  basic_salaries?: SalaryPlanTierBasicSalary[];
 }
 
 export interface CreatePolicyPayload {
+  department?: number;
   code: string;
   name: string;
   description?: string;
@@ -190,6 +216,81 @@ export async function updateSalaryPolicy(policyId: number, payload: Partial<Crea
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+  });
+}
+
+export interface PolicyDeletionEligibility {
+  can_delete: boolean;
+  policy_id: number;
+  policy_name?: string;
+  policy_code?: string;
+  total_teacher_assignments: number;
+  active_teacher_assignments: number;
+  historical_teacher_assignments: number;
+  published_versions_count: number;
+  previously_published_versions_count: number;
+  teacher_overrides_count: number;
+  protected_payroll_references_count: number;
+  blocking_reasons: string[];
+}
+
+export async function fetchPolicyDeletionEligibility(
+  policyId: number
+): Promise<PolicyDeletionEligibility> {
+  return authenticatedRequest<PolicyDeletionEligibility>(
+    `/api/salary/policies/${policyId}/deletion-eligibility/`
+  );
+}
+
+export async function unassignAllFromPolicy(
+  policyId: number,
+  payload?: { effective_cutoff?: string; reason?: string }
+): Promise<{
+  detail: string;
+  unassigned_count: number;
+  policy_id: number;
+  effective_cutoff: string;
+  eligibility: PolicyDeletionEligibility;
+}> {
+  return authenticatedRequest(`/api/salary/policies/${policyId}/unassign-all/`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+export async function deleteSalaryPolicy(policyId: number): Promise<{ detail: string; deleted_id?: number }> {
+  return authenticatedRequest<{ detail: string; deleted_id?: number }>(`/api/salary/policies/${policyId}/`, {
+    method: "DELETE",
+  });
+}
+
+export async function toggleSalaryPolicyActive(policyId: number): Promise<SalaryPolicy> {
+  return authenticatedRequest<SalaryPolicy>(`/api/salary/policies/${policyId}/toggle-active/`, {
+    method: "POST",
+  });
+}
+
+export async function archiveSalaryPolicy(policyId: number): Promise<SalaryPolicy> {
+  return authenticatedRequest<SalaryPolicy>(`/api/salary/policies/${policyId}/archive/`, {
+    method: "POST",
+  });
+}
+
+export async function restoreSalaryPolicy(policyId: number): Promise<SalaryPolicy> {
+  return authenticatedRequest<SalaryPolicy>(`/api/salary/policies/${policyId}/restore/`, {
+    method: "POST",
+  });
+}
+
+export async function deactivateSalaryPolicy(policyId: number): Promise<SalaryPolicy> {
+  return authenticatedRequest<SalaryPolicy>(`/api/salary/policies/${policyId}/deactivate/`, {
+    method: "POST",
+  });
+}
+
+export async function activateSalaryPolicy(policyId: number): Promise<SalaryPolicy> {
+  return authenticatedRequest<SalaryPolicy>(`/api/salary/policies/${policyId}/activate/`, {
+    method: "POST",
   });
 }
 
@@ -314,5 +415,35 @@ export async function saveRateMatrix(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ rates }),
+  });
+}
+
+export async function saveBasicSalaryMatrix(
+  versionId: number,
+  basicSalaries: { teaching_plan_id: number; rate_tier_id: number; basic_salary_amount: string }[],
+): Promise<{ saved_basic_count: number; basic_salaries: SalaryPlanTierBasicSalary[] }> {
+  return authenticatedRequest<{ saved_basic_count: number; basic_salaries: SalaryPlanTierBasicSalary[] }>(`/api/salary/versions/${versionId}/matrix/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ basic_salaries: basicSalaries }),
+  });
+}
+
+export async function saveMatrices(
+  versionId: number,
+  payload: {
+    rates?: { teaching_plan_id: number; rate_tier_id: number; rate_per_class: string }[];
+    basic_salaries?: { teaching_plan_id: number; rate_tier_id: number; basic_salary_amount: string }[];
+  },
+): Promise<{
+  saved_count: number;
+  saved_basic_count?: number;
+  rates: SalaryPlanTierRate[];
+  basic_salaries: SalaryPlanTierBasicSalary[];
+}> {
+  return authenticatedRequest(`/api/salary/versions/${versionId}/matrix/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
 }

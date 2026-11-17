@@ -9,6 +9,7 @@ from salary.models import (
     get_policy_published_coverage_intervals,
     resolve_teacher_policy_coverage,
     SalaryPlanTierRate,
+    SalaryPlanTierBasicSalary,
     SalaryPolicy,
     SalaryPolicyVersion,
     SalaryRateTier,
@@ -105,6 +106,31 @@ class SalaryPlanTierRateSerializer(serializers.ModelSerializer):
         return value
 
 
+class SalaryPlanTierBasicSalarySerializer(serializers.ModelSerializer):
+    teaching_plan_code = serializers.CharField(source="teaching_plan.plan_code", read_only=True)
+    teaching_plan_name = serializers.CharField(source="teaching_plan.plan_name", read_only=True)
+    rate_tier_name = serializers.CharField(source="rate_tier.tier_name", read_only=True)
+
+    class Meta:
+        model = SalaryPlanTierBasicSalary
+        fields = [
+            "id",
+            "policy_version",
+            "teaching_plan",
+            "teaching_plan_code",
+            "teaching_plan_name",
+            "rate_tier",
+            "rate_tier_name",
+            "basic_salary_amount",
+        ]
+        read_only_fields = ["id", "policy_version"]
+
+    def validate_basic_salary_amount(self, value):
+        if value is None or value < Decimal("0.00"):
+            raise serializers.ValidationError("Basic salary amount must be non-negative.")
+        return value
+
+
 class SalaryPolicyVersionSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     week_start_day_display = serializers.CharField(source="get_week_start_day_display", read_only=True)
@@ -112,6 +138,7 @@ class SalaryPolicyVersionSerializer(serializers.ModelSerializer):
     tiers_count = serializers.SerializerMethodField()
     plans_count = serializers.SerializerMethodField()
     rates_count = serializers.SerializerMethodField()
+    basic_salaries_count = serializers.SerializerMethodField()
 
     class Meta:
         model = SalaryPolicyVersion
@@ -141,6 +168,7 @@ class SalaryPolicyVersionSerializer(serializers.ModelSerializer):
             "tiers_count",
             "plans_count",
             "rates_count",
+            "basic_salaries_count",
             "created_at",
             "updated_at",
         ]
@@ -169,6 +197,9 @@ class SalaryPolicyVersionSerializer(serializers.ModelSerializer):
     def get_rates_count(self, obj):
         return obj.plan_tier_rates.count()
 
+    def get_basic_salaries_count(self, obj):
+        return obj.plan_tier_basic_salaries.count()
+
     def validate(self, attrs):
         eff_from = attrs.get("effective_from") or (self.instance.effective_from if self.instance else None)
         eff_to = attrs.get("effective_to") or (self.instance.effective_to if self.instance else None)
@@ -181,12 +212,14 @@ class SalaryPolicyVersionDetailSerializer(SalaryPolicyVersionSerializer):
     rate_tiers = SalaryRateTierSerializer(many=True, read_only=True)
     teaching_plans = SalaryTeachingPlanSerializer(many=True, read_only=True)
     plan_tier_rates = SalaryPlanTierRateSerializer(many=True, read_only=True)
+    plan_tier_basic_salaries = SalaryPlanTierBasicSalarySerializer(many=True, read_only=True)
 
     class Meta(SalaryPolicyVersionSerializer.Meta):
         fields = SalaryPolicyVersionSerializer.Meta.fields + [
             "rate_tiers",
             "teaching_plans",
             "plan_tier_rates",
+            "plan_tier_basic_salaries",
         ]
 
 
@@ -196,10 +229,16 @@ class SalaryPolicySerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     versions_count = serializers.SerializerMethodField()
     published_versions_count = serializers.SerializerMethodField()
+    teacher_assignments_count = serializers.SerializerMethodField()
+    active_teacher_assignments_count = serializers.SerializerMethodField()
+    historical_teacher_assignments_count = serializers.SerializerMethodField()
+    has_financial_dependencies = serializers.SerializerMethodField()
+    deletion_eligibility = serializers.SerializerMethodField()
     active_version = serializers.SerializerMethodField()
     published_effective_from = serializers.SerializerMethodField()
     published_effective_to = serializers.SerializerMethodField()
     published_versions = serializers.SerializerMethodField()
+    archived_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = SalaryPolicy
@@ -215,8 +254,17 @@ class SalaryPolicySerializer(serializers.ModelSerializer):
             "policy_type",
             "compensation_model",
             "is_active",
+            "is_archived",
+            "archived_at",
+            "archived_by",
+            "archived_by_name",
             "versions_count",
             "published_versions_count",
+            "teacher_assignments_count",
+            "active_teacher_assignments_count",
+            "historical_teacher_assignments_count",
+            "has_financial_dependencies",
+            "deletion_eligibility",
             "active_version",
             "published_effective_from",
             "published_effective_to",
@@ -230,10 +278,19 @@ class SalaryPolicySerializer(serializers.ModelSerializer):
             "id",
             "institution",
             "department",
+            "is_archived",
+            "archived_at",
+            "archived_by",
+            "archived_by_name",
             "created_by",
             "created_at",
             "updated_at",
         ]
+
+    def get_archived_by_name(self, obj):
+        if not getattr(obj, "archived_by", None):
+            return None
+        return obj.archived_by.get_full_name() or obj.archived_by.username
 
     def get_created_by_name(self, obj):
         if not obj.created_by:
@@ -245,6 +302,32 @@ class SalaryPolicySerializer(serializers.ModelSerializer):
 
     def get_published_versions_count(self, obj):
         return obj.versions.filter(status=SalaryPolicyVersion.Status.PUBLISHED).count()
+
+    def get_teacher_assignments_count(self, obj):
+        return obj.teacher_assignments.count()
+
+    def _get_cached_eligibility(self, obj):
+        eligibility = getattr(obj, "_cached_deletion_eligibility", None)
+        if eligibility is None:
+            eligibility = obj.get_deletion_eligibility()
+            setattr(obj, "_cached_deletion_eligibility", eligibility)
+        return eligibility
+
+    def get_active_teacher_assignments_count(self, obj):
+        return self._get_cached_eligibility(obj)["active_teacher_assignments"]
+
+    def get_historical_teacher_assignments_count(self, obj):
+        return self._get_cached_eligibility(obj)["historical_teacher_assignments"]
+
+    def get_has_financial_dependencies(self, obj):
+        eligibility = self._get_cached_eligibility(obj)
+        return (
+            eligibility["protected_payroll_references_count"] > 0
+            or eligibility["teacher_overrides_count"] > 0
+        )
+
+    def get_deletion_eligibility(self, obj):
+        return self._get_cached_eligibility(obj)
 
     def get_active_version(self, obj):
         # Latest published version
@@ -299,8 +382,15 @@ class RateMatrixCellInputSerializer(serializers.Serializer):
     rate_per_class = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal("0.00"))
 
 
+class BasicSalaryMatrixCellInputSerializer(serializers.Serializer):
+    teaching_plan_id = serializers.IntegerField()
+    rate_tier_id = serializers.IntegerField()
+    basic_salary_amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal("0.00"))
+
+
 class BatchRateMatrixUpdateSerializer(serializers.Serializer):
-    rates = RateMatrixCellInputSerializer(many=True)
+    rates = RateMatrixCellInputSerializer(many=True, required=False)
+    basic_salaries = BasicSalaryMatrixCellInputSerializer(many=True, required=False)
 
 
 # =============================================================================
@@ -310,8 +400,8 @@ class BatchRateMatrixUpdateSerializer(serializers.Serializer):
 class TeacherPolicyAssignmentSerializer(serializers.ModelSerializer):
     department_name = serializers.CharField(source="department.name", read_only=True)
     teacher_name = serializers.SerializerMethodField()
-    policy_code = serializers.CharField(source="policy.code", read_only=True)
-    policy_name = serializers.CharField(source="policy.name", read_only=True)
+    policy_code = serializers.SerializerMethodField()
+    policy_name = serializers.SerializerMethodField()
     assigned_by_name = serializers.SerializerMethodField()
     effective_from = serializers.DateField(required=False, allow_null=True)
     effective_to = serializers.DateField(required=False, allow_null=True)
@@ -327,6 +417,9 @@ class TeacherPolicyAssignmentSerializer(serializers.ModelSerializer):
             "policy",
             "policy_code",
             "policy_name",
+            "policy_snapshot_name",
+            "policy_snapshot_code",
+            "archived_policy_snapshot",
             "effective_from",
             "effective_to",
             "is_active",
@@ -343,10 +436,23 @@ class TeacherPolicyAssignmentSerializer(serializers.ModelSerializer):
             "teacher_name",
             "policy_code",
             "policy_name",
+            "policy_snapshot_name",
+            "policy_snapshot_code",
+            "archived_policy_snapshot",
             "assigned_by",
             "assigned_by_name",
             "assigned_at",
         ]
+
+    def get_policy_code(self, obj):
+        if obj.policy:
+            return obj.policy.code
+        return getattr(obj, "policy_snapshot_code", "") or ""
+
+    def get_policy_name(self, obj):
+        if obj.policy:
+            return obj.policy.name
+        return getattr(obj, "policy_snapshot_name", "") or ""
 
     def get_teacher_name(self, obj):
         if not obj.teacher:
@@ -364,6 +470,8 @@ class TeacherPolicyAssignmentSerializer(serializers.ModelSerializer):
         department = attrs.get("department") or (self.instance.department if self.instance else None)
 
         if policy:
+            if getattr(policy, "is_archived", False):
+                raise serializers.ValidationError({"policy": "Cannot assign an archived salary policy."})
             if not policy.is_active:
                 raise serializers.ValidationError({"policy": "Cannot assign an inactive salary policy."})
             has_published = policy.versions.filter(status=SalaryPolicyVersion.Status.PUBLISHED).exists()
@@ -633,6 +741,31 @@ class BulkTeacherPolicyAssignmentSerializer(serializers.Serializer):
         child=serializers.IntegerField(),
         required=False,
         default=list,
+    )
+
+
+class BulkTeacherPolicyUnassignSerializer(serializers.Serializer):
+    department = serializers.IntegerField(
+        required=False,
+        help_text="Target department ID. Defaults to administrator's authorized department if omitted."
+    )
+    teacher_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        allow_empty=False,
+        max_length=500,
+        help_text="Bounded array of teacher IDs to unassign policy from."
+    )
+    effective_cutoff = serializers.DateField(
+        required=False,
+        allow_null=True,
+        help_text="Effective unassignment date. Defaults to current department-local date if not specified."
+    )
+    reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=500,
+        help_text="Administrator reason for ending the policy assignments."
     )
 
 

@@ -27,6 +27,8 @@ import {
   Square,
   Check,
   Info,
+  UserMinus,
+  AlertTriangle,
 } from "lucide-react";
 import {
   fetchDepartmentTeachers,
@@ -35,6 +37,7 @@ import {
   createTeacherAssignment,
   deleteTeacherAssignment,
   bulkAssignSalaryPolicy,
+  bulkUnassignSalaryPolicy,
   fetchTeacherOverrides,
   createTeacherOverride,
   deleteTeacherOverride,
@@ -46,6 +49,7 @@ import {
   type OverrideLevel,
   type RatePreviewResult,
   type BulkAssignResult,
+  type BulkUnassignResult,
 } from "../../services/salaryAssignmentService";
 import {
   fetchSalaryPolicies,
@@ -55,6 +59,9 @@ import {
 interface Props {
   departmentId?: number;
   departmentName?: string;
+  institutionName?: string;
+  userRole?: string;
+  onNavigateToStage?: (stage: string) => void;
 }
 
 const PKR = new Intl.NumberFormat("en-PK", {
@@ -69,9 +76,22 @@ function money(amount: unknown): string {
 }
 
 export default function TeacherSalaryAssignments({
-  departmentId = 1,
-  departmentName = "Quran Department",
+  departmentId,
+  departmentName = "Department",
+  institutionName = "IVS Academy",
+  userRole = "",
+  onNavigateToStage,
 }: Props) {
+  const effectiveDepartmentId = Number(departmentId || 0);
+
+  const normalizedRole = String(userRole || "").trim().toLowerCase();
+  const isAuthorizedAdmin =
+    !userRole ||
+    normalizedRole === "department_admin" ||
+    normalizedRole === "super_admin" ||
+    normalizedRole === "platform_admin" ||
+    normalizedRole === "institution_admin";
+
   // State: Teacher Roster
   const [teachers, setTeachers] = useState<DepartmentTeacher[]>([]);
   const [selectedTeacher, setSelectedTeacher] = useState<DepartmentTeacher | null>(null);
@@ -111,6 +131,14 @@ export default function TeacherSalaryAssignments({
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
   const [bulkSuccessSummary, setBulkSuccessSummary] = useState<BulkAssignResult | null>(null);
 
+  // State: Bulk Unassign Policy Modal (Steps 2, 3, 5, 7)
+  const [showBulkUnassignModal, setShowBulkUnassignModal] = useState(false);
+  const [bulkUnassignCutoff, setBulkUnassignCutoff] = useState(new Date().toISOString().split("T")[0]);
+  const [bulkUnassignReason, setBulkUnassignReason] = useState("");
+  const [bulkUnassignConfirmed, setBulkUnassignConfirmed] = useState(false);
+  const [bulkUnassignSubmitting, setBulkUnassignSubmitting] = useState(false);
+  const [bulkUnassignSuccessSummary, setBulkUnassignSuccessSummary] = useState<BulkUnassignResult | null>(null);
+
   // Form: Assign Policy
   const [assignPolicyId, setAssignPolicyId] = useState<number | "">("");
   const [assignBasicSalaryOverride, setAssignBasicSalaryOverride] = useState("");
@@ -138,11 +166,17 @@ export default function TeacherSalaryAssignments({
 
   // Load Department Teachers
   const loadTeachers = useCallback(async () => {
+    if (!effectiveDepartmentId) {
+      setLoadingTeachers(false);
+      setTeachers([]);
+      setSelectedTeacher(null);
+      return;
+    }
     setLoadingTeachers(true);
     setRosterError(null);
     setActionError(null);
     try {
-      const data = await fetchDepartmentTeachers(departmentId);
+      const data = await fetchDepartmentTeachers(effectiveDepartmentId);
       setTeachers(data);
       setSelectedTeacher((prev) => {
         if (!prev) {
@@ -158,13 +192,17 @@ export default function TeacherSalaryAssignments({
     } finally {
       setLoadingTeachers(false);
     }
-  }, [departmentId]);
+  }, [effectiveDepartmentId]);
 
   // Load Department Published Policies
   const loadPublishedPolicies = useCallback(async () => {
+    if (!effectiveDepartmentId) {
+      setPublishedPolicies([]);
+      return;
+    }
     try {
-      const allPolicies = await fetchSalaryPolicies(departmentId);
-      const withPublished = allPolicies.filter((p) => p.is_active && (p.published_versions_count > 0 || p.active_version));
+      const allPolicies = await fetchSalaryPolicies(effectiveDepartmentId);
+      const withPublished = allPolicies.filter((p) => p.is_active && !p.is_archived && (p.published_versions_count > 0 || p.active_version));
       setPublishedPolicies(withPublished);
       if (withPublished.length > 0) {
         setAssignPolicyId((prev) => (prev ? prev : withPublished[0].id));
@@ -172,17 +210,21 @@ export default function TeacherSalaryAssignments({
     } catch (err: any) {
       console.warn("Could not load published policies:", err);
     }
-  }, [departmentId]);
+  }, [effectiveDepartmentId]);
 
   // Load Department Students
   const loadStudents = useCallback(async () => {
+    if (!effectiveDepartmentId) {
+      setStudents([]);
+      return;
+    }
     try {
-      const data = await fetchDepartmentStudents(departmentId);
+      const data = await fetchDepartmentStudents(effectiveDepartmentId);
       setStudents(data);
     } catch (err: any) {
       console.warn("Could not load students:", err);
     }
-  }, [departmentId]);
+  }, [effectiveDepartmentId]);
 
   useEffect(() => {
     loadTeachers();
@@ -197,11 +239,12 @@ export default function TeacherSalaryAssignments({
 
   // Load Selected Teacher Details (Assignments & Overrides)
   const loadTeacherDetails = useCallback(async (teacherId: number) => {
+    if (!effectiveDepartmentId) return;
     setLoadingDetails(true);
     try {
       const [assigns, ovs] = await Promise.all([
-        fetchTeacherAssignments(departmentId, teacherId),
-        fetchTeacherOverrides(departmentId, teacherId),
+        fetchTeacherAssignments(effectiveDepartmentId, teacherId),
+        fetchTeacherOverrides(effectiveDepartmentId, teacherId),
       ]);
       setAssignments(assigns);
       setOverrides(ovs);
@@ -210,7 +253,7 @@ export default function TeacherSalaryAssignments({
     } finally {
       setLoadingDetails(false);
     }
-  }, [departmentId]);
+  }, [effectiveDepartmentId]);
 
   const selectedTeacherId = selectedTeacher?.id;
 
@@ -277,9 +320,23 @@ export default function TeacherSalaryAssignments({
     setSelectedTeacherIds(new Set(filteredTeachers.map((t) => t.id)));
   };
 
+  const handleSelectAllAssignedShown = () => {
+    const assignedIds = filteredTeachers.filter((t) => Boolean(t.current_policy)).map((t) => t.id);
+    setSelectedTeacherIds(new Set(assignedIds));
+  };
+
   const handleClearSelection = () => {
     setSelectedTeacherIds(new Set());
   };
+
+  // Counts for filter pills
+  const assignedTeachersCount = useMemo(() => {
+    return teachers.filter((t) => Boolean(t.current_policy)).length;
+  }, [teachers]);
+
+  const unassignedTeachersCount = useMemo(() => {
+    return teachers.filter((t) => !t.current_policy).length;
+  }, [teachers]);
 
   // Policy Date Auto-Resolution Helpers for Individual Modal
   const selectedAssignPolicy = useMemo(() => {
@@ -320,6 +377,29 @@ export default function TeacherSalaryAssignments({
     return bulkSelectedTeachersList.filter((t) => Boolean(t.current_policy));
   }, [bulkSelectedTeachersList]);
 
+  // Group assigned teachers by current policy for breakdown in confirmation modal (Step 5)
+  const selectedPolicyBreakdown = useMemo(() => {
+    const map = new Map<string, { policyId: number; policyName: string; policyCode: string; count: number; teachers: DepartmentTeacher[] }>();
+    for (const t of bulkAssignedTeachers) {
+      if (!t.current_policy) continue;
+      const key = `${t.current_policy.policy_id}-${t.current_policy.policy_name}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.teachers.push(t);
+      } else {
+        map.set(key, {
+          policyId: t.current_policy.policy_id,
+          policyName: t.current_policy.policy_name,
+          policyCode: t.current_policy.policy_code,
+          count: 1,
+          teachers: [t],
+        });
+      }
+    }
+    return Array.from(map.values());
+  }, [bulkAssignedTeachers]);
+
   const bulkResolvedEffectiveFrom = useMemo(() => {
     if (!selectedBulkPolicy) return "";
     return selectedBulkPolicy.published_effective_from || selectedBulkPolicy.active_version?.effective_from || "";
@@ -339,7 +419,7 @@ export default function TeacherSalaryAssignments({
     setActionError(null);
     try {
       await createTeacherAssignment({
-        department: departmentId,
+        department: effectiveDepartmentId,
         teacher: selectedTeacher.id,
         policy: Number(assignPolicyId),
         basic_salary_override: assignBasicSalaryOverride ? assignBasicSalaryOverride : null,
@@ -367,7 +447,7 @@ export default function TeacherSalaryAssignments({
     setActionError(null);
     try {
       const res = await bulkAssignSalaryPolicy({
-        department: departmentId,
+        department: effectiveDepartmentId,
         teacher_ids: Array.from(selectedTeacherIds),
         policy: Number(bulkPolicyId),
         basic_salary_override: bulkBasicOverride ? bulkBasicOverride : null,
@@ -409,6 +489,52 @@ export default function TeacherSalaryAssignments({
     }
   };
 
+  // Handle Bulk Unassign Policy (Steps 4, 7)
+  const handleBulkUnassignSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (bulkAssignedTeachers.length === 0 || bulkUnassignSubmitting) return;
+    setBulkUnassignSubmitting(true);
+    setActionError(null);
+    try {
+      const res = await bulkUnassignSalaryPolicy({
+        department: effectiveDepartmentId,
+        teacher_ids: Array.from(selectedTeacherIds),
+        effective_cutoff: bulkUnassignCutoff || undefined,
+        reason: bulkUnassignReason.trim() || undefined,
+      });
+      setBulkUnassignSuccessSummary(res);
+      setShowBulkUnassignModal(false);
+      setBulkUnassignReason("");
+      setBulkUnassignConfirmed(false);
+      setSelectedTeacherIds(new Set());
+      await Promise.all([
+        loadTeachers(),
+        loadPublishedPolicies(),
+      ]);
+      if (selectedTeacher) {
+        await loadTeacherDetails(selectedTeacher.id);
+      }
+    } catch (err: any) {
+      const status = err?.status;
+      const rawMsg = err?.message || "";
+      let friendlyMsg = rawMsg;
+      if (status === 500) {
+        friendlyMsg =
+          rawMsg && !rawMsg.includes("status 500")
+            ? rawMsg
+            : "Bulk unassignment could not be completed. No changes were saved. Please verify teacher parameters and retry.";
+      } else if (!status && (!rawMsg || rawMsg.includes("NetworkError") || rawMsg.includes("Failed to fetch"))) {
+        friendlyMsg =
+          "Bulk unassignment request failed due to a network or connection issue. Please refresh the teacher roster before retrying.";
+      } else if (!rawMsg) {
+        friendlyMsg = "Bulk unassignment could not be completed. Please refresh the teacher roster before retrying.";
+      }
+      setActionError(friendlyMsg);
+    } finally {
+      setBulkUnassignSubmitting(false);
+    }
+  };
+
   // Handle Delete / Remove Assignment
   const handleDeleteAssignment = async (assignmentId: number) => {
     if (!confirm("Are you sure you want to remove this policy assignment? Historical records will be removed.")) return;
@@ -441,7 +567,7 @@ export default function TeacherSalaryAssignments({
     setActionError(null);
     try {
       await createTeacherOverride({
-        department: departmentId,
+        department: effectiveDepartmentId,
         teacher: selectedTeacher.id,
         override_level: overrideLevel,
         rate_per_class: overrideRate,
@@ -489,7 +615,7 @@ export default function TeacherSalaryAssignments({
     setPreviewResult(null);
     try {
       const res = await previewClassRate({
-        department_id: departmentId,
+        department_id: effectiveDepartmentId,
         teacher_id: selectedTeacher.id,
         class_date: previewDate,
         teaching_plan_code: previewPlanCode,
@@ -527,17 +653,23 @@ export default function TeacherSalaryAssignments({
 
         {/* High-level stats */}
         <div className="flex items-center gap-3">
-          <div className="bg-slate-50 border border-slate-200/80 rounded-2xl px-4 py-2.5 text-center min-w-[100px]">
+          <div className="bg-slate-50 border border-slate-200/80 rounded-2xl px-4 py-2.5 text-center min-w-[90px]">
             <div className="text-lg font-black text-slate-900">{teachers.length}</div>
             <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Teachers</div>
           </div>
-          <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl px-4 py-2.5 text-center min-w-[100px]">
+          <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl px-4 py-2.5 text-center min-w-[90px]">
             <div className="text-lg font-black text-indigo-700">
-              {teachers.filter((t) => t.current_policy).length}
+              {assignedTeachersCount}
             </div>
             <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-500">Assigned</div>
           </div>
-          <div className="bg-amber-50/60 border border-amber-100 rounded-2xl px-4 py-2.5 text-center min-w-[100px]">
+          <div className="bg-rose-50/60 border border-rose-100 rounded-2xl px-4 py-2.5 text-center min-w-[90px]">
+            <div className="text-lg font-black text-rose-700">
+              {unassignedTeachersCount}
+            </div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-rose-500">Unassigned</div>
+          </div>
+          <div className="bg-amber-50/60 border border-amber-100 rounded-2xl px-4 py-2.5 text-center min-w-[90px]">
             <div className="text-lg font-black text-amber-700">
               {teachers.reduce((acc, t) => acc + (t.active_overrides_count || 0), 0)}
             </div>
@@ -545,6 +677,24 @@ export default function TeacherSalaryAssignments({
           </div>
         </div>
       </div>
+
+      {!loadingTeachers && publishedPolicies.length === 0 && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-semibold text-amber-800 flex items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <Info size={18} className="text-amber-600 shrink-0" />
+            <span>No salary policy configured for this department. Create one in Salary Policy Builder.</span>
+          </div>
+          {onNavigateToStage && (
+            <button
+              type="button"
+              onClick={() => onNavigateToStage("policy_builder")}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-amber-600 text-white font-bold hover:bg-amber-700 transition shrink-0"
+            >
+              Go to Policy Builder <ArrowRight size={13} />
+            </button>
+          )}
+        </div>
+      )}
 
       {actionError && (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-xs font-bold text-rose-700 flex items-center justify-between">
@@ -562,6 +712,49 @@ export default function TeacherSalaryAssignments({
         </div>
       )}
 
+      {bulkUnassignSuccessSummary && (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4 text-xs font-bold text-rose-900 flex items-start justify-between gap-3 shadow-xs">
+          <div className="flex items-start gap-2.5">
+            <CheckCircle2 size={18} className="text-rose-600 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="text-sm font-black text-rose-950">
+                Bulk Policy Unassignment Completed
+              </div>
+              <div className="text-slate-700">
+                <span className="font-extrabold text-rose-800">
+                  {bulkUnassignSuccessSummary.unassigned_count} teacher{bulkUnassignSuccessSummary.unassigned_count === 1 ? "" : "s"} unassigned successfully.
+                </span>
+                {bulkUnassignSuccessSummary.skipped_count > 0 && (
+                  <span className="text-amber-800 ml-1.5 font-bold">
+                    {bulkUnassignSuccessSummary.skipped_count} skipped because they had no active policy.
+                  </span>
+                )}
+                {bulkUnassignSuccessSummary.failed_count > 0 && (
+                  <span className="text-rose-700 ml-1.5 font-bold">
+                    {bulkUnassignSuccessSummary.failed_count} failed.
+                  </span>
+                )}
+              </div>
+              <div className="text-[11px] font-medium text-slate-600">
+                Effective cutoff: <span className="font-bold text-slate-800">{bulkUnassignSuccessSummary.effective_cutoff}</span>. Historical salary records and finalized payroll remain unchanged.
+              </div>
+              {bulkUnassignSuccessSummary.skipped.length > 0 && (
+                <div className="text-[11px] font-medium text-slate-600 pt-1 border-t border-rose-200/50">
+                  <span className="font-bold text-slate-700">Skipped teachers:</span>{" "}
+                  {bulkUnassignSuccessSummary.skipped.map((s) => `${s.teacher_name} (${s.reason})`).join("; ")}
+                </div>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setBulkUnassignSuccessSummary(null)}
+            className="text-rose-600 hover:text-rose-800"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {bulkSuccessSummary && (
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-xs font-bold text-emerald-800 flex items-start justify-between gap-3 shadow-xs">
@@ -617,38 +810,74 @@ export default function TeacherSalaryAssignments({
               </span>
             </div>
 
-            {/* Bulk Assign Action Button & Multi-selection Bar */}
+            {/* Bulk Assign & Bulk Unassign Action Buttons & Multi-selection Bar */}
             <div className="p-2.5 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setActionError(null);
-                  if (publishedPolicies.length > 0) {
-                    setBulkPolicyId(publishedPolicies[0].id);
-                  }
-                  setBulkReplaceExisting(false);
-                  setShowBulkModal(true);
-                }}
-                disabled={selectedTeacherIds.size === 0}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl font-black text-xs transition shadow-xs disabled:opacity-40 disabled:cursor-not-allowed bg-indigo-600 hover:bg-indigo-700 text-white"
-              >
-                <Layers size={14} />
-                Bulk Assign Policy
-                {selectedTeacherIds.size > 0 && (
-                  <span className="px-2 py-0.5 rounded-full bg-white/20 text-white font-extrabold text-[10px]">
-                    {selectedTeacherIds.size}
-                  </span>
-                )}
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActionError(null);
+                    if (publishedPolicies.length > 0) {
+                      setBulkPolicyId(publishedPolicies[0].id);
+                    }
+                    setBulkReplaceExisting(false);
+                    setShowBulkModal(true);
+                  }}
+                  disabled={selectedTeacherIds.size === 0 || !isAuthorizedAdmin}
+                  className="w-full flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-xl font-black text-xs transition shadow-xs disabled:opacity-40 disabled:cursor-not-allowed bg-indigo-600 hover:bg-indigo-700 text-white"
+                >
+                  <Layers size={13} className="shrink-0" />
+                  <span className="truncate">Bulk Assign</span>
+                  {selectedTeacherIds.size > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-white/20 text-white font-extrabold text-[10px]">
+                      {selectedTeacherIds.size}
+                    </span>
+                  )}
+                </button>
 
-              <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 px-1">
-                <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActionError(null);
+                    setBulkUnassignCutoff(new Date().toISOString().split("T")[0]);
+                    setBulkUnassignReason("");
+                    setBulkUnassignConfirmed(false);
+                    setShowBulkUnassignModal(true);
+                  }}
+                  disabled={bulkAssignedTeachers.length === 0 || !isAuthorizedAdmin}
+                  className="w-full flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-xl font-black text-xs transition shadow-xs disabled:opacity-40 disabled:cursor-not-allowed border-2 border-rose-600 text-rose-600 hover:bg-rose-50"
+                  title={
+                    bulkAssignedTeachers.length === 0
+                      ? "Select at least one teacher with an active salary policy"
+                      : `Bulk unassign policy from ${bulkAssignedTeachers.length} eligible teacher(s)`
+                  }
+                >
+                  <UserMinus size={13} className="shrink-0" />
+                  <span className="truncate">Bulk Unassign</span>
+                  {bulkAssignedTeachers.length > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-rose-600 text-white font-extrabold text-[10px]">
+                      {bulkAssignedTeachers.length}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              <div className="space-y-1.5 text-[11px] font-bold text-slate-500 px-0.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <button
                     type="button"
                     onClick={handleSelectAllShown}
                     className="text-indigo-600 hover:text-indigo-800 transition"
                   >
                     Select All Shown ({filteredTeachers.length})
+                  </button>
+                  <span>•</span>
+                  <button
+                    type="button"
+                    onClick={handleSelectAllAssignedShown}
+                    className="text-emerald-700 hover:text-emerald-900 transition"
+                  >
+                    Select All Assigned Shown ({filteredTeachers.filter((t) => Boolean(t.current_policy)).length})
                   </button>
                   {selectedTeacherIds.size > 0 && (
                     <>
@@ -663,10 +892,17 @@ export default function TeacherSalaryAssignments({
                     </>
                   )}
                 </div>
+
                 {selectedTeacherIds.size > 0 && (
-                  <span className="text-slate-700 font-extrabold">
-                    {selectedTeacherIds.size} selected
-                  </span>
+                  <div className="flex items-center justify-between text-[11px] text-slate-700 font-extrabold pt-0.5 border-t border-slate-200/60">
+                    <span>
+                      {selectedTeacherIds.size} teacher{selectedTeacherIds.size > 1 ? "s" : ""} selected
+                    </span>
+                    <span className={bulkAssignedTeachers.length > 0 ? "text-rose-700 font-black" : "text-slate-400 font-medium"}>
+                      {bulkAssignedTeachers.length} eligible assigned
+                      {bulkUnassignedTeachers.length > 0 ? ` (${bulkUnassignedTeachers.length} ineligible)` : ""}
+                    </span>
+                  </div>
                 )}
               </div>
             </div>
@@ -692,7 +928,7 @@ export default function TeacherSalaryAssignments({
                   filterMode === "all" ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-800"
                 }`}
               >
-                All
+                All ({teachers.length})
               </button>
               <button
                 type="button"
@@ -701,7 +937,7 @@ export default function TeacherSalaryAssignments({
                   filterMode === "assigned" ? "bg-white text-indigo-700 shadow-xs" : "text-slate-500 hover:text-slate-800"
                 }`}
               >
-                Assigned
+                Assigned ({assignedTeachersCount})
               </button>
               <button
                 type="button"
@@ -710,7 +946,7 @@ export default function TeacherSalaryAssignments({
                   filterMode === "unassigned" ? "bg-white text-amber-700 shadow-xs" : "text-slate-500 hover:text-slate-800"
                 }`}
               >
-                Unassigned
+                Unassigned ({unassignedTeachersCount})
               </button>
             </div>
 
@@ -1875,6 +2111,184 @@ export default function TeacherSalaryAssignments({
                   {bulkSubmitting
                     ? "Assigning Policies..."
                     : `Confirm Bulk Assignment (${selectedTeacherIds.size})`}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 4: Bulk Unassign Salary Policies (Step 3, Step 5) */}
+      {showBulkUnassignModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl border border-slate-200 max-w-xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
+                  <UserMinus size={18} className="text-rose-600" /> Bulk Unassign Salary Policies
+                </h3>
+                <div className="mt-1 flex items-center gap-2 text-xs text-slate-500 font-medium">
+                  <span className="font-bold text-slate-700">{institutionName || "IVS Academy"}</span>
+                  <span>•</span>
+                  <span className="font-bold text-indigo-700">{departmentName}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBulkUnassignModal(false);
+                  setBulkUnassignConfirmed(false);
+                }}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Clear Warning Banner (Step 3) */}
+            <div className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4 space-y-2 text-xs">
+              <div className="flex items-center gap-2 font-black text-rose-900">
+                <AlertTriangle size={16} className="text-rose-600 shrink-0" />
+                <span>Notice on Policy Termination</span>
+              </div>
+              <p className="text-slate-800 font-bold leading-relaxed">
+                This will end the selected teachers' active salary policy assignments. Historical salary records and previously approved payroll will remain unchanged.
+              </p>
+              <p className="text-[11px] text-slate-600 leading-normal">
+                If an unlocked draft payroll exists for this period, it will be marked as requiring recalculation before submission. Approved or paid payrolls are protected and cannot be altered.
+              </p>
+            </div>
+
+            {/* Selection Summary Stat Cards */}
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total Selected</div>
+                <div className="text-lg font-black text-slate-900 mt-0.5">{bulkSelectedTeachersList.length}</div>
+              </div>
+              <div className="p-3 bg-rose-50 rounded-2xl border border-rose-200">
+                <div className="text-[10px] font-bold text-rose-700 uppercase tracking-wider">Active Policies</div>
+                <div className="text-lg font-black text-rose-700 mt-0.5">{bulkAssignedTeachers.length}</div>
+              </div>
+              <div className="p-3 bg-amber-50 rounded-2xl border border-amber-200">
+                <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Without Policy</div>
+                <div className="text-lg font-black text-amber-700 mt-0.5">{bulkUnassignedTeachers.length}</div>
+              </div>
+            </div>
+
+            {/* Ineligible Teachers Notice (Step 2, Step 3) */}
+            {bulkUnassignedTeachers.length > 0 && (
+              <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-amber-950">
+                  <Info size={13} className="text-amber-700 shrink-0" />
+                  <span>{bulkUnassignedTeachers.length} teacher{bulkUnassignedTeachers.length > 1 ? "s" : ""} without active policy (ineligible)</span>
+                </div>
+                <p className="text-[11px] text-amber-800 leading-normal">
+                  These teachers currently have no active policy and will be safely skipped:{" "}
+                  <span className="font-semibold">{bulkUnassignedTeachers.map((t) => t.name).join(", ")}</span>
+                </p>
+              </div>
+            )}
+
+            {/* Current Policy Breakdown (Step 5) */}
+            <div className="space-y-2">
+              <div className="text-xs font-black text-slate-800 flex items-center justify-between">
+                <span>Current Policy Breakdown ({selectedPolicyBreakdown.length} distinct polic{selectedPolicyBreakdown.length === 1 ? "y" : "ies"})</span>
+                <span className="text-[10px] text-slate-400 font-bold">{bulkAssignedTeachers.length} eligible teachers</span>
+              </div>
+              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                {selectedPolicyBreakdown.map((item) => (
+                  <div
+                    key={item.policyId}
+                    className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs flex items-center justify-between gap-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-900 truncate">
+                        {item.policyName}
+                        <span className="ml-1.5 text-[10px] font-extrabold px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-700">
+                          {item.policyCode}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                        {item.teachers.map((t) => t.name).join(", ")}
+                      </div>
+                    </div>
+                    <span className="text-xs font-extrabold text-rose-700 shrink-0 px-2 py-0.5 rounded-full bg-rose-50 border border-rose-200">
+                      {item.count} teacher{item.count > 1 ? "s" : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <form onSubmit={handleBulkUnassignSubmit} className="space-y-4 pt-1">
+              {/* Effective Cutoff Date (Step 3) */}
+              <div className="space-y-1">
+                <label className="text-xs font-black text-slate-700 flex items-center gap-1.5">
+                  <Calendar size={13} className="text-slate-500" /> Effective Unassignment Cutoff Date
+                </label>
+                <input
+                  type="date"
+                  value={bulkUnassignCutoff}
+                  onChange={(e) => setBulkUnassignCutoff(e.target.value)}
+                  required
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
+                />
+                <p className="text-[10px] text-slate-500 leading-normal">
+                  The active assignment will end on the day before this cutoff (inclusive date semantics), leaving the teacher unassigned starting on {bulkUnassignCutoff || "the selected date"}. Prior attendance and classes retain their historical policy and rate.
+                </p>
+              </div>
+
+              {/* Administrative Reason */}
+              <div className="space-y-1">
+                <label className="text-xs font-black text-slate-700">
+                  Administrative Reason / Audit Note (Optional)
+                </label>
+                <textarea
+                  value={bulkUnassignReason}
+                  onChange={(e) => setBulkUnassignReason(e.target.value)}
+                  rows={2}
+                  placeholder="e.g. End of session unassignment, policy transition, department restructure..."
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-indigo-500 focus:bg-white"
+                />
+              </div>
+
+              {/* Explicit Confirmation Checkbox (Step 3) */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  id="confirm-bulk-unassign"
+                  checked={bulkUnassignConfirmed}
+                  onChange={(e) => setBulkUnassignConfirmed(e.target.checked)}
+                  className="w-4 h-4 mt-0.5 rounded text-rose-600 border-slate-300 focus:ring-rose-500 cursor-pointer"
+                />
+                <label htmlFor="confirm-bulk-unassign" className="text-xs text-slate-700 font-bold cursor-pointer select-none">
+                  I confirm ending salary policy assignments for {bulkAssignedTeachers.length} eligible teacher{bulkAssignedTeachers.length > 1 ? "s" : ""} in {departmentName}.
+                </label>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowBulkUnassignModal(false);
+                    setBulkUnassignConfirmed(false);
+                  }}
+                  className="px-4 py-2 rounded-xl text-slate-600 font-bold hover:bg-slate-100 transition text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={bulkUnassignSubmitting || !bulkUnassignConfirmed || bulkAssignedTeachers.length === 0}
+                  className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs shadow-xs disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center gap-1.5"
+                >
+                  {bulkUnassignSubmitting ? (
+                    <>
+                      <Loader2 size={13} className="animate-spin" /> Unassigning Policies...
+                    </>
+                  ) : (
+                    `Confirm Bulk Unassign (${bulkAssignedTeachers.length})`
+                  )}
                 </button>
               </div>
             </form>

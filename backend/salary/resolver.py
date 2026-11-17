@@ -79,8 +79,175 @@ class RateResolutionContext:
     assignment: Optional[TeacherPolicyAssignment] = None
     versions: List[SalaryPolicyVersion] = field(default_factory=list)
     matrix_rates: Dict[Tuple[int, int, int], Decimal] = field(default_factory=dict)
+    matrix_basic_salaries: Dict[Tuple[int, int, int], Decimal] = field(default_factory=dict)
+    matrix_basic_salary_cell_ids: Dict[Tuple[int, int, int], int] = field(default_factory=dict)
     overrides: List[TeacherSalaryOverride] = field(default_factory=list)
     is_coordinator: bool = False
+
+
+def _resolve_rate_from_snapshot(
+    snap: Dict[str, Any],
+    assignment: TeacherPolicyAssignment,
+    class_date: date,
+    teaching_plan_id: Optional[int],
+    teaching_plan_code: Optional[str],
+    student_count: Optional[int],
+    evaluated_inputs: Dict[str, Any],
+) -> ResolvedRateResult:
+    """Deterministically resolves rate from an immutable preserved archived policy snapshot."""
+    snap_pol = snap.get("policy", {})
+    policy_dict = {
+        "id": snap_pol.get("id"),
+        "name": snap_pol.get("name") or assignment.policy_snapshot_name or "Preserved Policy",
+        "code": snap_pol.get("code") or assignment.policy_snapshot_code or "PRESERVED",
+        "policy_type": snap_pol.get("policy_type", "standard"),
+        "compensation_model": snap_pol.get("compensation_model", "per_class"),
+    }
+
+    class_date_str = class_date.isoformat()
+    snap_versions = snap.get("versions", [])
+    matched_ver = None
+    for sv in snap_versions:
+        eff_from = sv.get("effective_from")
+        eff_to = sv.get("effective_to")
+        if eff_from and eff_from <= class_date_str and (eff_to is None or eff_to >= class_date_str):
+            if sv.get("status") == "published" or not matched_ver:
+                matched_ver = sv
+                if sv.get("status") == "published":
+                    break
+    if not matched_ver and snap_versions:
+        matched_ver = snap_versions[0]
+
+    if not matched_ver:
+        return ResolvedRateResult(
+            is_resolved=False,
+            winning_rate=None,
+            precedence_level=None,
+            precedence_name=None,
+            selection_reason=f"Preserved policy snapshot has no version effective on {class_date}.",
+            error_message=f"No preserved policy version covers {class_date}.",
+            salary_policy=policy_dict,
+            evaluated_inputs=evaluated_inputs,
+        )
+
+    version_dict = {
+        "id": matched_ver.get("id"),
+        "version_number": matched_ver.get("version_number"),
+        "effective_from": matched_ver.get("effective_from"),
+        "effective_to": matched_ver.get("effective_to"),
+        "week_start_day": matched_ver.get("week_start_day", "monday"),
+    }
+
+    plans = matched_ver.get("teaching_plans", [])
+    matched_plan = None
+    if teaching_plan_id:
+        for p in plans:
+            if p.get("id") == int(teaching_plan_id):
+                matched_plan = p
+                break
+    elif teaching_plan_code:
+        clean_code = str(teaching_plan_code).strip().lower()
+        for p in plans:
+            if p.get("plan_code", "").lower() == clean_code:
+                matched_plan = p
+                break
+    else:
+        for p in plans:
+            if not p.get("is_coordinator_special"):
+                matched_plan = p
+                break
+        if not matched_plan and plans:
+            matched_plan = plans[0]
+
+    plan_dict = {
+        "id": matched_plan.get("id") if matched_plan else None,
+        "plan_code": matched_plan.get("plan_code") if matched_plan else "standard",
+        "plan_name": matched_plan.get("plan_name") if matched_plan else "Standard Plan",
+        "days_per_week": matched_plan.get("days_per_week") if matched_plan else None,
+        "is_coordinator_special": matched_plan.get("is_coordinator_special", False) if matched_plan else False,
+    }
+
+    tiers = matched_ver.get("rate_tiers", [])
+    matched_tier = None
+    if student_count is not None and student_count > 0:
+        for t in tiers:
+            min_s = t.get("min_students", 1)
+            max_s = t.get("max_students")
+            if min_s <= student_count and (max_s is None or student_count <= max_s):
+                matched_tier = t
+                break
+    else:
+        matched_tier = tiers[0] if tiers else None
+
+    tier_dict = {
+        "id": matched_tier.get("id") if matched_tier else None,
+        "tier_name": matched_tier.get("tier_name") if matched_tier else "Standard",
+        "min_students": matched_tier.get("min_students") if matched_tier else 1,
+        "max_students": matched_tier.get("max_students") if matched_tier else None,
+        "sort_order": matched_tier.get("sort_order") if matched_tier else 1,
+    }
+
+    rate_map = matched_ver.get("matrix_rates_map", {})
+    base_plan_rate = None
+    if matched_plan and matched_tier:
+        p_code = matched_plan.get("plan_code", "")
+        t_id = matched_tier.get("id")
+        t_name = matched_tier.get("tier_name", "")
+        p_id = matched_plan.get("id")
+        val = (
+            rate_map.get(f"{p_code}_{t_id}")
+            or rate_map.get(f"{p_code}_{t_name}")
+            or rate_map.get(f"{p_id}_{t_id}")
+        )
+        if val is not None:
+            base_plan_rate = Decimal(str(val))
+
+    if base_plan_rate is not None:
+        eff_from_val = None
+        if version_dict.get("effective_from"):
+            try:
+                eff_from_val = date.fromisoformat(version_dict["effective_from"])
+            except Exception:
+                eff_from_val = None
+        eff_to_val = None
+        if version_dict.get("effective_to"):
+            try:
+                eff_to_val = date.fromisoformat(version_dict["effective_to"])
+            except Exception:
+                eff_to_val = None
+
+        return ResolvedRateResult(
+            is_resolved=True,
+            winning_rate=base_plan_rate,
+            precedence_level=5,
+            precedence_name="Level 5: Preserved Department Policy Rate",
+            selection_reason=(
+                f"Selected base rate Rs. {base_plan_rate} from preserved policy snapshot '{policy_dict['name']}' "
+                f"(v{version_dict['version_number']}) for plan '{plan_dict['plan_name']}' and tier '{tier_dict['tier_name']}'."
+            ),
+            salary_policy=policy_dict,
+            policy_version=version_dict,
+            rate_tier=tier_dict,
+            teaching_plan=plan_dict,
+            base_plan_rate=base_plan_rate,
+            effective_from=eff_from_val,
+            effective_to=eff_to_val,
+            evaluated_inputs=evaluated_inputs,
+        )
+
+    return ResolvedRateResult(
+        is_resolved=False,
+        winning_rate=None,
+        precedence_level=None,
+        precedence_name=None,
+        selection_reason=f"No rate configured in preserved snapshot '{policy_dict['name']}' for plan '{plan_dict['plan_name']}' and tier '{tier_dict['tier_name']}'.",
+        error_message="Matrix cell has no rate configured in preserved snapshot.",
+        salary_policy=policy_dict,
+        policy_version=version_dict,
+        rate_tier=tier_dict,
+        teaching_plan=plan_dict,
+        evaluated_inputs=evaluated_inputs,
+    )
 
 
 def resolve_teacher_class_rate(
@@ -139,6 +306,18 @@ def resolve_teacher_class_rate(
                 selection_reason=f"No active salary policy assignment found for teacher {teacher_name} on {class_date}.",
                 error_message="No active salary policy assigned for this date. Department Admin must assign a published policy.",
                 evaluated_inputs=evaluated_inputs
+            )
+
+        # Resolve from preserved archived snapshot if policy was permanently deleted
+        if not assignment.policy and assignment.archived_policy_snapshot:
+            return _resolve_rate_from_snapshot(
+                assignment.archived_policy_snapshot,
+                assignment,
+                class_date,
+                teaching_plan_id,
+                teaching_plan_code,
+                student_count,
+                evaluated_inputs,
             )
 
         policy = assignment.policy
@@ -402,7 +581,7 @@ def resolve_teacher_class_rate(
                 evaluated_inputs=evaluated_inputs,
             )
 
-    # 2. Find active TeacherPolicyAssignment for this teacher and date
+    # 2. Find TeacherPolicyAssignment for this teacher and date
     assignment = (
         TeacherPolicyAssignment.objects.filter(
             teacher_id=teacher.pk,
@@ -417,6 +596,20 @@ def resolve_teacher_class_rate(
     )
 
     if not assignment:
+        # Check historical / preserved assignments covering class_date
+        assignment = (
+            TeacherPolicyAssignment.objects.filter(
+                teacher_id=teacher.pk,
+                department_id=department_id,
+                effective_from__lte=class_date,
+            )
+            .filter(models.Q(effective_to__isnull=True) | models.Q(effective_to__gte=class_date))
+            .select_related("policy")
+            .order_by("-is_active", "-effective_from")
+            .first()
+        )
+
+    if not assignment:
         return ResolvedRateResult(
             is_resolved=False,
             winning_rate=None,
@@ -425,6 +618,18 @@ def resolve_teacher_class_rate(
             selection_reason=f"No active salary policy assignment found for teacher {teacher_name} on {class_date}.",
             error_message="No active salary policy assigned for this date. Department Admin must assign a published policy.",
             evaluated_inputs=evaluated_inputs,
+        )
+
+    # If assignment's policy was permanently deleted and detached, resolve from preserved snapshot
+    if not assignment.policy and assignment.archived_policy_snapshot:
+        return _resolve_rate_from_snapshot(
+            assignment.archived_policy_snapshot,
+            assignment,
+            class_date,
+            teaching_plan_id,
+            teaching_plan_code,
+            student_count,
+            evaluated_inputs,
         )
 
     policy = assignment.policy

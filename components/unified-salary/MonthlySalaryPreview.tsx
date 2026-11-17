@@ -1192,25 +1192,25 @@ function TeacherItemizedClassesTable({
 }
 
 interface Props {
+  departmentId?: number;
   departmentName?: string;
   onNavigateToStage?: (stage: string) => void;
 }
 
-// Module-level caches & in-flight request deduplication map to prevent duplicate network calls across renders and React StrictMode mounts
-const departmentPreviewCache = new Map<string, DepartmentSalaryPreviewResponse>();
-const inFlightDepartmentPreviews = new Map<string, Promise<DepartmentSalaryPreviewResponse>>();
-
-export function clearSalaryPreviewModuleCache() {
-  departmentPreviewCache.clear();
-  inFlightDepartmentPreviews.clear();
-}
+import {
+  departmentPreviewCache,
+  inFlightDepartmentPreviews,
+  clearSalaryPreviewModuleCache,
+} from "./salaryPreviewCache";
+export { clearSalaryPreviewModuleCache };
 
 export default function MonthlySalaryPreview({
-  departmentName = "Quran Department",
+  departmentId: propDepartmentId,
+  departmentName = "Department",
   onNavigateToStage,
 }: Props) {
   const isTuition = departmentName.toLowerCase().includes("tuition");
-  const departmentId = isTuition ? 2 : 1;
+  const departmentId = propDepartmentId || (isTuition ? 2 : 1);
 
   const today = new Date();
   const currentYear = today.getFullYear();
@@ -1910,6 +1910,16 @@ export default function MonthlySalaryPreview({
                             {policy.name} (v{version?.version_number || 1})
                           </span>
                         )}
+                        {teacherPrev.basic_salary_package && (
+                          <span className="rounded-full bg-indigo-50 border border-indigo-200 px-2 py-0.5 text-[10px] font-black text-indigo-700">
+                            {teacherPrev.basic_salary_package}
+                          </span>
+                        )}
+                        {teacherPrev.basic_salary_tier && (
+                          <span className="rounded-full bg-teal-50 border border-teal-200 px-2 py-0.5 text-[10px] font-black text-teal-700">
+                            {teacherPrev.basic_salary_tier}
+                          </span>
+                        )}
                         {hasDraftAdjustments && (
                           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black text-amber-800">
                             Draft Adjustments
@@ -2055,21 +2065,90 @@ export default function MonthlySalaryPreview({
                       </div>
                       <div className="rounded-2xl border border-slate-200 bg-white p-3">
                         <div className="text-[10px] font-bold text-slate-400 uppercase">Basic Salary</div>
-                        <div className="mt-1 font-black text-slate-500 text-sm">
+                        <div className="mt-1 font-black text-indigo-700 text-sm">
                           {money(earnings.basic_salary_earnings)}
                         </div>
+                        {teacherPrev.basic_salary_matrix_rate && (
+                          <div className="text-[9px] text-slate-500 font-semibold mt-0.5">
+                            Matrix: {money(teacherPrev.basic_salary_matrix_rate)}/mo
+                          </div>
+                        )}
                       </div>
                     </div>
 
-                    {/* Basic Salary Persistence Gap Notice */}
-                    {teacherPrev.basic_salary_notes && (
-                      <div className="rounded-2xl border border-slate-200 bg-white p-3 text-xs text-slate-600 flex items-start gap-2">
-                        <Info size={14} className="shrink-0 text-slate-400 mt-0.5" />
-                        <span className="font-medium text-[11px] leading-relaxed">
-                          <strong>Basic Salary Configuration:</strong> {teacherPrev.basic_salary_notes}
-                        </span>
+                    {/* Basic Monthly Salary Matrix Provenance Card */}
+                    {(policy?.compensation_model === "basic_plus_per_class" ||
+                      Number(earnings.basic_salary_earnings || 0) > 0 ||
+                      teacherPrev.basic_salary_matrix_rate) && (
+                      <div className="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4 space-y-2.5">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 border-b border-indigo-100/80 pb-2">
+                          <div className="flex items-center gap-2 text-xs font-black text-indigo-950">
+                            <Layers size={15} className="text-indigo-600" />
+                            <span>Basic Monthly Salary Matrix Provenance</span>
+                          </div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {teacherPrev.basic_salary_policy_version && (
+                              <span className="rounded-full bg-white border border-indigo-200 px-2.5 py-0.5 text-[10px] font-bold text-indigo-800">
+                                Policy Version: {teacherPrev.basic_salary_policy_version}
+                              </span>
+                            )}
+                            {teacherPrev.basic_salary_cell_id ? (
+                              <span className="rounded-full bg-white border border-indigo-200 px-2.5 py-0.5 text-[10px] font-bold text-indigo-800">
+                                Matrix Cell #{teacherPrev.basic_salary_cell_id}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                          <div className="rounded-xl border border-white bg-white/80 p-2.5 shadow-xs">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Teaching Package</div>
+                            <div className="mt-1 font-black text-slate-900 text-xs">
+                              {teacherPrev.basic_salary_package || "Evaluated by Schedule"}
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-white bg-white/80 p-2.5 shadow-xs">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Student Tier</div>
+                            <div className="mt-1 font-black text-slate-900 text-xs">
+                              {teacherPrev.basic_salary_tier || "Active Student Count"}
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-white bg-white/80 p-2.5 shadow-xs">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Matrix Monthly Rate</div>
+                            <div className="mt-1 font-black text-indigo-700 text-xs">
+                              {teacherPrev.basic_salary_matrix_rate ? `${money(teacherPrev.basic_salary_matrix_rate)} / mo` : "—"}
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-white bg-white/80 p-2.5 shadow-xs">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Eligible / Prorated</div>
+                            <div className="mt-1 font-black text-emerald-700 text-xs">
+                              {money(earnings.basic_salary_earnings)}
+                            </div>
+                          </div>
+                        </div>
+
+                        {teacherPrev.basic_salary_notes && (
+                          <div className="text-[11px] text-slate-600 flex items-start gap-1.5 pt-1">
+                            <Info size={13} className="shrink-0 text-indigo-500 mt-0.5" />
+                            <span className="leading-relaxed">
+                              <strong>Calculation & Proration:</strong> {teacherPrev.basic_salary_notes}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     )}
+
+                    {/* Standard Basic Salary Notice for non-matrix policies */}
+                    {!teacherPrev.basic_salary_matrix_rate &&
+                      policy?.compensation_model !== "basic_plus_per_class" &&
+                      teacherPrev.basic_salary_notes && (
+                        <div className="rounded-2xl border border-slate-200 bg-white p-3 text-xs text-slate-600 flex items-start gap-2">
+                          <Info size={14} className="shrink-0 text-slate-400 mt-0.5" />
+                          <span className="font-medium text-[11px] leading-relaxed">
+                            <strong>Basic Salary Note:</strong> {teacherPrev.basic_salary_notes}
+                          </span>
+                        </div>
+                      )}
 
                     {/* Applied Overrides Strip */}
                     {teacherPrev.applied_overrides.length > 0 && (

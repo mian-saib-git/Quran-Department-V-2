@@ -79,12 +79,16 @@ function money(value: string | number | null | undefined): string {
 }
 
 interface Props {
+  departmentId?: number;
   departmentName?: string;
 }
 
-export default function SalaryCuttingsAndAdjustments({ departmentName = "Quran Department" }: Props) {
+export default function SalaryCuttingsAndAdjustments({
+  departmentId: propDepartmentId,
+  departmentName = "Department",
+}: Props) {
   const isTuition = departmentName.toLowerCase().includes("tuition");
-  const departmentId = isTuition ? 2 : 1;
+  const departmentId = propDepartmentId || (isTuition ? 2 : 1);
 
   const today = new Date();
   const currentYear = today.getFullYear();

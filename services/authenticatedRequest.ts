@@ -148,23 +148,47 @@ async function sendRequest(
 }
 
 function responseErrorMessage(data: any, status: number): string {
-  return (
-    data?.detail ||
-    data?.error ||
-    (typeof data === "string" ? data : "") ||
-    (data && typeof data === "object"
-      ? Object.entries(data)
-          .map(([key, value]) => {
-            if (Array.isArray(value)) return `${key}: ${value.join(", ")}`;
-            if (value && typeof value === "object") {
-              return `${key}: ${JSON.stringify(value)}`;
-            }
-            return `${key}: ${String(value)}`;
-          })
-          .join(" | ")
-      : "") ||
-    `Request failed with status ${status}`
-  );
+  if (data && typeof data.detail === "string") return data.detail;
+  if (data && Array.isArray(data.detail)) return data.detail.join(", ");
+  if (data && typeof data.error === "string") return data.error;
+  if (data && Array.isArray(data.blocking_reasons) && data.blocking_reasons.length > 0) {
+    return data.blocking_reasons.join(". ");
+  }
+  if (typeof data === "string") return data;
+
+  if (Array.isArray(data)) {
+    return data
+      .map((item) =>
+        typeof item === "object" && item !== null
+          ? responseErrorMessage(item, status)
+          : String(item)
+      )
+      .join(", ");
+  }
+
+  if (data && typeof data === "object") {
+    const entries = Object.entries(data).filter(
+      ([key]) => key !== "code" && key !== "can_delete" && key !== "eligibility"
+    );
+    if (entries.length > 0) {
+      return entries
+        .map(([key, value]) => {
+          let valStr = "";
+          if (Array.isArray(value)) {
+            valStr = value.join(", ");
+          } else if (value && typeof value === "object") {
+            valStr = JSON.stringify(value);
+          } else {
+            valStr = String(value);
+          }
+          // Do not prepend numeric indices like "0: " from array serialization
+          return /^\d+$/.test(key) ? valStr : `${key}: ${valStr}`;
+        })
+        .join(" | ");
+    }
+  }
+
+  return `Request failed with status ${status}`;
 }
 
 export class ApiRequestError extends Error {

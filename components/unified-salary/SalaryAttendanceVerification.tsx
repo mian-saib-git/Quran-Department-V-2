@@ -41,13 +41,17 @@ import {
 import { fetchDepartmentTeachers, DepartmentTeacher } from "../../services/salaryAssignmentService";
 
 interface Props {
+  departmentId?: number;
   departmentName?: string;
 }
 
-export default function SalaryAttendanceVerificationWorkspace({ departmentName = "Quran Department" }: Props) {
+export default function SalaryAttendanceVerificationWorkspace({
+  departmentId: propDepartmentId,
+  departmentName = "Department",
+}: Props) {
   // Department Context
   const isTuition = departmentName.toLowerCase().includes("tuition");
-  const departmentId = isTuition ? 2 : 1; // Standard seeded IDs for Quran (1) and Tuition (2)
+  const departmentId = propDepartmentId || (isTuition ? 2 : 1);
 
   // Date Context (default to current year & month)
   const today = new Date();
