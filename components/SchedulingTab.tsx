@@ -1,7 +1,107 @@
-import React, { memo, useCallback, useMemo, useRef } from "react";
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AppState, Student, Teacher } from "../types";
 import { TIME_SLOTS } from "../constants";
 import { ChevronLeft, ChevronRight, Edit2, Plus, Users } from "lucide-react";
+
+export const TEACHER_COL_WIDTH = 238;
+export const TIME_COL_WIDTH = 132;
+export const OVERSCAN_ROWS = 3;
+export const OVERSCAN_COLS = 2;
+const EMPTY_STUDENTS: Student[] = [];
+
+export const estimateSlotRowHeight = (maxStudentsInRow: number): number => {
+  if (maxStudentsInRow <= 0) return 109;
+  if (maxStudentsInRow === 1) return 136;
+  if (maxStudentsInRow === 2) return 174;
+  return 196;
+};
+
+export interface HorizontalRange {
+  startCol: number;
+  endCol: number;
+  leftSpacerWidth: number;
+  rightSpacerWidth: number;
+}
+
+export const computeHorizontalRange = (
+  scrollLeft: number,
+  viewportWidth: number,
+  totalCols: number,
+  colWidth: number = TEACHER_COL_WIDTH,
+  overscan: number = OVERSCAN_COLS
+): HorizontalRange => {
+  if (totalCols <= 0) {
+    return { startCol: 0, endCol: -1, leftSpacerWidth: 0, rightSpacerWidth: 0 };
+  }
+  const effectiveLeft = Math.max(0, scrollLeft);
+  const effectiveWidth = Math.max(colWidth, viewportWidth - TIME_COL_WIDTH);
+  const rawStart = Math.floor(effectiveLeft / colWidth);
+  const rawEnd = Math.ceil((effectiveLeft + effectiveWidth) / colWidth) - 1;
+  const startCol = Math.max(0, Math.min(totalCols - 1, rawStart - overscan));
+  const endCol = Math.max(startCol, Math.min(totalCols - 1, rawEnd + overscan));
+  return {
+    startCol,
+    endCol,
+    leftSpacerWidth: startCol * colWidth,
+    rightSpacerWidth: Math.max(0, (totalCols - 1 - endCol) * colWidth),
+  };
+};
+
+export interface VerticalRange {
+  startRow: number;
+  endRow: number;
+  topSpacerHeight: number;
+  bottomSpacerHeight: number;
+}
+
+export const computeVerticalRange = (
+  scrollTop: number,
+  viewportHeight: number,
+  rowHeights: number[],
+  overscan: number = OVERSCAN_ROWS
+): VerticalRange => {
+  const totalRows = rowHeights.length;
+  if (totalRows === 0) {
+    return { startRow: 0, endRow: -1, topSpacerHeight: 0, bottomSpacerHeight: 0 };
+  }
+  let totalHeight = 0;
+  for (let i = 0; i < totalRows; i++) totalHeight += rowHeights[i];
+
+  const effectiveViewport = Math.max(120, viewportHeight);
+  const effectiveTop = Math.min(Math.max(0, scrollTop), Math.max(0, totalHeight - effectiveViewport));
+  const effectiveBottom = effectiveTop + effectiveViewport;
+
+  let acc = 0;
+  let rawStart = 0;
+  let foundStart = false;
+  let rawEnd = totalRows - 1;
+
+  for (let i = 0; i < totalRows; i++) {
+    const h = rowHeights[i];
+    const nextAcc = acc + h;
+    if (!foundStart && nextAcc > effectiveTop) {
+      rawStart = i;
+      foundStart = true;
+    }
+    if (acc < effectiveBottom) {
+      rawEnd = i;
+    } else {
+      break;
+    }
+    acc = nextAcc;
+  }
+
+  const startRow = Math.max(0, rawStart - overscan);
+  const endRow = Math.min(totalRows - 1, Math.max(startRow, rawEnd + overscan));
+
+  let topSpacerHeight = 0;
+  for (let i = 0; i < startRow; i++) topSpacerHeight += rowHeights[i];
+
+  let bottomSpacerHeight = 0;
+  for (let i = endRow + 1; i < totalRows; i++) bottomSpacerHeight += rowHeights[i];
+
+  return { startRow, endRow, topSpacerHeight, bottomSpacerHeight };
+};
 
 interface SchedulingTabProps {
   appState: AppState;
@@ -50,7 +150,7 @@ const TeacherHeader = memo(function TeacherHeader({
         bg-white/92 backdrop-blur-xl
         border-b border-r border-slate-200/80
         px-3 py-4
-        min-w-[238px]
+        w-[238px] min-w-[238px] max-w-[238px]
         text-left
       "
     >
@@ -294,12 +394,22 @@ export const SchedulingTab: React.FC<SchedulingTabProps> = ({
   onCellClick,
 }) => {
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const onCellClickRef = useRef(onCellClick);
+  onCellClickRef.current = onCellClick;
+
+  const stableOnCellClick = useCallback(
+    (teacherId: string, timeSlot: string, studentsInClass: Student[]) => {
+      onCellClickRef.current(teacherId, timeSlot, studentsInClass);
+    },
+    []
+  );
 
   const teachers = appState.teachers;
   const students = appState.students;
 
-  const studentsByTeacherAndSlot = useMemo(() => {
+  const { studentsByTeacherAndSlot, maxStudentsPerSlot } = useMemo(() => {
     const map = new Map<string, Student[]>();
+    const maxPerSlot = new Map<string, number>();
 
     for (const student of students) {
       const key = `${student.teacherId}__${student.timeSlot}`;
@@ -312,14 +422,141 @@ export const SchedulingTab: React.FC<SchedulingTabProps> = ({
       }
 
       group.push(student);
+      const prevMax = maxPerSlot.get(student.timeSlot) ?? 0;
+      if (group.length > prevMax) {
+        maxPerSlot.set(student.timeSlot, group.length);
+      }
     }
 
     for (const group of map.values()) {
       group.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
     }
 
-    return map;
+    return { studentsByTeacherAndSlot: map, maxStudentsPerSlot: maxPerSlot };
   }, [students]);
+
+  const measuredRowHeightsRef = useRef<Record<number, number>>({});
+  const [measureVersion, setMeasureVersion] = useState(0);
+
+  const rowHeights = useMemo(() => {
+    return TIME_SLOTS.map((slot, idx) => {
+      const measured = measuredRowHeightsRef.current[idx];
+      if (typeof measured === "number" && measured > 0) return measured;
+      return estimateSlotRowHeight(maxStudentsPerSlot.get(slot) ?? 0);
+    });
+  }, [maxStudentsPerSlot, measureVersion]);
+
+  const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({
+    width: 1200,
+    height: 640,
+  });
+  const [scrollPos, setScrollPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const scrollPosRef = useRef<{ top: number; left: number }>({ top: 0, left: 0 });
+  const rafIdRef = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const updateSize = () => {
+      const nextW = el.clientWidth || 1200;
+      const nextH = el.clientHeight || 640;
+      setViewportSize((prev) => (prev.width === nextW && prev.height === nextH ? prev : { width: nextW, height: nextH }));
+    };
+
+    updateSize();
+
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(updateSize);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }
+    window.addEventListener("resize", updateSize);
+    return () => window.removeEventListener("resize", updateSize);
+  }, []);
+
+  const horizontalRange = useMemo(
+    () => computeHorizontalRange(scrollPos.left, viewportSize.width, teachers.length),
+    [scrollPos.left, viewportSize.width, teachers.length]
+  );
+
+  const verticalRange = useMemo(
+    () => computeVerticalRange(scrollPos.top, viewportSize.height, rowHeights),
+    [scrollPos.top, viewportSize.height, rowHeights]
+  );
+
+  const rangeRef = useRef({
+    startRow: verticalRange.startRow,
+    endRow: verticalRange.endRow,
+    startCol: horizontalRange.startCol,
+    endCol: horizontalRange.endCol,
+  });
+  rangeRef.current = {
+    startRow: verticalRange.startRow,
+    endRow: verticalRange.endRow,
+    startCol: horizontalRange.startCol,
+    endCol: horizontalRange.endCol,
+  };
+
+  // Clamp scroll position if teacher list shrinks (e.g., department switch)
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const maxLeft = Math.max(0, TIME_COL_WIDTH + teachers.length * TEACHER_COL_WIDTH - el.clientWidth);
+    if (el.scrollLeft > maxLeft) {
+      el.scrollLeft = maxLeft;
+      scrollPosRef.current.left = maxLeft;
+      setScrollPos({ ...scrollPosRef.current });
+    }
+  }, [teachers.length]);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    scrollPosRef.current = { top: el.scrollTop, left: el.scrollLeft };
+
+    if (rafIdRef.current !== null) return;
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null;
+      const { top, left } = scrollPosRef.current;
+      const nextH = computeHorizontalRange(left, viewportSize.width, teachers.length);
+      const nextV = computeVerticalRange(top, viewportSize.height, rowHeights);
+      const prev = rangeRef.current;
+      if (
+        nextH.startCol !== prev.startCol ||
+        nextH.endCol !== prev.endCol ||
+        nextV.startRow !== prev.startRow ||
+        nextV.endRow !== prev.endRow
+      ) {
+        setScrollPos({ top, left });
+      }
+    });
+  }, [viewportSize.width, viewportSize.height, teachers.length, rowHeights]);
+
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
+    };
+  }, []);
+
+  const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({});
+
+  useLayoutEffect(() => {
+    let changed = false;
+    for (let idx = verticalRange.startRow; idx <= verticalRange.endRow; idx++) {
+      const tr = rowRefs.current[idx];
+      if (!tr) continue;
+      const h = tr.getBoundingClientRect().height;
+      const currentH = measuredRowHeightsRef.current[idx] ?? estimateSlotRowHeight(maxStudentsPerSlot.get(TIME_SLOTS[idx]) ?? 0);
+      if (h > 0 && Math.abs(currentH - h) > 1) {
+        measuredRowHeightsRef.current[idx] = h;
+        changed = true;
+      }
+    }
+    if (changed) {
+      setMeasureVersion((v) => v + 1);
+    }
+  }, [verticalRange.startRow, verticalRange.endRow, horizontalRange.startCol, horizontalRange.endCol, students, maxStudentsPerSlot]);
 
   const scrollHorizontal = useCallback((direction: "left" | "right") => {
     const el = scrollRef.current;
@@ -332,11 +569,27 @@ export const SchedulingTab: React.FC<SchedulingTabProps> = ({
     });
   }, []);
 
+  const visibleTeachers = useMemo(() => {
+    if (horizontalRange.endCol < horizontalRange.startCol) return [];
+    return teachers.slice(horizontalRange.startCol, horizontalRange.endCol + 1);
+  }, [teachers, horizontalRange.startCol, horizontalRange.endCol]);
+
   const teacherHeaders = useMemo(() => {
-    return teachers.map((teacher, index) => (
-      <TeacherHeader key={teacher.id} teacher={teacher} index={index} />
+    return visibleTeachers.map((teacher, idx) => (
+      <TeacherHeader key={teacher.id} teacher={teacher} index={horizontalRange.startCol + idx} />
     ));
-  }, [teachers]);
+  }, [visibleTeachers, horizontalRange.startCol]);
+
+  const totalRenderedCols =
+    1 +
+    (horizontalRange.leftSpacerWidth > 0 ? 1 : 0) +
+    visibleTeachers.length +
+    (horizontalRange.rightSpacerWidth > 0 ? 1 : 0);
+
+  const visibleSlots = useMemo(() => {
+    if (verticalRange.endRow < verticalRange.startRow) return [];
+    return TIME_SLOTS.slice(verticalRange.startRow, verticalRange.endRow + 1);
+  }, [verticalRange.startRow, verticalRange.endRow]);
 
   return (
     <div className="max-w-full mx-auto">
@@ -434,6 +687,8 @@ export const SchedulingTab: React.FC<SchedulingTabProps> = ({
         {/* Scroll area */}
         <div
           ref={scrollRef}
+          onScroll={handleScroll}
+          data-testid="scheduling-scroll-container"
           className="
             relative z-10
             flex-1
@@ -452,7 +707,7 @@ export const SchedulingTab: React.FC<SchedulingTabProps> = ({
                     bg-white/96 backdrop-blur-xl
                     border-b border-r border-slate-200/80
                     px-4 py-4
-                    min-w-[132px]
+                    w-[132px] min-w-[132px]
 
                     dark:bg-slate-950/96 dark:border-slate-700
                   "
@@ -462,38 +717,111 @@ export const SchedulingTab: React.FC<SchedulingTabProps> = ({
                   </span>
                 </th>
 
+                {horizontalRange.leftSpacerWidth > 0 && (
+                  <th
+                    aria-hidden="true"
+                    style={{
+                      width: horizontalRange.leftSpacerWidth,
+                      minWidth: horizontalRange.leftSpacerWidth,
+                      padding: 0,
+                      border: 0,
+                    }}
+                  />
+                )}
+
                 {teacherHeaders}
+
+                {horizontalRange.rightSpacerWidth > 0 && (
+                  <th
+                    aria-hidden="true"
+                    style={{
+                      width: horizontalRange.rightSpacerWidth,
+                      minWidth: horizontalRange.rightSpacerWidth,
+                      padding: 0,
+                      border: 0,
+                    }}
+                  />
+                )}
               </tr>
             </thead>
 
             <tbody>
-              {TIME_SLOTS.map((slot, rowIndex) => (
-                <tr
-                  key={slot}
-                  className={
-                    rowIndex % 2 === 0
-                      ? "bg-white/48 dark:bg-slate-950/20"
-                      : "bg-slate-50/35 dark:bg-slate-900/20"
-                  }
-                >
-                  <TimeCell slot={slot} />
-
-                  {teachers.map((teacher) => {
-                    const key = `${teacher.id}__${slot}`;
-                    const classStudents = studentsByTeacherAndSlot.get(key) ?? [];
-
-                    return (
-                      <ScheduleCell
-                        key={`${teacher.id}-${slot}`}
-                        teacherId={teacher.id}
-                        slot={slot}
-                        students={classStudents}
-                        onCellClick={onCellClick}
-                      />
-                    );
-                  })}
+              {verticalRange.topSpacerHeight > 0 && (
+                <tr aria-hidden="true">
+                  <td
+                    colSpan={totalRenderedCols}
+                    style={{ height: verticalRange.topSpacerHeight, padding: 0, border: 0 }}
+                  />
                 </tr>
-              ))}
+              )}
+
+              {visibleSlots.map((slot, offset) => {
+                const rowIndex = verticalRange.startRow + offset;
+                return (
+                  <tr
+                    key={slot}
+                    data-row-index={rowIndex}
+                    ref={(el) => {
+                      rowRefs.current[rowIndex] = el;
+                    }}
+                    className={
+                      rowIndex % 2 === 0
+                        ? "bg-white/48 dark:bg-slate-950/20"
+                        : "bg-slate-50/35 dark:bg-slate-900/20"
+                    }
+                  >
+                    <TimeCell slot={slot} />
+
+                    {horizontalRange.leftSpacerWidth > 0 && (
+                      <td
+                        aria-hidden="true"
+                        style={{
+                          width: horizontalRange.leftSpacerWidth,
+                          minWidth: horizontalRange.leftSpacerWidth,
+                          padding: 0,
+                          border: 0,
+                        }}
+                      />
+                    )}
+
+                    {visibleTeachers.map((teacher) => {
+                      const key = `${teacher.id}__${slot}`;
+                      const classStudents = studentsByTeacherAndSlot.get(key) ?? EMPTY_STUDENTS;
+
+                      return (
+                        <ScheduleCell
+                          key={`${teacher.id}-${slot}`}
+                          teacherId={teacher.id}
+                          slot={slot}
+                          students={classStudents}
+                          onCellClick={stableOnCellClick}
+                        />
+                      );
+                    })}
+
+                    {horizontalRange.rightSpacerWidth > 0 && (
+                      <td
+                        aria-hidden="true"
+                        style={{
+                          width: horizontalRange.rightSpacerWidth,
+                          minWidth: horizontalRange.rightSpacerWidth,
+                          padding: 0,
+                          border: 0,
+                        }}
+                      />
+                    )}
+                  </tr>
+                );
+              })}
+
+              {verticalRange.bottomSpacerHeight > 0 && (
+                <tr aria-hidden="true">
+                  <td
+                    colSpan={totalRenderedCols}
+                    style={{ height: verticalRange.bottomSpacerHeight, padding: 0, border: 0 }}
+                  />
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

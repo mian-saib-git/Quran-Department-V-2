@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import transaction
-from django.db.models import Q, Prefetch, Count
+from django.db.models import Q, Prefetch, Count, Exists, OuterRef
 from django.utils import timezone
 
 from rest_framework import status
@@ -269,15 +269,15 @@ def assigned_subjects_for_student(student):
 # ---------------------------------------------------------------------------
 
 def student_payload(student):
-    # Get earliest schedule date as enrollment proxy
-    first_schedule = ClassSchedule.objects.filter(
-        student=student,
-    ).order_by("id").first()
+    has_schedule = getattr(student, "has_any_schedule", None)
+    if has_schedule is None:
+        has_schedule = ClassSchedule.objects.filter(
+            student=student,
+        ).exists()
 
     enrollment_date = None
-    if first_schedule:
-        # Use the teacher's joining date or a fixed school start date
-        # We use the student user's date_joined as enrollment date
+    if has_schedule:
+        # Use the student user's date_joined as enrollment date
         enrollment_date = student.user.date_joined.date().isoformat()
 
     return {
@@ -296,10 +296,6 @@ def student_payload(student):
 
 def schedule_payload(schedule):
     student = schedule.student
-    subjects = StudentSubject.objects.filter(
-        student=student,
-        is_active=True,
-    ).order_by("subject", "custom_subject_name", "id")
     student_data = {
         "id": student.id,
         "user_id": student.user_id,
@@ -309,7 +305,7 @@ def schedule_payload(schedule):
         "notes": student.notes,
         "teacher_id": student.teacher_id,
         "teacher_name": str(student.teacher),
-        "assigned_subjects": [student_subject_payload(item) for item in subjects],
+        "assigned_subjects": assigned_subjects_from_prefetch(student),
     }
     return {
         "id": schedule.id,
@@ -734,9 +730,9 @@ def frontend_status_to_django(value):
 #      cache and student.assigned_subjects.all() would still return ALL
 #      subjects (including inactive ones from unrelated querysets).
 # ---------------------------------------------------------------------------
-def make_active_subjects_prefetch():
+def make_active_subjects_prefetch(lookup="assigned_subjects"):
     return Prefetch(
-        "assigned_subjects",
+        lookup,
         queryset=StudentSubject.objects.filter(
             is_active=True,
         ).order_by("subject", "custom_subject_name", "id"),
@@ -927,6 +923,8 @@ class DashboardView(APIView):
                         "teacher__user",
                         "student__user",
                         "student__teacher__user",
+                    ).prefetch_related(
+                        make_active_subjects_prefetch("student__assigned_subjects"),
                     ).filter(
                         department=department,
                         is_active=True,
@@ -969,6 +967,10 @@ class DashboardView(APIView):
             students = StudentProfile.objects.select_related(
                 "user",
                 "teacher__user",
+            ).annotate(
+                has_any_schedule=Exists(
+                    ClassSchedule.objects.filter(student=OuterRef("pk"))
+                )
             ).prefetch_related(
                 active_subjects_prefetch,
                 schedule_prefetch,
@@ -988,6 +990,8 @@ class DashboardView(APIView):
                             "teacher__user",
                             "student__user",
                             "student__teacher__user",
+                        ).prefetch_related(
+                            make_active_subjects_prefetch("student__assigned_subjects"),
                         ).filter(
                             department=department,
                             teacher=teacher,
@@ -1002,8 +1006,8 @@ class DashboardView(APIView):
                 Q(entity_type=Attendance.EntityType.STUDENT, student__teacher=teacher)
                 | Q(entity_type=Attendance.EntityType.TEACHER, teacher=teacher)
             ).order_by("-date", "-updated_at", "-id")
-            attendance_total = attendance.count()
             attendance_status_counts = dict(attendance.order_by().values_list("status").annotate(total=Count("id")))
+            attendance_total = sum(attendance_status_counts.values())
             attendance = attendance[:50]
 
             lessons = Lesson.objects.select_related(
@@ -1060,6 +1064,10 @@ class DashboardView(APIView):
                 student = StudentProfile.objects.select_related(
                     "user",
                     "teacher__user",
+                ).annotate(
+                    has_any_schedule=Exists(
+                        ClassSchedule.objects.filter(student=OuterRef("pk"))
+                    )
                 ).prefetch_related(
                     active_subjects_prefetch,
                     schedule_prefetch,
@@ -1074,6 +1082,9 @@ class DashboardView(APIView):
             schedules = ClassSchedule.objects.select_related(
                 "teacher__user",
                 "student__user",
+                "student__teacher__user",
+            ).prefetch_related(
+                make_active_subjects_prefetch("student__assigned_subjects"),
             ).filter(
                 department=department,
                 student=student,
@@ -1089,8 +1100,8 @@ class DashboardView(APIView):
                 entity_type=Attendance.EntityType.STUDENT,
                 student=student,
             ).order_by("-date", "-updated_at", "-id")
-            attendance_total = attendance.count()
             attendance_status_counts = dict(attendance.order_by().values_list("status").annotate(total=Count("id")))
+            attendance_total = sum(attendance_status_counts.values())
             attendance = attendance[:50]
 
             daily_reports = DailyLessonReport.objects.select_related(
@@ -1928,13 +1939,35 @@ class DailyLessonReportListCreateView(APIView):
         teacher_id = safe_int(request.query_params.get("teacher_id"))
         month = safe_int(request.query_params.get("month"))
         year = safe_int(request.query_params.get("year"))
+        exact_date = str(request.query_params.get("date", "") or "").strip()
+        date_from = str(request.query_params.get("date_from", "") or "").strip()
+        date_to = str(request.query_params.get("date_to", "") or "").strip()
+        subject_filter = str(request.query_params.get("subject", "") or "").strip()
+        progress_filter = str(request.query_params.get("progress_status", "") or "").strip()
+        search_query = str(request.query_params.get("search", "") or "").strip()
+
+        raw_page = request.query_params.get("page", 1)
+        raw_page_size = request.query_params.get("page_size", 50)
+        try:
+            page = int(raw_page)
+            if page < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            return Response({"page": "Use a positive integer."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            page_size = int(raw_page_size)
+            if page_size < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            return Response({"page_size": "Use a positive integer."}, status=status.HTTP_400_BAD_REQUEST)
+        page_size = min(page_size, 200)
 
         reports = DailyLessonReport.objects.filter(department=department).select_related(
             "student__user",
             "teacher__user",
             "created_by",
             "edit_permission_granted_by",
-        ).prefetch_related("subject_entries")
+        )
 
         if student_id:
             reports = reports.filter(student_id=student_id)
@@ -1945,6 +1978,48 @@ class DailyLessonReportListCreateView(APIView):
         if month and year:
             first_day, next_month = build_month_range(year, month)
             reports = reports.filter(date__gte=first_day, date__lt=next_month)
+
+        if exact_date:
+            parsed_exact = parse_frontend_date(exact_date)
+            if not parsed_exact:
+                return Response({"date": "Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+            reports = reports.filter(date=parsed_exact)
+
+        if date_from:
+            parsed_from = parse_frontend_date(date_from)
+            if not parsed_from:
+                return Response({"date_from": "Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+            reports = reports.filter(date__gte=parsed_from)
+
+        if date_to:
+            parsed_to = parse_frontend_date(date_to)
+            if not parsed_to:
+                return Response({"date_to": "Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+            reports = reports.filter(date__lte=parsed_to)
+
+        needs_distinct = False
+        if subject_filter:
+            reports = reports.filter(subject_entries__subject=subject_filter)
+            needs_distinct = True
+
+        if progress_filter:
+            reports = reports.filter(subject_entries__progress_status=progress_filter)
+            needs_distinct = True
+
+        if search_query:
+            reports = reports.filter(
+                Q(student__user__first_name__icontains=search_query)
+                | Q(student__user__last_name__icontains=search_query)
+                | Q(student__user__username__icontains=search_query)
+                | Q(teacher__user__first_name__icontains=search_query)
+                | Q(teacher__user__last_name__icontains=search_query)
+                | Q(teacher__user__username__icontains=search_query)
+                | Q(notes__icontains=search_query)
+                | Q(subject_entries__subject__icontains=search_query)
+                | Q(subject_entries__topic_summary__icontains=search_query)
+                | Q(subject_entries__remarks__icontains=search_query)
+            )
+            needs_distinct = True
 
         if is_department_manager(user):
             pass
@@ -1968,12 +2043,23 @@ class DailyLessonReportListCreateView(APIView):
         else:
             return Response({"detail": "Invalid role."}, status=status.HTTP_403_FORBIDDEN)
 
+        if needs_distinct:
+            reports = reports.distinct()
+
         reports = reports.order_by("-date", "-updated_at", "-id")
         total_count = reports.count()
+        total_pages = max(1, (total_count + page_size - 1) // page_size)
+        offset = (page - 1) * page_size
+        page_rows = list(reports[offset : offset + page_size].prefetch_related("subject_entries"))
 
         return Response({
             "count": total_count,
-            "results": [daily_lesson_report_payload(item) for item in reports],
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "next": page + 1 if page < total_pages else None,
+            "previous": page - 1 if page > 1 else None,
+            "results": [daily_lesson_report_payload(item) for item in page_rows],
         })
 
     def post(self, request):
@@ -5089,3 +5175,271 @@ class GeminiAssistantView(APIView):
                 },
                 status=status.HTTP_502_BAD_GATEWAY,
             )
+
+
+class SchedulingMutationView(APIView):
+    """
+    Department-isolated scheduling mutations for Quran Coordinator Scheduling matrix:
+    - edit_student: update teacher assignment, time_slot, and class_days atomically
+    - remove_student: unassign student's ClassSchedule(s) for a specific (teacher, time_slot)
+    - delete_class: unassign all students' ClassSchedule(s) for a specific (teacher, time_slot)
+    Preserves User accounts, StudentProfile, Attendance, Lessons, and ClassHistory.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @staticmethod
+    def _parse_time_slot(raw_value):
+        raw = str(raw_value or "").strip()[:5]
+        if len(raw) != 5 or raw[2] != ":":
+            return None, ""
+        try:
+            hh = int(raw[:2])
+            mm = int(raw[3:5])
+        except ValueError:
+            return None, ""
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            return None, ""
+        return time(hh, mm), f"{hh:02d}:{mm:02d}"
+
+    @staticmethod
+    def _normalize_days(raw_days):
+        if not isinstance(raw_days, list):
+            return []
+        valid_map = {
+            "monday": "Monday",
+            "tuesday": "Tuesday",
+            "wednesday": "Wednesday",
+            "thursday": "Thursday",
+            "friday": "Friday",
+            "saturday": "Saturday",
+            "sunday": "Sunday",
+        }
+        seen = set()
+        out = []
+        for d in raw_days:
+            canon = valid_map.get(str(d or "").strip().lower())
+            if canon and canon not in seen:
+                seen.add(canon)
+                out.append(canon)
+        return out
+
+    @transaction.atomic
+    def post(self, request):
+        from accounts.views import coordinator_has_effective_tab_access, department_feature_map
+        from accounts.serializers import sync_student_schedules, _student_history
+        from .models import StudentClassHistory
+        from .ws_notify import notify_global
+
+        user = request.user
+        department = quran_department_for_user(user)
+        if not department:
+            return Response(
+                {"detail": "Quran department assignment is required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not is_department_manager(user):
+            return Response(
+                {"detail": "Only department admins and coordinators can modify schedules."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not coordinator_has_effective_tab_access(user, department, "tab_scheduling"):
+            return Response(
+                {"detail": "Scheduling is not available for this coordinator."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        data = request.data or {}
+        action = str(data.get("action") or "").strip()
+
+        if action == "edit_student":
+            try:
+                student_id = int(data.get("student_id"))
+                teacher_id = int(data.get("teacher_id"))
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Valid student_id and teacher_id are required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            parsed_time, time_str = self._parse_time_slot(data.get("time_slot"))
+            if parsed_time is None:
+                return Response(
+                    {"detail": "Invalid time_slot. Expected 24-hour HH:MM."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            class_days = self._normalize_days(data.get("class_days"))
+            if not class_days:
+                return Response(
+                    {"detail": "At least one valid class day is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            student = (
+                StudentProfile.objects.select_related("user", "teacher")
+                .filter(id=student_id, department=department, user__archived_at__isnull=True)
+                .first()
+            )
+            if not student:
+                return Response(
+                    {"detail": "Student not found in your department."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            teacher = (
+                TeacherProfile.objects.select_related("user")
+                .filter(id=teacher_id, department=department, user__archived_at__isnull=True)
+                .first()
+            )
+            if not teacher:
+                return Response(
+                    {"detail": "Teacher not found in your department."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            previous_teacher = student.teacher
+            if previous_teacher_id := (previous_teacher.id if previous_teacher else None):
+                pass
+            if previous_teacher_id != teacher.id:
+                previous_type = student.student_type
+                student.teacher = teacher
+                student.student_type = StudentProfile.StudentType.TRANSFERRED_FROM_TEACHER
+                student.status_effective_date = timezone.localdate()
+                student.save(update_fields=["teacher", "student_type", "status_effective_date"])
+                _student_history(
+                    student=student,
+                    event_type=StudentClassHistory.EventType.TEACHER_TRANSFER,
+                    actor=user,
+                    previous_teacher=previous_teacher,
+                    new_teacher=teacher,
+                    previous_student_type=previous_type,
+                    new_student_type=student.student_type,
+                    previous_class_status=student.class_status,
+                    new_class_status=student.class_status,
+                    notes="Schedule updated from Scheduling matrix.",
+                    effective_date=timezone.localdate(),
+                )
+
+            existing_schedule = student.schedules.filter(is_active=True).order_by("id").first()
+            duration_minutes = getattr(existing_schedule, "duration_minutes", 30) or 30
+            sync_student_schedules(
+                student=student,
+                teacher=teacher,
+                time_slot=parsed_time,
+                class_days=class_days,
+                duration_minutes=duration_minutes,
+            )
+
+            days_count = len(class_days)
+            class_type = f"{days_count} day{'s' if days_count > 1 else ''} / week"
+
+            notify_global("academy_update", {
+                "event": "schedule_updated",
+                "student_id": student.id,
+                "teacher_id": teacher.id,
+            })
+
+            return Response({
+                "detail": "Schedule updated.",
+                "student": {
+                    "id": str(student.id),
+                    "name": student.user.get_full_name() or student.user.username,
+                    "teacherId": str(teacher.id),
+                    "timeSlot": time_str,
+                    "classType": class_type,
+                    "classDays": class_days,
+                },
+            })
+
+        if action in ("remove_student", "delete_class"):
+            features = department_feature_map(department)
+            if not features.get("delete_schedule", True):
+                return Response(
+                    {"detail": "Delete Schedule is not enabled for your department."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            parsed_time, time_str = self._parse_time_slot(data.get("time_slot"))
+            if parsed_time is None:
+                return Response(
+                    {"detail": "Invalid time_slot. Expected 24-hour HH:MM."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            try:
+                teacher_id = int(data.get("teacher_id"))
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Valid teacher_id is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            teacher = TeacherProfile.objects.filter(
+                id=teacher_id, department=department, user__archived_at__isnull=True
+            ).first()
+            if not teacher:
+                return Response(
+                    {"detail": "Teacher not found in your department."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            if action == "remove_student":
+                try:
+                    student_id = int(data.get("student_id"))
+                except (TypeError, ValueError):
+                    return Response(
+                        {"detail": "Valid student_id is required."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                student = StudentProfile.objects.filter(
+                    id=student_id, department=department, user__archived_at__isnull=True
+                ).first()
+                if not student:
+                    return Response(
+                        {"detail": "Student not found in your department."},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+
+                removed_count, _ = ClassSchedule.objects.filter(
+                    student=student, teacher=teacher, time_slot=parsed_time
+                ).delete()
+
+                remaining = student.schedules.filter(is_active=True).order_by("time_slot", "id").first()
+                remaining_slot = str(remaining.time_slot)[:5] if remaining and remaining.time_slot else ""
+
+                notify_global("academy_update", {
+                    "event": "schedule_updated",
+                    "student_id": student.id,
+                })
+
+                return Response({
+                    "detail": "Student removed from class slot.",
+                    "student_id": str(student.id),
+                    "remaining_time_slot": remaining_slot,
+                    "removed_count": removed_count,
+                })
+
+            # delete_class
+            removed_count, _ = ClassSchedule.objects.filter(
+                student__department=department, teacher=teacher, time_slot=parsed_time
+            ).delete()
+
+            notify_global("academy_update", {
+                "event": "schedule_updated",
+                "teacher_id": teacher.id,
+            })
+
+            return Response({
+                "detail": "Class slot cleared.",
+                "teacher_id": str(teacher.id),
+                "time_slot": time_str,
+                "removed_count": removed_count,
+            })
+
+        return Response(
+            {"detail": "Unsupported scheduling action."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )

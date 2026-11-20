@@ -1,5 +1,12 @@
-import IVSClockCard from "./components/IVSClockCard";
-import NotificationBell from "./components/NotificationBell";
+import {
+  TabLoading,
+  DepartmentWorkspaceLoading,
+} from "./components/dashboard/DashboardPrimitives";
+import {
+  formatTime12,
+  classTypeFromDayCount,
+  defaultDaysFromClassType,
+} from "./services/quranScheduleHelpers";
 import { IVS_NOTIFICATION_NAVIGATE_EVENT, type NotificationNavigateDetail } from "./components/notificationNavigation";
 import { loadQuranAttendanceDate } from "./services/djangoApiService";
 import { isImportActive } from "./services/importActivity";
@@ -7,6 +14,7 @@ import { isImportActive } from "./services/importActivity";
 // IVS_PERMANENT_FEATURE_CONTEXT_FIX_V23
 // IVS_ATTENDANCE_FRONTEND_RESPONSIVENESS_V16
 import { connectAcademyWS, disconnectAcademyWS, useAcademyWS } from "././hooks/useAcademyWS";
+import { useVisibilityPolling } from "./hooks/useVisibilityPolling";
 import React, { useState, useEffect, useMemo, lazy, Suspense, useRef, startTransition, useCallback } from "react";
 import {
   loadSession,
@@ -25,16 +33,22 @@ import {
   type FeatureLockDetail,
   type FeaturesUpdatedDetail,
 } from "./services/featureAccess";
-import { FeatureLockedModal } from "./components/FeatureLockedModal";
-import MaintenanceScreen from "./components/MaintenanceScreen";
-import GlobalNoticeCenter from "./components/GlobalNoticeCenter";
+const FeatureLockedModal = lazy(() =>
+  import("./components/FeatureLockedModal").then((m) => ({
+    default: m.FeatureLockedModal,
+  }))
+);
+const MaintenanceScreen = lazy(() => import("./components/MaintenanceScreen"));
+const GlobalNoticeCenter = lazy(() => import("./components/GlobalNoticeCenter"));
+import LoginScreen from "./components/LoginScreen";
 import {
-  loginToDjango,
   markAttendanceInDjango,
   deleteAttendanceInDjango,
   saveQuranTeacherSessionAttendance,
   deleteQuranTeacherSessionAttendance,
-  updateCoordinatorAccount,
+  updateStudentScheduleInDjango,
+  removeStudentFromClassInDjango,
+  deleteClassSlotInDjango,
   updateMyProfile,
   getAuthContext,
   getMyActiveNotices,
@@ -44,39 +58,14 @@ import {
 } from "./services/djangoApiService";
 
 import {
-  AppState, Student, Teacher, AttendanceRecord,
+  AppState, Student, AttendanceRecord,
   EntityType, AttendanceStatus, ClassType
 } from "./types";
-import { INITIAL_STATE, TIME_SLOTS } from "./constants";
-import { loadState, saveState } from "./services/storageService";
+import { INITIAL_STATE } from "./constants";
 import { getQuranBusinessTime } from "./services/quranBusinessTime";
-import { ClassCard } from "./components/ClassCard";
-// IVS_QURAN_LIVE_CARD_TUITION_UI_V17
-// IVS_QURAN_LIVE_UPNEXT_SPLIT_LAYOUT_V18
-// IVS_COMPACT_INDEPENDENT_LIVE_COLUMNS_V19
-// IVS_QURAN_LIVE_CARDS_ULTRA_COMPACT_NO_SHADOW_V20
-// IVS_QURAN_MOBILE_SIDEBAR_SHADOW_FIX_V21
-// IVS_QURAN_MOBILE_SIDEBAR_FULLY_HIDDEN_V22
-const SchedulingTab = lazy(() =>
-  import("./components/SchedulingTab").then((m) => ({ default: m.SchedulingTab }))
-);
-const Lottie = lazy(() => import("lottie-react"));
-const DashboardTimelineChart = lazy(() => import("./components/DashboardTimelineChart"));
-const AssistantChat = lazy(() =>
-  import("./components/AssistantChat").then((m) => ({ default: m.AssistantChat }))
-);
-const ReportsTab = lazy(() =>
-  import("./components/ReportsTab").then((m) => ({ default: m.ReportsTab }))
-);
-
-const AttendanceEditor = lazy(() =>
-  import("./components/AttendanceEditor").then((m) => ({ default: m.AttendanceEditor }))
-);
-
-const CoordinatorAccounts = lazy(() => import("./components/CoordinatorAccounts"));
-const CoordinatorLessons = lazy(() => import("./components/CoordinatorLessons"));
-const QuranDroppedLeave = lazy(() => import("./components/QuranDroppedLeave"));
-const TeacherSalaryManagement = lazy(() => import("./components/TeacherSalaryManagement"));
+import { loadState, saveState } from "./services/storageService";
+import type { TabId } from "./components/QuranCoordinatorPortal";
+const QuranCoordinatorPortal = lazy(() => import("./components/QuranCoordinatorPortal"));
 const PlatformAdmin = lazy(() => import("./components/PlatformAdmin"));
 const TuitionCoordinatorPortal = lazy(() => import("./components/tuition/TuitionCoordinatorPortal"));
 const TuitionPendingPortal = lazy(() => import("./components/tuition/TuitionPendingPortal"));
@@ -89,72 +78,16 @@ const StudentPortal = lazy(() =>
   import("./components/StudentPortal").then((m) => ({ default: m.StudentPortal }))
 );
 
-
-
-
-
-
-import {
-  Users, Calendar, BarChart3, LogOut,
-  LayoutDashboard, Plus, Trash2, Edit2,
-  ChevronRight, Menu, X, CalendarDays, CalendarClock,
-  Settings, BookOpen, ShieldCheck, Sun, Moon, LockKeyhole, UserMinus, CircleDollarSign
-} from "lucide-react";
-
-import { Users2 } from "lucide-react";
-
-import { PageSkeleton } from "./components/ui/SkeletonLoaders";
-// ---------------- Helpers ----------------
-
-type TabId =
-  | "dashboard"
-  | "attendance"
-  | "reports"
-  | "scheduling"
-  | "accounts"
-  | "lessons"
-  | "dropped-leave"
-  | "teacher-salary"
-  | "platform-admin";
-
-const NAV_META: Record<TabId, { label: string; icon: any }> = {
-  dashboard: {
-    label: "Dashboard",
-    icon: LayoutDashboard,
-  },
-  accounts: {
-    label: "Accounts & Enrollment",
-    icon: ShieldCheck,
-  },
-  "platform-admin": {
-    label: "Platform Admin",
-    icon: Settings,
-  },
-  lessons: {
-    label: "Lessons Control",
-    icon: BookOpen,
-  },
-  scheduling: {
-    label: "Scheduling",
-    icon: CalendarClock,
-  },
-
-  attendance: {
-    label: "Attendance",
-    icon: Calendar,
-  },
-  reports: {
-    label: "Reports",
-    icon: BarChart3,
-  },
-  "dropped-leave": {
-    label: "Dropped & Leave",
-    icon: UserMinus,
-  },
-  "teacher-salary": {
-    label: "Teacher Salary",
-    icon: CircleDollarSign,
-  },
+const TAB_LABELS: Record<TabId, string> = {
+  dashboard: "Dashboard",
+  accounts: "Accounts & Enrollment",
+  "platform-admin": "Platform Admin",
+  lessons: "Lessons Control",
+  scheduling: "Scheduling",
+  attendance: "Attendance",
+  reports: "Reports",
+  "dropped-leave": "Dropped & Leave",
+  "teacher-salary": "Teacher Salary",
 };
 
 // Platform administrators have a dedicated API and do not need department academy state.
@@ -165,278 +98,6 @@ function isMainAdminSession(candidate: Session | null | undefined): boolean {
   );
 }
 
-const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-
-const uuid = () => {
-  // avoids runtime crash on older browsers / non-secure contexts
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return "id_" + Math.random().toString(16).slice(2) + "_" + Date.now().toString(16);
-  }
-};
-
-const getNextTimeSlot = (currentSlot: string): string => {
-  const index = TIME_SLOTS.indexOf(currentSlot);
-  if (index === -1 || index === TIME_SLOTS.length - 1) return TIME_SLOTS[0];
-  return TIME_SLOTS[index + 1];
-};
-
-const timeSlotToMinutes = (timeSlot: string): number => {
-  const [h, m] = String(timeSlot || "00:00").slice(0, 5).split(":").map(Number);
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
-  return h * 60 + m;
-};
-
-const studentDurationMinutes = (student: Student): number => {
-  const raw = (student as any).durationMinutes ?? (student as any).duration_minutes ?? 30;
-  const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : 30;
-};
-
-const isStudentLiveNow = (student: Student, nowSlot: string): boolean => {
-  const nowMinutes = timeSlotToMinutes(nowSlot);
-  const startMinutes = timeSlotToMinutes(student.timeSlot);
-  const duration = studentDurationMinutes(student);
-  return nowMinutes >= startMinutes && nowMinutes < startMinutes + duration;
-};
-
-const minutesUntilStudentClass = (student: Student, nowSlot: string): number => {
-  return timeSlotToMinutes(student.timeSlot) - timeSlotToMinutes(nowSlot);
-};
-
-
-
-const formatTime12 = (time24: string): string => {
-  const [h, m] = time24.split(":");
-  const hh = Number(h);
-  if (!Number.isFinite(hh) || !m) return time24;
-  const ampm = hh >= 12 ? "PM" : "AM";
-  let h12 = hh % 12;
-  if (h12 === 0) h12 = 12;
-  return `${String(h12).padStart(2, "0")}:${m} ${ampm}`;
-};
-
-const classTypeFromDayCount = (count: number): ClassType => {
-  const n = Math.min(7, Math.max(1, count));
-  if (n === 1) return ClassType.ONE_DAY;
-  if (n === 2) return ClassType.TWO_DAY;
-  if (n === 3) return ClassType.THREE_DAY;
-  if (n === 4) return ClassType.FOUR_DAY;
-  if (n === 5) return ClassType.FIVE_DAY;
-  if (n === 6) return ClassType.SIX_DAY;
-  return ClassType.SEVEN_DAY;
-};
-
-const defaultDaysFromClassType = (ct: ClassType): string[] => {
-  if (ct === ClassType.ONE_DAY) return ["Monday"];
-  if (ct === ClassType.TWO_DAY) return ["Monday", "Wednesday"];
-  if (ct === ClassType.THREE_DAY) return ["Monday", "Wednesday", "Friday"];
-  if (ct === ClassType.FOUR_DAY) return ["Monday", "Tuesday", "Wednesday", "Thursday"];
-  if (ct === ClassType.FIVE_DAY) return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-  if (ct === ClassType.SIX_DAY) return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-};
-
-const generatePin = () => String(Math.floor(100000 + Math.random() * 900000)); // 6-digit
-const generateStudentId = () => "S" + String(Math.floor(100000 + Math.random() * 900000)); // S123456
-
-
-
-function TopbarClock() {
-  return <IVSClockCard />;
-}
-
-
-//Dash Board//
-
-function DashboardBackdrop() {
-  return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[32px]">
-      {/* soft base */}
-      <div className="absolute inset-0 bg-gradient-to-b from-white/70 to-white/40" />
-
-      {/* dotted grid */}
-      <div
-        className="absolute inset-0 opacity-[0.35]"
-        style={{
-          backgroundImage:
-            "radial-gradient(rgba(99,102,241,0.18) 1px, transparent 1px)",
-          backgroundSize: "18px 18px",
-          backgroundPosition: "0 0",
-        }}
-      />
-
-      {/* big blur blobs */}
-      <div className="absolute -top-28 -right-28 h-[360px] w-[360px] rounded-full bg-indigo-300/40 blur-3xl" />
-      <div className="absolute -top-10 right-24 h-[260px] w-[260px] rounded-full bg-sky-300/35 blur-3xl" />
-      <div className="absolute -bottom-28 left-10 h-[340px] w-[340px] rounded-full bg-fuchsia-300/25 blur-3xl" />
-
-      {/* “mesh” highlight overlay (gives that modern 3D vibe) */}
-      <div className="absolute -top-24 right-6 h-[260px] w-[520px] rotate-[10deg] rounded-[60px] bg-gradient-to-r from-indigo-500/10 via-sky-500/8 to-fuchsia-500/10 blur-[2px]" />
-
-      {/* subtle border shine */}
-      <div className="absolute inset-0 rounded-[32px] ring-1 ring-white/60" />
-    </div>
-  );
-}
-
-
-
-function TwoDigitBadge({ value }: { value: string }) {
-  return (
-    <div
-      className="
-        w-10 h-10 rounded-2xl
-        bg-white/85 backdrop-blur
-        border border-slate-200/70
-        shadow-[0_12px_26px_rgba(15,23,42,0.08)]
-        flex items-center justify-center
-        font-extrabold text-slate-900
-        tracking-tight
-      "
-      title={value}
-    >
-      {value}
-    </div>
-  );
-}
-
-function SoftChip({
-  children,
-  tone = "neutral",
-}: {
-  children: React.ReactNode;
-  tone?: "neutral" | "info" | "primary";
-}) {
-  const cls =
-    tone === "primary"
-      ? "bg-indigo-50 text-indigo-700 border-indigo-100"
-      : tone === "info"
-        ? "bg-emerald-50 text-emerald-700 border-emerald-100"
-        : "bg-slate-50 text-slate-700 border-slate-200";
-
-  return (
-    <span
-      className={`
-        inline-flex items-center gap-2
-        px-3 py-1.5 rounded-full
-        text-xs font-extrabold
-        border ${cls}
-        shadow-[0_10px_18px_rgba(15,23,42,0.04)]
-      `}
-    >
-      {children}
-    </span>
-  );
-}
-
-function CopyPill({ text }: { text: string }) {
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      // ignore
-    }
-  };
-
-  return (
-    <button
-      type="button"
-      onClick={copy}
-      className="
-        inline-flex items-center gap-2
-        px-3 py-1.5 rounded-full
-        bg-white/85 border border-slate-200/70
-        text-xs font-extrabold text-slate-700
-        shadow-[0_10px_18px_rgba(15,23,42,0.05)]
-        hover:bg-white transition
-        active:scale-[0.98]
-      "
-      title="Copy"
-    >
-      Copy
-    </button>
-  );
-}
-
-function TimePill({ text }: { text: string }) {
-  return (
-    <span
-      className="
-        inline-flex items-center justify-center
-        px-3 py-1.5 rounded-full
-        bg-emerald-50 text-emerald-700
-        border border-emerald-100
-        text-xs font-extrabold
-        whitespace-nowrap
-      "
-    >
-      {text}
-    </span>
-  );
-}
-function TabLoading() {
-  return (
-    <div className="min-h-[260px] p-4 sm:p-6">
-      <PageSkeleton variant="cards" cards={6} compact label="Loading workspace section" />
-    </div>
-  );
-}
-
-function DepartmentWorkspaceLoading() {
-  return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="flex">
-        <aside className="hidden md:block m-4 h-[calc(100vh-2rem)] w-[76px] shrink-0 rounded-[28px] border border-white/70 bg-white/68 shadow-none">
-          <div className="flex h-full flex-col items-center gap-3 px-3 py-5">
-            <div className="ivs-skeleton h-[52px] w-[52px] rounded-[17px]" />
-            <div className="ivs-skeleton h-[52px] w-[52px] rounded-[17px]" />
-            <div className="my-1 h-px w-10 bg-slate-200/70" />
-            {Array.from({ length: 7 }).map((_, index) => (
-              <div key={index} className="ivs-skeleton h-[52px] w-[52px] rounded-[17px]" />
-            ))}
-            <div className="mt-auto ivs-skeleton h-[52px] w-[52px] rounded-[17px]" />
-          </div>
-        </aside>
-
-        <main className="flex h-screen flex-1 flex-col overflow-hidden relative">
-          <header className="mx-3 mb-1.5 mt-2 md:mx-4 md:mt-3">
-            <div className="rounded-[24px] border border-slate-200/80 bg-white/82 px-4 py-2 shadow-[0_16px_40px_rgba(15,23,42,0.06)] md:px-5">
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="ivs-skeleton h-10 w-10 rounded-2xl md:hidden" />
-                  <div className="hidden min-w-0 items-center gap-3 md:flex">
-                    <div className="ivs-skeleton h-10 w-10 shrink-0 rounded-2xl" />
-                    <div className="min-w-0 space-y-2">
-                      <div className="ivs-skeleton h-4 w-36 rounded-full" />
-                      <div className="ivs-skeleton h-3 w-28 rounded-full" />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3 sm:gap-4">
-                  <div className="ivs-skeleton h-10 w-28 rounded-[24px]" />
-                  <div className="ivs-skeleton h-10 w-10 rounded-2xl" />
-                </div>
-              </div>
-            </div>
-          </header>
-
-          <div className="flex-1 overflow-y-auto p-4 pb-16 md:p-8 md:pb-8">
-            <PageSkeleton
-              variant="dashboard"
-              cards={6}
-              delayMs={0}
-              label="Loading department workspace"
-              className="min-h-[640px]"
-            />
-          </div>
-        </main>
-      </div>
-    </div>
-  );
-}
 // ---------------- App ----------------
 export default function App() {
 
@@ -457,6 +118,7 @@ export default function App() {
   const attendanceMutationVersionRef = useRef<Map<string, number>>(new Map());
   const attendanceMutationQueueRef = useRef<Map<string, Promise<unknown>>>(new Map());
   const attendanceServerIdRef = useRef<Map<string, string>>(new Map());
+  const recentLocalTeacherAttendanceRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     attendanceRef.current = appState.attendance;
@@ -475,16 +137,56 @@ export default function App() {
 
   const accountStateRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const accountStateRefreshRunning = useRef(false);
+  const accountStateRefreshPending = useRef(false);
+  const canLoadQuranAcademyStateRef = useRef(false);
+  const stateScopeKeyRef = useRef("");
+  const stateRequestSeqRef = useRef(0);
+  const fullStateInFlightRef = useRef<{ scopeKey: string; promise: Promise<AppState> } | null>(null);
   const scheduleAccountStateRefresh = React.useCallback(() => {
-    // Superadmin events should not trigger the protected department state endpoint.
-    if (isMainAdminSession(loadSession()) || isImportActive()) return;
+    // Only authorized Quran coordinator/admin workspaces consume /api/academy/state/.
+    if (
+      isMainAdminSession(loadSession()) ||
+      !canLoadQuranAcademyStateRef.current ||
+      isImportActive()
+    ) {
+      return;
+    }
     if (accountStateRefreshTimer.current) clearTimeout(accountStateRefreshTimer.current);
     accountStateRefreshTimer.current = setTimeout(async () => {
-      if (isImportActive() || accountStateRefreshRunning.current) return;
+      if (!canLoadQuranAcademyStateRef.current || isImportActive()) {
+        return;
+      }
+      if (accountStateRefreshRunning.current) {
+        accountStateRefreshPending.current = true;
+        return;
+      }
+      const scopeAtStart = stateScopeKeyRef.current;
+      const reqSeq = ++stateRequestSeqRef.current;
       accountStateRefreshRunning.current = true;
-      try { setAppState(await loadState()); }
+      accountStateRefreshPending.current = false;
+      try {
+        const refreshed = await loadState(false, { force: true, scopeKey: scopeAtStart });
+        if (
+          reqSeq !== stateRequestSeqRef.current ||
+          stateScopeKeyRef.current !== scopeAtStart ||
+          !canLoadQuranAcademyStateRef.current
+        ) {
+          return;
+        }
+        setAppState(refreshed);
+      }
       catch (error) { console.error("Could not refresh academy state", error); }
-      finally { accountStateRefreshRunning.current = false; }
+      finally {
+        accountStateRefreshRunning.current = false;
+        if (
+          accountStateRefreshPending.current &&
+          canLoadQuranAcademyStateRef.current &&
+          !isImportActive()
+        ) {
+          accountStateRefreshPending.current = false;
+          scheduleAccountStateRefresh();
+        }
+      }
     }, 500);
   }, []);
   useEffect(() => {
@@ -514,6 +216,22 @@ export default function App() {
       window.dispatchEvent(new CustomEvent("ivs-coordinator-tab-access-refresh", {
         detail: { userId: targetUserId || undefined },
       }));
+    }
+
+    if (
+      type === "academy_update" &&
+      (event === "teacher_session_attendance_v2" ||
+        event === "teacher_session_unmarked_v2")
+    ) {
+      const wsTeacherId = String((data as any).teacher_id || "");
+      const wsDate = String((data as any).date || "");
+      const wsClassKey = String((data as any).class_key || "").trim().slice(0, 5);
+      const localEchoKey = `${wsTeacherId}:${wsDate}:${wsClassKey}`;
+      const recordedAt = recentLocalTeacherAttendanceRef.current.get(localEchoKey);
+      if (recordedAt && Date.now() - recordedAt < 10_000) {
+        recentLocalTeacherAttendanceRef.current.delete(localEchoKey);
+        return;
+      }
     }
 
     if (
@@ -733,15 +451,16 @@ export default function App() {
     }
   }, []);
 
-  useEffect(() => {
-    if (!session?.access || isMainAdminSession(session)) return;
-    const timer = window.setInterval(() => {
-      getAuthContext()
-        .then((ctx) => setMaintenanceState(ctx.maintenance ?? { active: false }))
-        .catch(() => undefined);
-    }, 60_000);
-    return () => window.clearInterval(timer);
-  }, [session?.access]);
+  useVisibilityPolling({
+    enabled: Boolean(session?.access && !isMainAdminSession(session)),
+    connectedIntervalMs: 180_000,
+    disconnectedIntervalMs: 60_000,
+    staleOnVisibleMs: 60_000,
+    onTick: async () => {
+      const ctx = await getAuthContext();
+      setMaintenanceState(ctx.maintenance ?? { active: false });
+    },
+  });
 
   useEffect(() => {
     const refreshMaintenance = () => void retryMaintenanceStatus();
@@ -989,154 +708,6 @@ export default function App() {
     });
   };
 
-  const [superAdminSaving, setSuperAdminSaving] = useState(false);
-
-  const [toast, setToast] = useState("");
-
-  useEffect(() => {
-    const handleToast = (e: Event) => {
-      const msg = (e as CustomEvent<string>).detail || "Done";
-      setToast(msg);
-      setTimeout(() => setToast(""), 2500);
-    };
-    window.addEventListener("ivs-toast", handleToast);
-    return () => window.removeEventListener("ivs-toast", handleToast);
-  }, []);
-  const [aiBotAnimation, setAiBotAnimation] = useState<any>(null);
-  const [shouldLoadAiAssets, setShouldLoadAiAssets] = useState(false);
-
-  const requestAiAssistantAssets = useCallback(() => {
-    setShouldLoadAiAssets(true);
-  }, []);
-
-  useEffect(() => {
-    if (!shouldLoadAiAssets || aiBotAnimation) return;
-
-    let cancelled = false;
-
-    fetch("/ai-bot.json")
-      .then((res) => {
-        if (!res.ok) throw new Error(`AI animation failed: ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
-        if (!cancelled) setAiBotAnimation(data);
-      })
-      .catch(() => {
-        if (!cancelled) setAiBotAnimation(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [aiBotAnimation, shouldLoadAiAssets]);
-  const [superAdminForm, setSuperAdminForm] = useState(() => {
-    const user = (session as any)?.user || {};
-
-    return {
-      username: user.username || "",
-      email: user.email || "",
-      first_name: user.first_name || "",
-      last_name: user.last_name || "",
-      password: "",
-    };
-  });
-
-  useEffect(() => {
-    const user = (session as any)?.user || {};
-
-    setSuperAdminForm({
-      username: user.username || "",
-      email: user.email || "",
-      first_name: user.first_name || "",
-      last_name: user.last_name || "",
-      password: "",
-    });
-  }, [session]);
-
-  const saveSuperAdminProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!session?.user?.id) {
-      alert("Super admin account not found.");
-      return;
-    }
-
-    const username = superAdminForm.username.trim();
-    const email = superAdminForm.email.trim();
-    const firstName = superAdminForm.first_name.trim();
-    const lastName = superAdminForm.last_name.trim();
-    const password = superAdminForm.password.trim();
-
-    if (!username) {
-      alert("Username is required.");
-      return;
-    }
-
-    if (password && password.length < 6) {
-      alert("Password must be at least 6 characters.");
-      return;
-    }
-
-    try {
-      setSuperAdminSaving(true);
-
-      const payload: any = {
-        role: "coordinator",
-        username,
-        email,
-        first_name: firstName,
-        last_name: lastName,
-        is_active: true,
-      };
-
-      if (password) {
-        payload.password = password;
-      }
-
-      const updated: any = await updateMyProfile(payload);
-
-      const nextUser = {
-        ...(session.user as any),
-        username: updated.username || username,
-        email: updated.email || email,
-        first_name: updated.first_name || firstName,
-        last_name: updated.last_name || lastName,
-        full_name:
-          updated.full_name ||
-          `${firstName} ${lastName}`.trim() ||
-          username,
-      };
-
-      const nextSession = {
-        ...session,
-        user: nextUser,
-      };
-
-      setSession(nextSession);
-      saveSession(nextSession);
-
-      setSuperAdminForm((prev) => ({
-        ...prev,
-        password: "",
-      }));
-
-      window.dispatchEvent(
-        new CustomEvent("ivs-toast", {
-          detail: "Super admin profile saved",
-        })
-      );
-      setShowModal(false);
-    } catch (err: any) {
-      window.dispatchEvent(
-        new CustomEvent("ivs-toast", {
-          detail: err?.message || "Could not update super admin profile.",
-        })
-      );
-    } finally {
-      setSuperAdminSaving(false);
-    }
-  };
   // ✅ Save session when it changes
   useEffect(() => {
     try {
@@ -1161,6 +732,68 @@ export default function App() {
   const isPlatformAdmin =
     isSuperAdmin ||
     session?.role === "platform_admin";
+
+  // Authoritative department and role resolution from /api/auth/context/.
+  const activeDepartment =
+    authContext?.department ||
+    (session as any)?.user?.department ||
+    (session as any)?.department ||
+    authContext?.roles?.find(
+      (item: any) =>
+        item?.department?.department_type === "tuition"
+    )?.department ||
+    null;
+
+  const activeDepartmentType = String(
+    activeDepartment?.department_type || ""
+  ).toLowerCase();
+
+  const isTuitionDepartment =
+    activeDepartmentType === "tuition";
+
+  const sessionRoleForDepartment = String(
+    authContext?.user?.role ||
+    (session as any)?.user?.role ||
+    session?.role ||
+    ""
+  ).trim().toLowerCase();
+
+  const activeDepartmentIdForRole = Number(activeDepartment?.id || 0);
+  const activeDepartmentRoleAssignments = Array.isArray(authContext?.roles)
+    ? authContext.roles.filter((item: any) => {
+      const assignmentDepartmentId = Number(item?.department?.id || 0);
+      return (
+        activeDepartmentIdForRole > 0 &&
+        assignmentDepartmentId === activeDepartmentIdForRole
+      );
+    })
+    : [];
+
+  const activeDepartmentRoleAssignment =
+    activeDepartmentRoleAssignments.find(
+      (item: any) =>
+        String(item?.role || "").trim().toLowerCase() ===
+        sessionRoleForDepartment,
+    ) ||
+    activeDepartmentRoleAssignments[0] ||
+    null;
+
+  const effectiveDepartmentRole = String(
+    activeDepartmentRoleAssignment?.role || sessionRoleForDepartment
+  ).trim().toLowerCase();
+
+  const canLoadQuranAcademyState = Boolean(
+    session &&
+    !isMainAdminSession(session) &&
+    featureContextLoaded &&
+    activeDepartmentType === "quran" &&
+    ["coordinator", "department_admin", "institution_admin"].includes(
+      effectiveDepartmentRole
+    )
+  );
+  canLoadQuranAcademyStateRef.current = canLoadQuranAcademyState;
+  const currentStateScopeKey = `${session?.user?.id || 0}:${activeDepartmentIdForRole}:${canLoadQuranAcademyState ? 1 : 0}`;
+  stateScopeKeyRef.current = currentStateScopeKey;
 
   // Quran navigation guards must never run inside the separate Tuition portal.
   // The permission map is refreshed when the browser regains focus, so without
@@ -1269,18 +902,16 @@ export default function App() {
     return activeTab;
   }, [activeTab, coordinatorNavItems, featureContextLoaded, firstEnabledCoordinatorTab, isPlatformAdmin, isTabHiddenByDepartmentAdmin, isTuitionFeatureContext, session?.role]);
 
-  const activeMeta = NAV_META[effectiveActiveTab];
-  const ActiveTopIcon = activeMeta.icon;
-
   const handleSidebarTabClick = useCallback(
     (tab: TabId) => {
       if (isTuitionFeatureContext) return;
       if (!featureContextLoaded && !isPlatformAdmin) return;
 
       if (isTabLocked(tab)) {
+        const label = TAB_LABELS[tab] || "This section";
         showFeatureLocked(
-          NAV_META[tab]?.label || "This section",
-          `${NAV_META[tab]?.label || "This section"} is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
+          label,
+          `${label} is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
         );
         return;
       }
@@ -1290,16 +921,6 @@ export default function App() {
     [featureContextLoaded, isPlatformAdmin, isTabLocked, isTuitionFeatureContext]
   );
   const roleLabel = isPlatformAdmin ? "Platform Admin" : isDepartmentAdmin ? `${quranDepartmentDisplayName} Admin` : "Coordinator";
-  const RoleSidebarIcon =
-    isPlatformAdmin || isDepartmentAdmin ? ShieldCheck : Users2;
-  const sidebarDisplayName = useMemo(() => {
-    const current = (session as any)?.user || {};
-    const fullName = String(
-      current.full_name ||
-      `${current.first_name || ""} ${current.last_name || ""}`
-    ).trim();
-    return fullName || current.username || "Management access";
-  }, [session]);
 
   const sessionTeacherId = isTeacher ? (session?.teacherId ?? null) : null;
   const sessionStudentId = isStudent ? (session?.studentId ?? null) : null;
@@ -1374,60 +995,7 @@ export default function App() {
   }, [viewState, viewAtt]);
 
 
-  // Login form
-  // Login form
-  const REMEMBERED_LOGIN_KEY = "ivs_remembered_username";
-
-  const [loginUsername, setLoginUsername] = useState(() => {
-    try {
-      return localStorage.getItem(REMEMBERED_LOGIN_KEY) || "";
-    } catch {
-      return "";
-    }
-  });
-
-  const [loginPassword, setLoginPassword] = useState("");
-  const [loginError, setLoginError] = useState("");
-  const [loginLoading, setLoginLoading] = useState(false);
-  const [showLoginPassword, setShowLoginPassword] = useState(false);
-
-  const [rememberLogin, setRememberLogin] = useState(() => {
-    try {
-      return Boolean(localStorage.getItem(REMEMBERED_LOGIN_KEY));
-    } catch {
-      return false;
-    }
-  });
-  // Settings
-  const [settingsTab, setSettingsTab] = useState<"profile" | "login" | "appearance">("profile");
-  const [superAdminUsername, setSuperAdminUsername] = useState(() => session?.user?.username || "");
-  const [superAdminFirstName, setSuperAdminFirstName] = useState(() => (session?.user as any)?.first_name || "");
-  const [superAdminLastName, setSuperAdminLastName] = useState(() => (session?.user as any)?.last_name || "");
-  const [superAdminEmail, setSuperAdminEmail] = useState(() => session?.user?.email || "");
-  const [superAdminPassword, setSuperAdminPassword] = useState("");
-  const [settingsMessage, setSettingsMessage] = useState("");
-
-  useEffect(() => {
-    if (!session?.user) return;
-
-    const sessionUser = session.user as any;
-
-    setSuperAdminUsername(sessionUser.username || "");
-    setSuperAdminFirstName(sessionUser.first_name || "");
-    setSuperAdminLastName(sessionUser.last_name || "");
-    setSuperAdminEmail(sessionUser.email || "");
-  }, [session]);
-
-  // CSV import
-  const [csvImportMessage, setCsvImportMessage] = useState<string>("");
-  const [csvImportSummary, setCsvImportSummary] = useState<{ teachers: number; students: number } | null>(null);
-  const [csvImportWarnings, setCsvImportWarnings] = useState<string[]>([]);
-  const [csvImportPending, setCsvImportPending] = useState<{ teachers: Teacher[]; students: Student[] } | null>(null);
-
-
   const [hydrated, setHydrated] = useState(false);
-
-
 
   // Modals
   const [showModal, setShowModal] = useState(false);
@@ -1435,36 +1003,15 @@ export default function App() {
     "settings" | "class-details" | "add-student" | "edit-student"
   >("settings");
 
-
-
   // Scheduling / Bulk
   const [viewingClass, setViewingClass] = useState<{ teacherId: string; timeSlot: string; students: Student[] } | null>(null);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleError, setScheduleError] = useState("");
   const [viewingTeacherId, setViewingTeacherId] = useState<string | null>(null);
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [studentDaysDraft, setStudentDaysDraft] = useState<string[]>(
     defaultDaysFromClassType(ClassType.FIVE_DAY)
   );
-  // Search + mobile
-  const [searchTerm, setSearchTerm] = useState("");
-  const [searchInput, setSearchInput] = useState("");
-  // Debounce search to avoid re-rendering 895 students on every keystroke
-  useEffect(() => {
-    const t = setTimeout(() => setSearchTerm(searchInput), 200);
-    return () => clearTimeout(t);
-  }, [searchInput]);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [sidebarEdgeHover, setSidebarEdgeHover] = useState(false);
-  const [insightsOpen, setInsightsOpen] = useState(false);
-  const timelineCardRef = useRef<HTMLDivElement | null>(null);
-
-  const [timelinePopup, setTimelinePopup] = useState<{
-    slot: string;
-    x: number;
-    y: number;
-    pinned: boolean;
-  } | null>(null);
-  const [assistantOpen, setAssistantOpen] = useState(false);
-  const [assistantHasOpened, setAssistantHasOpened] = useState(false);
 
 
 
@@ -1595,9 +1142,10 @@ export default function App() {
 
     const featureKey = tabFeatureKey[activeTab];
     if (featureKey && !hasFeature(featureKey)) {
+      const label = TAB_LABELS[activeTab] || "This section";
       showFeatureLocked(
-        NAV_META[activeTab]?.label || "This section",
-        `${NAV_META[activeTab]?.label || "This section"} is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
+        label,
+        `${label} is currently not enabled for your department. Please contact the Main Administrator or software provider to request activation.`
       );
 
       const fallback = firstEnabledCoordinatorTab || coordinatorNavItems[0];
@@ -1656,42 +1204,55 @@ export default function App() {
     };
 
     const loadInitialState = async () => {
+      const scopeAtStart = currentStateScopeKey;
+      const reqSeq = ++stateRequestSeqRef.current;
+      fullStateInFlightRef.current = null;
       try {
         if (!session || isMainAdminSession(session)) {
           // Dedicated Superadmin portal must not fetch /api/academy/state/.
+          setAppState(INITIAL_STATE);
           setHydrated(true);
           return;
         }
 
-        setHydrated(false);
+        if (!featureContextLoaded) {
+          // Wait for authoritative /api/auth/context/ before deciding whether
+          // this workspace should load Quran academy state.
+          setHydrated(false);
+          return;
+        }
 
         // Load the lightweight state only for the Quran management Dashboard.
         // Direct links to other tabs and tuition/role portals keep the full state path.
         const requestedTab = tabFromHash();
-        const sessionDepartmentType = String(
-          (session as any)?.user?.department?.department_type ||
-          (session as any)?.department?.department_type ||
-          ""
-        ).toLowerCase();
-        const sessionRole = String(
-          (session as any)?.role ||
-          (session as any)?.user?.role ||
-          ""
-        ).toLowerCase();
+        const sessionDepartmentType = activeDepartmentType;
+        const sessionRole = effectiveDepartmentRole;
 
         const isDashboardRole =
           sessionRole === "coordinator" ||
           sessionRole === "department_admin" ||
           sessionRole === "institution_admin";
 
-        const isDashboardRequest =
-          requestedTab === "dashboard" &&
-          isDashboardRole &&
-          sessionDepartmentType !== "tuition";
+        if (!isDashboardRole || sessionDepartmentType === "tuition") {
+          // Teacher, student, and tuition portals fetch their own dedicated APIs
+          // and do not consume /api/academy/state/.
+          setAppState(INITIAL_STATE);
+          setHydrated(true);
+          return;
+        }
 
-        const loaded = await loadState(isDashboardRequest);
+        if (!canLoadQuranAcademyState) {
+          setAppState(INITIAL_STATE);
+          setHydrated(true);
+          return;
+        }
 
-        if (!mounted) return;
+        setHydrated(false);
+        const isDashboardRequest = requestedTab === "dashboard";
+
+        const loaded = await loadState(isDashboardRequest, { scopeKey: scopeAtStart });
+
+        if (!mounted || reqSeq !== stateRequestSeqRef.current || stateScopeKeyRef.current !== scopeAtStart) return;
 
         setAppState(loaded);
         setHydrated(true);
@@ -1718,18 +1279,37 @@ export default function App() {
       mounted = false;
       window.removeEventListener("ivs-state-updated", handleStateUpdated);
     };
-  }, [session]);
+  }, [session, featureContextLoaded, canLoadQuranAcademyState, activeDepartmentIdForRole]);
 
   // Fetch full state when leaving dashboard
   useEffect(() => {
-    if (!isMainAdminSession(session) && effectiveActiveTab !== "dashboard" && appState.isPartial) {
-      loadState(false)
-        .then(loaded => {
+    if (canLoadQuranAcademyState && effectiveActiveTab !== "dashboard" && appState.isPartial) {
+      const scopeAtStart = currentStateScopeKey;
+      if (fullStateInFlightRef.current?.scopeKey === scopeAtStart) {
+        return;
+      }
+      const reqSeq = ++stateRequestSeqRef.current;
+      const promise = loadState(false, { scopeKey: scopeAtStart });
+      fullStateInFlightRef.current = { scopeKey: scopeAtStart, promise };
+      promise
+        .then((loaded) => {
+          if (
+            reqSeq !== stateRequestSeqRef.current ||
+            stateScopeKeyRef.current !== scopeAtStart ||
+            !canLoadQuranAcademyStateRef.current
+          ) {
+            return;
+          }
           setAppState(loaded);
         })
-        .catch(console.error);
+        .catch(console.error)
+        .finally(() => {
+          if (fullStateInFlightRef.current?.promise === promise) {
+            fullStateInFlightRef.current = null;
+          }
+        });
     }
-  }, [effectiveActiveTab, appState.isPartial, session]);
+  }, [canLoadQuranAcademyState, effectiveActiveTab, appState.isPartial, currentStateScopeKey]);
 
 
   useEffect(() => {
@@ -1749,223 +1329,22 @@ export default function App() {
 
 
 
-  // ---------------- Derived ----------------
-  const quranBusinessNow = getQuranBusinessTime();
-  const currentSlot = quranBusinessNow.timeSlot;
-  const nextSlot = getNextTimeSlot(currentSlot);
-  const todayStr = quranBusinessNow.date;
-  const currentDayName = quranBusinessNow.weekday;
-
-  const todayAttendanceSummary = useMemo(() => {
-    const teacherRecs = viewAtt.filter(r => r.date === todayStr && r.entityType === EntityType.TEACHER);
-    const studentRecs = viewAtt.filter(r => r.date === todayStr && r.entityType === EntityType.STUDENT);
-
-    const count = (recs: AttendanceRecord[], status: AttendanceStatus) =>
-      recs.filter(r => r.status === status).length;
-
-    const studentsToday = viewStudents.filter(s => (s.classDays || []).includes(currentDayName));
-
-    const teacherTotal = (() => {
-      const set = new Set<string>();
-      for (const s of studentsToday) set.add(`${s.teacherId}__${s.timeSlot}`);
-      return set.size;
-    })();
-
-    const studentTotal = studentsToday.length;
-
-    return {
-      teachers: {
-        total: teacherTotal,
-        present: count(teacherRecs, AttendanceStatus.PRESENT),
-        absent: count(teacherRecs, AttendanceStatus.ABSENT),
-        leave: count(teacherRecs, AttendanceStatus.LEAVE),
-        unmarked: Math.max(0, teacherTotal - teacherRecs.length),
-      },
-      students: {
-        total: studentTotal,
-        present: count(studentRecs, AttendanceStatus.PRESENT),
-        absent: count(studentRecs, AttendanceStatus.ABSENT),
-        leave: count(studentRecs, AttendanceStatus.LEAVE),
-        unmarked: Math.max(0, studentTotal - studentRecs.length),
-      }
-    };
-  }, [viewAtt, viewStudents, todayStr, currentDayName]);
-
-  const currentClasses = useMemo(
-    () => viewStudents.filter(s => (s.classDays || []).includes(currentDayName) && isStudentLiveNow(s, currentSlot)),
-    [viewStudents, currentSlot, currentDayName]
-  );
-
-  const nextClasses = useMemo(
-    () => viewStudents
-      .filter(s => {
-        if (!(s.classDays || []).includes(currentDayName)) return false;
-        if (isStudentLiveNow(s, currentSlot)) return false;
-        const diff = minutesUntilStudentClass(s, currentSlot);
-        return diff > 0 && diff <= 60;
-      })
-      .sort((a, b) => timeSlotToMinutes(a.timeSlot) - timeSlotToMinutes(b.timeSlot)),
-    [viewStudents, currentSlot, currentDayName]
-  );
-
-  const teacherById = useMemo(() => {
-    const map = new Map<string, Teacher>();
-    for (const t of viewTeachers) map.set(t.id, t);
-    return map;
-  }, [viewTeachers]);
-
-  const studentAttendanceToday = useMemo(() => {
-    const map = new Map<string, AttendanceRecord>();
-    for (const a of viewAtt) {
-      if (a.date === todayStr && a.entityType === EntityType.STUDENT) {
-        map.set(a.entityId, a);
-      }
-    }
-    return map;
-  }, [viewAtt, todayStr]);
-
-  const teacherAttendanceToday = useMemo(() => {
-    const map = new Map<string, AttendanceRecord>();
-    for (const a of viewAtt) {
-      if (a.date !== todayStr || a.entityType !== EntityType.TEACHER) continue;
-
-      const normalizedClassKey = String(a.classKey || "").trim().slice(0, 5);
-      if (normalizedClassKey) {
-        map.set(`${a.entityId}_${normalizedClassKey}`, a);
-      } else {
-        // Only a genuine legacy empty-class record may be used as fallback.
-        map.set(`${a.entityId}_`, a);
-      }
-    }
-    return map;
-  }, [viewAtt, todayStr]);
-
-  const getTeacherAttendance = (teacherId: string, timeSlot: string) => {
-    const normalizedTimeSlot = String(timeSlot || "").trim().slice(0, 5);
-    return (
-      teacherAttendanceToday.get(`${teacherId}_${normalizedTimeSlot}`) ||
-      teacherAttendanceToday.get(`${teacherId}_`)
-    );
-  };
-
-  const handleUpdateSuperAdminProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!session?.user?.id) {
-      setSettingsMessage("Session user was not found. Please log in again.");
-      return;
-    }
-
-    const username = superAdminUsername.trim();
-    const firstName = superAdminFirstName.trim();
-    const lastName = superAdminLastName.trim();
-    const email = superAdminEmail.trim();
-    const password = superAdminPassword.trim();
-
-    if (!username) {
-      setSettingsMessage("Username is required.");
-      return;
-    }
-
-    if (password && password.length < 6) {
-      setSettingsMessage("New password must be at least 6 characters.");
-      return;
-    }
-
-    try {
-      setSuperAdminSaving(true);
-      setSettingsMessage("");
-
-      const payload: any = {
-        role: "coordinator",
-        username,
-        first_name: firstName,
-        last_name: lastName,
-        email,
-      };
-
-      if (password) {
-        payload.password = password;
-      }
-
-      const updated: any = await updateMyProfile(payload);
-
-      const nextSession = {
-        ...session,
-        user: {
-          ...session.user,
-          username: updated.username || username,
-          first_name: updated.first_name || firstName,
-          last_name: updated.last_name || lastName,
-          email: updated.email || email,
-          full_name: updated.full_name || `${firstName} ${lastName}`.trim() || username,
-        },
-      };
-
-      setSession(nextSession);
-      saveSession(nextSession);
-      setSuperAdminPassword("");
-      setSettingsMessage("Super admin profile updated successfully.");
-    } catch (err: any) {
-      setSettingsMessage(err?.message || "Could not update super admin profile.");
-    } finally {
-      setSuperAdminSaving(false);
-    }
-  };
   // ---------------- Actions ----------------
 
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleLoginSuccess = useCallback((nextSession: Session) => {
+    setSession(nextSession);
+    saveSession(nextSession);
+    connectAcademyWS();
 
-    const username = loginUsername.trim();
-    const password = loginPassword;
+    const nextUsername = String((nextSession as any)?.user?.username || (nextSession as any)?.username || "").toLowerCase();
 
-    if (!username || !password) {
-      setLoginError("Please enter username and password.");
-      return;
+    if (nextSession.role === "platform_admin" || nextUsername === "mian") {
+      navigateToTab("platform-admin");
+    } else {
+      navigateToTab("dashboard");
     }
-
-    try {
-      setLoginLoading(true);
-      setLoginError("");
-
-      const nextSession = await loginToDjango(username, password);
-
-      if (rememberLogin) {
-        try {
-          localStorage.setItem(REMEMBERED_LOGIN_KEY, username);
-        } catch {
-          // ignore
-        }
-      } else {
-        try {
-          localStorage.removeItem(REMEMBERED_LOGIN_KEY);
-        } catch {
-          // ignore
-        }
-      }
-
-      setSession(nextSession);
-      saveSession(nextSession);
-      connectAcademyWS();
-
-      const nextUsername = String((nextSession as any)?.user?.username || (nextSession as any)?.username || "").toLowerCase();
-
-      if (nextSession.role === "platform_admin" || nextUsername === "mian") {
-        navigateToTab("platform-admin");
-      } else {
-        navigateToTab("dashboard");
-      }
-
-      setLoginUsername("");
-      setLoginPassword("");
-    } catch (err: any) {
-      setLoginError(err?.message || "Login failed.");
-    } finally {
-      setLoginLoading(false);
-    }
-  };
+  }, []);
 
   const localStatusToDjango = (status: AttendanceStatus): "present" | "absent" | "leave" => {
     if (status === AttendanceStatus.ABSENT) return "absent";
@@ -2172,6 +1551,11 @@ export default function App() {
                 "Teacher attendance requires a class time."
               );
             }
+
+            recentLocalTeacherAttendanceRef.current.set(
+              `${entityId}:${date}:${normalizedClassKey}`,
+              Date.now(),
+            );
 
             const saved =
               await saveQuranTeacherSessionAttendance({
@@ -2492,6 +1876,11 @@ export default function App() {
               );
             }
 
+            recentLocalTeacherAttendanceRef.current.set(
+              `${entityId}:${date}:${normalizedClassKey}`,
+              Date.now(),
+            );
+
             await deleteQuranTeacherSessionAttendance({
               teacher_id:
                 Number(entityId),
@@ -2574,7 +1963,7 @@ export default function App() {
     return upsertAttendance({
       entityId,
       entityType: type,
-      date: todayStr,
+      date: getQuranBusinessTime().date,
       status,
       classKey,
       coverageAssignments,
@@ -2586,77 +1975,95 @@ export default function App() {
     type: EntityType = EntityType.STUDENT,
     classKey: string = ""
   ): Promise<boolean> =>
-    deleteAttendance({ entityId, entityType: type, date: todayStr, classKey });
+    deleteAttendance({ entityId, entityType: type, date: getQuranBusinessTime().date, classKey });
 
-  const saveStudent = (e: React.FormEvent) => {
+  const saveStudent = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (scheduleSaving) return;
 
     const form = e.target as HTMLFormElement;
     const formData = new FormData(form);
 
     const teacherId = String(formData.get("teacherId") || "");
     const timeSlot = String(formData.get("timeSlot") || "");
-    const name = String(formData.get("name") || "").trim();
+    const existing = editingStudent;
 
-    if (!name) {
-      alert("Please enter student name.");
+    if (!existing?.id) {
+      setScheduleError("New student accounts must be created in Accounts & Enrollment.");
       return;
     }
 
     if (!teacherId) {
-      alert("Please select a teacher.");
+      setScheduleError("Please select a teacher.");
       return;
     }
 
     if (!timeSlot) {
-      alert("Please select class time.");
+      setScheduleError("Please select class time.");
       return;
     }
 
-    const existing = editingStudent;
+    const classDays = studentDaysDraft.length ? studentDaysDraft.slice() : defaultDaysFromClassType(ClassType.FIVE_DAY);
+    const scopeAtStart = stateScopeKeyRef.current;
+    setScheduleSaving(true);
+    setScheduleError("");
 
-    const nextStudent: Student = {
-      id: existing?.id || uuid(),
-      name,
-      teacherId,
-      timeSlot,
-      classType: classTypeFromDayCount(studentDaysDraft.length || 5),
-      classDays: studentDaysDraft.length ? studentDaysDraft.slice() : defaultDaysFromClassType(ClassType.FIVE_DAY),
-      loginId: existing?.loginId || generateStudentId(),
-    };
-
-    setShowModal(false);
-    setEditingStudent(null);
-
-    startTransition(() => {
-      setAppState((prev) => {
-        const others = prev.students.filter((student) => student.id !== nextStudent.id);
-
-        return {
-          ...prev,
-          students: [...others, nextStudent],
-        };
+    try {
+      const res = await updateStudentScheduleInDjango({
+        student_id: existing.id,
+        teacher_id: teacherId,
+        time_slot: timeSlot,
+        class_days: classDays,
       });
 
-      setViewingClass((prev) => {
-        if (!prev) return prev;
+      if (stateScopeKeyRef.current !== scopeAtStart) return;
 
-        const sameClass =
-          String(prev.teacherId) === String(nextStudent.teacherId) &&
-          String(prev.timeSlot) === String(nextStudent.timeSlot);
+      const saved = res.student;
+      const nextStudent: Student = {
+        ...existing,
+        id: String(saved.id),
+        name: saved.name || existing.name,
+        teacherId: String(saved.teacherId),
+        timeSlot: saved.timeSlot,
+        classType: classTypeFromDayCount(saved.classDays.length || 5),
+        classDays: saved.classDays,
+      };
 
-        const withoutStudent = prev.students.filter((student) => student.id !== nextStudent.id);
+      setShowModal(false);
+      setEditingStudent(null);
 
-        return {
-          ...prev,
-          students: sameClass ? [...withoutStudent, nextStudent] : withoutStudent,
-        };
+      startTransition(() => {
+        setAppState((prev) => {
+          const others = prev.students.filter((student) => student.id !== nextStudent.id);
+          return {
+            ...prev,
+            students: [...others, nextStudent],
+          };
+        });
+
+        setViewingClass((prev) => {
+          if (!prev) return prev;
+          const sameClass =
+            String(prev.teacherId) === String(nextStudent.teacherId) &&
+            String(prev.timeSlot) === String(nextStudent.timeSlot);
+          const withoutStudent = prev.students.filter((student) => student.id !== nextStudent.id);
+          return {
+            ...prev,
+            students: sameClass ? [...withoutStudent, nextStudent] : withoutStudent,
+          };
+        });
       });
-
-    });
+    } catch (err: any) {
+      if (stateScopeKeyRef.current === scopeAtStart) {
+        setScheduleError(err?.message || "Failed to save schedule changes.");
+      }
+    } finally {
+      setScheduleSaving(false);
+    }
   };
 
-  const removeStudentFromClass = (studentId: string) => {
+  const removeStudentFromClass = async (studentId: string) => {
+    if (scheduleSaving) return;
     if (!hasFeature("delete_schedule")) {
       showFeatureLocked(
         "Delete Schedule",
@@ -2668,20 +2075,47 @@ export default function App() {
     const student = viewStudents.find(s => s.id === studentId);
     if (!student) return;
 
+    const targetTeacherId = viewingClass?.teacherId || student.teacherId;
+    const targetTimeSlot = viewingClass?.timeSlot || student.timeSlot;
+    if (!targetTeacherId || !targetTimeSlot) return;
+
     if (!confirm(`Remove ${student.name} from this class?`)) return;
 
-    setAppState(prev => ({
-      ...prev,
-      students: prev.students.filter(s => s.id !== studentId),
-    }));
+    const scopeAtStart = stateScopeKeyRef.current;
+    setScheduleSaving(true);
+    setScheduleError("");
 
-    setViewingClass(prev => {
-      if (!prev) return prev;
-      return { ...prev, students: prev.students.filter(s => s.id !== studentId) };
-    });
+    try {
+      const res = await removeStudentFromClassInDjango({
+        student_id: studentId,
+        teacher_id: targetTeacherId,
+        time_slot: targetTimeSlot,
+      });
+
+      if (stateScopeKeyRef.current !== scopeAtStart) return;
+
+      setAppState(prev => ({
+        ...prev,
+        students: prev.students.map(s =>
+          s.id === studentId ? { ...s, timeSlot: res.remaining_time_slot || "" } : s
+        ),
+      }));
+
+      setViewingClass(prev => {
+        if (!prev) return prev;
+        return { ...prev, students: prev.students.filter(s => s.id !== studentId) };
+      });
+    } catch (err: any) {
+      if (stateScopeKeyRef.current === scopeAtStart) {
+        setScheduleError(err?.message || "Failed to remove student from class.");
+      }
+    } finally {
+      setScheduleSaving(false);
+    }
   };
 
-  const deleteClass = (teacherId: string, timeSlot: string) => {
+  const deleteClass = async (teacherId: string, timeSlot: string) => {
+    if (scheduleSaving) return;
     if (!hasFeature("delete_schedule")) {
       showFeatureLocked(
         "Delete Schedule",
@@ -2692,762 +2126,53 @@ export default function App() {
 
     const teacherName = viewTeachers.find(t => t.id === teacherId)?.name || "this teacher";
 
-    if (!confirm(`Delete the whole class for ${teacherName} at ${formatTime12(timeSlot)}?\n\nThis will remove all students in that time slot.`)) {
+    if (!confirm(`Delete the whole class for ${teacherName} at ${formatTime12(timeSlot)}?\n\nThis will unschedule all students in that time slot.`)) {
       return;
     }
 
-    setAppState(prev => ({
-      ...prev,
-      students: prev.students.filter(s => !(s.teacherId === teacherId && s.timeSlot === timeSlot)),
-    }));
+    const scopeAtStart = stateScopeKeyRef.current;
+    setScheduleSaving(true);
+    setScheduleError("");
 
-    setViewingClass(prev => {
-      if (!prev) return prev;
-      if (prev.teacherId === teacherId && prev.timeSlot === timeSlot) {
-        return { ...prev, students: [] };
+    try {
+      await deleteClassSlotInDjango({
+        teacher_id: teacherId,
+        time_slot: timeSlot,
+      });
+
+      if (stateScopeKeyRef.current !== scopeAtStart) return;
+
+      setAppState(prev => ({
+        ...prev,
+        students: prev.students.map(s =>
+          s.teacherId === teacherId && s.timeSlot === timeSlot ? { ...s, timeSlot: "" } : s
+        ),
+      }));
+
+      setViewingClass(prev => {
+        if (!prev) return prev;
+        if (prev.teacherId === teacherId && prev.timeSlot === timeSlot) {
+          return { ...prev, students: [] };
+        }
+        return prev;
+      });
+    } catch (err: any) {
+      if (stateScopeKeyRef.current === scopeAtStart) {
+        setScheduleError(err?.message || "Failed to delete class slot.");
       }
-      return prev;
-    });
+    } finally {
+      setScheduleSaving(false);
+    }
   };
 
 
   // ---------------- Login Screen ----------------
   if (!session) {
-    return (
-      <>
-        <style>{`
-        @keyframes ivsIn {
-          from { opacity: 0; transform: translateY(28px) scale(0.97); }
-          to { opacity: 1; transform: translateY(0) scale(1); }
-        }
-
-        @keyframes ivsGrid {
-          0% { background-position: 0 0; }
-          100% { background-position: 0 56px; }
-        }
-
-        @keyframes ivsOrb1 {
-          0%, 100% { transform: translate(0, 0) scale(1); }
-          50% { transform: translate(18px, -18px) scale(1.04); }
-        }
-
-        @keyframes ivsOrb2 {
-          0%, 100% { transform: translate(0, 0) scale(1); }
-          50% { transform: translate(-18px, 18px) scale(1.04); }
-        }
-
-        @keyframes ivsShine {
-          from { transform: translateX(-130%) skewX(-18deg); }
-          to { transform: translateX(220%) skewX(-18deg); }
-        }
-
-        @keyframes ivsSpin {
-          to { transform: rotate(360deg); }
-        }
-
-        .ivs-login-root * {
-          box-sizing: border-box;
-        }
-
-        .ivs-login-scene {
-          position: relative;
-          min-height: 100vh;
-          width: 100%;
-          overflow: hidden;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 2rem 1rem;
-          background: #edeaf5;
-        }
-
-        .ivs-login-bg {
-          position: absolute;
-          inset: 0;
-          overflow: hidden;
-          background: #edeaf5;
-        }
-
-        .ivs-login-bg picture,
-        .ivs-login-bg-image {
-          display: block;
-          width: 100%;
-          height: 100%;
-        }
-
-        .ivs-login-bg-image {
-          object-fit: cover;
-          object-position: center;
-        }
-
-        .ivs-login-bg::after {
-          content: "";
-          position: absolute;
-          inset: 0;
-          background:
-            radial-gradient(circle at 18% 16%, rgba(139,92,246,0.20), transparent 35%),
-            radial-gradient(circle at 84% 88%, rgba(168,85,247,0.18), transparent 34%),
-            linear-gradient(120deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02)),
-            linear-gradient(rgba(35,20,80,0.10), rgba(35,20,80,0.10));
-          pointer-events: none;
-        }
-
-        .ivs-login-grid {
-          position: absolute;
-          bottom: 0;
-          left: 0;
-          right: 0;
-          height: 52%;
-          background-image:
-            linear-gradient(rgba(99,102,241,0.055) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(99,102,241,0.055) 1px, transparent 1px);
-          background-size: 56px 56px;
-          transform: perspective(700px) rotateX(62deg);
-          transform-origin: bottom center;
-          -webkit-mask-image: linear-gradient(to top, rgba(0,0,0,0.16), transparent 72%);
-          mask-image: linear-gradient(to top, rgba(0,0,0,0.16), transparent 72%);
-          animation: ivsGrid 6s linear infinite;
-          pointer-events: none;
-        }
-
-        .ivs-login-orb {
-          position: absolute;
-          border-radius: 999px;
-          pointer-events: none;
-        }
-
-        .ivs-login-orb-1 {
-          width: 360px;
-          height: 360px;
-          top: -90px;
-          left: -90px;
-          background: radial-gradient(circle at 38% 36%, rgba(167,139,250,0.24), rgba(139,92,246,0.06) 62%, transparent);
-          border: 1px solid rgba(167,139,250,0.10);
-          animation: ivsOrb1 20s ease-in-out infinite;
-        }
-
-        .ivs-login-orb-2 {
-          width: 290px;
-          height: 290px;
-          bottom: -70px;
-          right: -70px;
-          background: radial-gradient(circle at 62% 34%, rgba(99,102,241,0.18), rgba(79,70,229,0.05) 62%, transparent);
-          border: 1px solid rgba(99,102,241,0.08);
-          animation: ivsOrb2 24s ease-in-out infinite;
-        }
-
-        .ivs-login-card {
-          position: relative;
-          z-index: 10;
-          width: 500px;
-          max-width: 94vw;
-          border-radius: 36px;
-          padding: 48px 48px 40px;
-          overflow: hidden;
-
-          background: rgba(255,255,255,0.02);
-          backdrop-filter: blur(18px) saturate(145%);
-          -webkit-backdrop-filter: blur(18px) saturate(145%);
-
-          border: 1px solid rgba(255,255,255,0.58);
-
-          box-shadow:
-            16px 18px 38px rgba(76, 62, 121, 0.22),
-            0 24px 70px rgba(79,70,229,0.20),
-            inset 0 1px 0 rgba(255,255,255,0.35),
-            inset 0 -1px 0 rgba(255,255,255,0.12);
-
-          animation: ivsIn 0.75s cubic-bezier(0.22,1,0.36,1) both;
-        }
-
-        .ivs-login-card::before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          border-radius: 36px;
-          pointer-events: none;
-          background: transparent;
-        }
-
-        .ivs-login-inner {
-          position: relative;
-          z-index: 1;
-        }
-
-        .ivs-login-brand {
-          display: flex;
-          align-items: center;
-          gap: 16px;
-          margin-bottom: 36px;
-        }
-
-.ivs-login-logo {
-  width: 70px;
-  height: 70px;
-  border-radius: 24px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255,255,255,0.20);
-  border: 1px solid rgba(255,255,255,0.48);
-  box-shadow:
-    8px 10px 22px rgba(76,62,121,0.20),
-    inset 0 1px 0 rgba(255,255,255,0.42);
-  overflow: hidden;
-}
-
-.ivs-login-logo-img {
-  width: 58px;
-  height: 58px;
-  object-fit: contain;
-  display: block;
-  filter: drop-shadow(0 8px 14px rgba(30,27,75,0.18));
-}
-
-        .ivs-login-school {
-          font-size: 20px;
-          font-weight: 800;
-          color: #1e1b4b;
-          line-height: 1.15;
-          letter-spacing: -0.3px;
-        }
-
-        .ivs-login-sub {
-          font-size: 12.5px;
-          font-weight: 600;
-          color: #6d5f98;
-          margin-top: 3px;
-        }
-
-        .ivs-login-title {
-          font-size: 52px;
-          font-weight: 900;
-          letter-spacing: -2.5px;
-          line-height: 1;
-          color: #1e1b4b;
-          margin-bottom: 34px;
-        }
-
-        .ivs-login-field {
-          margin-bottom: 20px;
-        }
-
-        .ivs-login-label {
-          display: block;
-          font-size: 13px;
-          font-weight: 800;
-          color: #1e1b4b;
-          margin-bottom: 9px;
-          letter-spacing: 0.2px;
-        }
-
-        .ivs-login-input-wrap {
-          position: relative;
-        }
-
-        .ivs-login-input {
-          width: 100%;
-          border-radius: 20px;
-          padding: 15px 62px 15px 20px;
-          font-size: 15px;
-          font-weight: 650;
-          color: #1e1b4b;
-          outline: none;
-          border: 1px solid rgba(255,255,255,0.62);
-          background: rgba(255,255,255,0.24);
-          box-shadow:
-            inset 4px 4px 12px rgba(120,100,170,0.16),
-            inset -4px -4px 12px rgba(255,255,255,0.46),
-            0 1px 0 rgba(255,255,255,0.45);
-          transition: all 0.22s ease;
-        }
-
-        .ivs-login-input::placeholder {
-          color: #8f89ad;
-          font-weight: 500;
-        }
-
-        .ivs-login-input:focus {
-          background: rgba(255,255,255,0.32);
-          border-color: rgba(99,102,241,0.46);
-          box-shadow:
-            inset 4px 4px 12px rgba(99,102,241,0.11),
-            inset -4px -4px 12px rgba(255,255,255,0.52),
-            0 0 0 4px rgba(99,102,241,0.12),
-            0 8px 22px rgba(79,70,229,0.12);
-          transform: translateY(-1px);
-        }
-
-        .ivs-login-icon,
-        .ivs-login-eye {
-          position: absolute;
-          right: 11px;
-          top: 50%;
-          transform: translateY(-50%);
-          width: 40px;
-          height: 40px;
-          border-radius: 13px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: #4f46e5;
-          background: rgba(255,255,255,0.28);
-          border: 1px solid rgba(255,255,255,0.55);
-          box-shadow:
-            5px 6px 14px rgba(76,62,121,0.14),
-            inset 0 1px 0 rgba(255,255,255,0.46);
-        }
-
-        .ivs-login-icon {
-          pointer-events: none;
-        }
-
-        .ivs-login-eye {
-          cursor: pointer;
-          outline: none;
-          transition: all 0.18s ease;
-        }
-
-        .ivs-login-eye:hover {
-          background: rgba(255,255,255,0.38);
-          transform: translateY(-50%) scale(1.04);
-        }
-
-        .ivs-login-options {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 14px;
-          margin: 2px 0 18px;
-        }
-
-        .ivs-login-remember {
-          display: inline-flex;
-          align-items: center;
-          gap: 10px;
-          cursor: pointer;
-          user-select: none;
-          color: #1e1b4b;
-          font-size: 13px;
-          font-weight: 800;
-        }
-
-        .ivs-login-checkbox {
-          appearance: none;
-          width: 18px;
-          height: 18px;
-          border-radius: 6px;
-          border: 1px solid rgba(255,255,255,0.68);
-          background: rgba(255,255,255,0.26);
-          box-shadow:
-            inset 2px 2px 6px rgba(120,100,170,0.16),
-            inset -2px -2px 6px rgba(255,255,255,0.48);
-          cursor: pointer;
-          position: relative;
-          flex-shrink: 0;
-        }
-
-        .ivs-login-checkbox:checked {
-          background: linear-gradient(135deg, #7c3aed, #4f46e5);
-          border-color: rgba(255,255,255,0.72);
-          box-shadow:
-            0 8px 18px rgba(79,70,229,0.24),
-            inset 0 1px 0 rgba(255,255,255,0.28);
-        }
-
-        .ivs-login-checkbox:checked::after {
-          content: "✓";
-          position: absolute;
-          left: 50%;
-          top: 50%;
-          transform: translate(-50%, -54%);
-          color: white;
-          font-size: 12px;
-          font-weight: 900;
-        }
-
-        .ivs-login-error {
-          background: rgba(254,226,226,0.78);
-          border: 1px solid rgba(239,68,68,0.22);
-          border-radius: 14px;
-          padding: 11px 16px;
-          font-size: 13px;
-          font-weight: 700;
-          color: #b91c1c;
-          margin-bottom: 16px;
-          box-shadow:
-            inset 3px 3px 8px rgba(239,68,68,0.10),
-            inset -3px -3px 8px rgba(255,255,255,0.45);
-        }
-
-        .ivs-login-btn {
-          position: relative;
-          width: 100%;
-          margin-top: 10px;
-          padding: 16px 24px;
-          border: none;
-          border-radius: 22px;
-          cursor: pointer;
-          font-size: 17px;
-          font-weight: 900;
-          color: #fff;
-          letter-spacing: -0.2px;
-          overflow: hidden;
-          background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 52%, #4338ca 100%);
-          box-shadow:
-            7px 9px 20px rgba(79,70,229,0.38),
-            0 18px 42px rgba(79,70,229,0.32),
-            inset 0 1px 0 rgba(255,255,255,0.26);
-          transition: all 0.22s ease;
-        }
-
-        .ivs-login-btn:hover {
-          transform: translateY(-3px);
-          box-shadow:
-            8px 12px 24px rgba(79,70,229,0.46),
-            0 24px 54px rgba(79,70,229,0.38),
-            inset 0 1px 0 rgba(255,255,255,0.30);
-        }
-
-        .ivs-login-btn:active {
-          transform: translateY(1px) scale(0.99);
-          box-shadow:
-            inset 4px 4px 12px rgba(79,70,229,0.40),
-            inset -4px -4px 12px rgba(255,255,255,0.15),
-            0 8px 20px rgba(79,70,229,0.28);
-        }
-
-        .ivs-login-btn:disabled {
-          opacity: 0.60;
-          cursor: not-allowed;
-          transform: none;
-        }
-
-        .ivs-login-btn::before {
-          content: "";
-          position: absolute;
-          inset-y: 0;
-          left: -100%;
-          width: 52%;
-          background: linear-gradient(90deg, transparent, rgba(255,255,255,0.22), transparent);
-          transform: skewX(-18deg);
-          pointer-events: none;
-        }
-
-        .ivs-login-btn:hover::before {
-          animation: ivsShine 0.60s ease-out forwards;
-        }
-
-        .ivs-login-btn-inner {
-          position: relative;
-          z-index: 1;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 10px;
-        }
-
-        .ivs-login-spinner {
-          width: 17px;
-          height: 17px;
-          border-radius: 999px;
-          border: 2.5px solid rgba(255,255,255,0.35);
-          border-top-color: #fff;
-          animation: ivsSpin 0.7s linear infinite;
-          flex-shrink: 0;
-        }
-
-        .ivs-login-footer {
-          margin-top: 22px;
-          text-align: center;
-          font-size: 12px;
-          font-weight: 700;
-          color: rgba(30,27,75,0.46);
-        }
-
-        @media (max-width: 560px) {
-          .ivs-login-scene {
-            padding: 1rem;
-          }
-
-          .ivs-login-card {
-            padding: 34px 24px 30px;
-            border-radius: 28px;
-          }
-
-          .ivs-login-title {
-            font-size: 42px;
-          }
-
-          .ivs-login-school {
-            font-size: 17px;
-          }
-
-          .ivs-login-logo {
-            width: 56px;
-            height: 56px;
-            border-radius: 20px;
-          }
-
-          .ivs-login-logo-inner {
-            width: 40px;
-            height: 40px;
-          }
-
-          .ivs-login-options {
-            align-items: flex-start;
-            flex-direction: column;
-          }
-        }
-      `}</style>
-
-        <div className="ivs-login-root">
-          <div className="ivs-login-scene">
-            <div className="ivs-login-bg" aria-hidden="true">
-            <picture>
-              <source
-                media="(max-width: 600px) and (orientation: portrait)"
-                srcSet="/login-bg-mobile.webp"
-                type="image/webp"
-              />
-              <img
-                className="ivs-login-bg-image"
-                src="/login-bg.webp"
-                alt=""
-                loading="eager"
-                fetchPriority="high"
-                decoding="async"
-              />
-            </picture>
-          </div>
-            <div className="ivs-login-grid" />
-
-            <div className="ivs-login-orb ivs-login-orb-1" />
-            <div className="ivs-login-orb ivs-login-orb-2" />
-
-            <div className="ivs-login-card">
-              <div className="ivs-login-inner">
-                <div className="ivs-login-brand">
-                  <div className="ivs-login-logo">
-                    <img
-                      src="/ivs-logo.webp"
-                      alt="Iqra Virtual School"
-                      className="ivs-login-logo-img"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="ivs-login-school">Iqra Virtual School</div>
-                    <div className="ivs-login-sub">School Management Portal</div>
-                  </div>
-                </div>
-
-                <h1 className="ivs-login-title">Login</h1>
-
-                <form onSubmit={handleLogin}>
-                  <div className="ivs-login-field">
-                    <label className="ivs-login-label" htmlFor="ivs-username">
-                      Username
-                    </label>
-
-                    <div className="ivs-login-input-wrap">
-                      <input
-                        id="ivs-username"
-                        type="text"
-                        className="ivs-login-input"
-                        value={loginUsername}
-                        onChange={(e) => setLoginUsername(e.target.value)}
-                        placeholder="Enter username"
-                        autoComplete="username"
-                      />
-
-                      <div className="ivs-login-icon">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                          <path
-                            d="M20 21a8 8 0 0 0-16 0"
-                            stroke="currentColor"
-                            strokeWidth="2.3"
-                            strokeLinecap="round"
-                          />
-                          <circle
-                            cx="12"
-                            cy="8"
-                            r="4"
-                            stroke="currentColor"
-                            strokeWidth="2.3"
-                          />
-                        </svg>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="ivs-login-field">
-                    <label className="ivs-login-label" htmlFor="ivs-password">
-                      Password
-                    </label>
-
-                    <div className="ivs-login-input-wrap">
-                      <input
-                        id="ivs-password"
-                        type={showLoginPassword ? "text" : "password"}
-                        className="ivs-login-input"
-                        value={loginPassword}
-                        onChange={(e) => setLoginPassword(e.target.value)}
-                        placeholder="Enter password"
-                        autoComplete="current-password"
-                      />
-
-                      <button
-                        type="button"
-                        className="ivs-login-eye"
-                        onClick={() => setShowLoginPassword((value) => !value)}
-                        aria-label={showLoginPassword ? "Hide password" : "Show password"}
-                      >
-                        {showLoginPassword ? (
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                            <path
-                              d="M3 3l18 18"
-                              stroke="currentColor"
-                              strokeWidth="2.2"
-                              strokeLinecap="round"
-                            />
-                            <path
-                              d="M10.6 10.6a2.2 2.2 0 0 0 3.1 3.1"
-                              stroke="currentColor"
-                              strokeWidth="2.2"
-                              strokeLinecap="round"
-                            />
-                            <path
-                              d="M7.2 7.5C4.8 8.9 3.5 11 3 12c1.1 2.2 4.5 6 9 6 1.5 0 2.8-.4 4-1"
-                              stroke="currentColor"
-                              strokeWidth="2.2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                            <path
-                              d="M12 6c4.5 0 7.9 3.8 9 6-.3.7-1.1 1.8-2.2 2.8"
-                              stroke="currentColor"
-                              strokeWidth="2.2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                          </svg>
-                        ) : (
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                            <path
-                              d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z"
-                              stroke="currentColor"
-                              strokeWidth="2.2"
-                              strokeLinejoin="round"
-                            />
-                            <circle
-                              cx="12"
-                              cy="12"
-                              r="3"
-                              stroke="currentColor"
-                              strokeWidth="2.2"
-                            />
-                          </svg>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="ivs-login-options">
-                    <label className="ivs-login-remember">
-                      <input
-                        type="checkbox"
-                        className="ivs-login-checkbox"
-                        checked={rememberLogin}
-                        onChange={(e) => setRememberLogin(e.target.checked)}
-                      />
-                      Remember me
-                    </label>
-                  </div>
-
-                  {loginError && (
-                    <div className="ivs-login-error">
-                      {loginError}
-                    </div>
-                  )}
-
-                  <button
-                    type="submit"
-                    className="ivs-login-btn"
-                    disabled={loginLoading}
-                  >
-                    <span className="ivs-login-btn-inner">
-                      {loginLoading && <span className="ivs-login-spinner" />}
-                      {loginLoading ? "Signing in..." : "Sign in"}
-                    </span>
-                  </button>
-                </form>
-
-                <div className="ivs-login-footer">
-                  © 2026 Iqra Virtual School
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </>
-    );
+    return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
   }
 
 
   // ---------------- Department-aware role portals ----------------
-  const activeDepartment =
-    authContext?.department ||
-    (session as any)?.user?.department ||
-    (session as any)?.department ||
-    authContext?.roles?.find(
-      (item: any) =>
-        item?.department?.department_type === "tuition"
-    )?.department ||
-    null;
-
-  const activeDepartmentType = String(
-    activeDepartment?.department_type || ""
-  ).toLowerCase();
-
-  const isTuitionDepartment =
-    activeDepartmentType === "tuition";
-
-  // The portal type must follow the active department-role assignment returned
-  // by /api/auth/context/, not only the role cached at login. The cached role can
-  // be older than a later account/department-role correction and previously sent
-  // Quran teachers into StudentPortal, making teacher-only tabs appear missing.
-  const sessionRoleForDepartment = String(
-    authContext?.user?.role ||
-    (session as any)?.user?.role ||
-    session?.role ||
-    ""
-  ).trim().toLowerCase();
-
-  const activeDepartmentIdForRole = Number(activeDepartment?.id || 0);
-  const activeDepartmentRoleAssignments = Array.isArray(authContext?.roles)
-    ? authContext.roles.filter((item: any) => {
-      const assignmentDepartmentId = Number(item?.department?.id || 0);
-      return (
-        activeDepartmentIdForRole > 0 &&
-        assignmentDepartmentId === activeDepartmentIdForRole
-      );
-    })
-    : [];
-
-  const activeDepartmentRoleAssignment =
-    activeDepartmentRoleAssignments.find(
-      (item: any) =>
-        String(item?.role || "").trim().toLowerCase() ===
-        sessionRoleForDepartment,
-    ) ||
-    activeDepartmentRoleAssignments[0] ||
-    null;
-
-  const effectiveDepartmentRole = String(
-    activeDepartmentRoleAssignment?.role || sessionRoleForDepartment
-  ).trim().toLowerCase();
 
   if (
     session &&
@@ -3496,19 +2221,21 @@ export default function App() {
 
   if (session && !isPlatformAdmin && maintenanceState.active) {
     return (
-      <MaintenanceScreen
-        maintenance={maintenanceState}
-        onRetry={() => void retryMaintenanceStatus()}
-        onLogout={() => {
-          disconnectAcademyWS(true);
-          clearSession();
-          setSession(null);
-          setAuthContext(null);
-          setMaintenanceState({ active: false });
-          setPlatformNotices([]);
-          navigateToTab("dashboard");
-        }}
-      />
+      <Suspense fallback={<DepartmentWorkspaceLoading />}>
+        <MaintenanceScreen
+          maintenance={maintenanceState}
+          onRetry={() => void retryMaintenanceStatus()}
+          onLogout={() => {
+            disconnectAcademyWS(true);
+            clearSession();
+            setSession(null);
+            setAuthContext(null);
+            setMaintenanceState({ active: false });
+            setPlatformNotices([]);
+            navigateToTab("dashboard");
+          }}
+        />
+      </Suspense>
     );
   }
 
@@ -3540,11 +2267,23 @@ export default function App() {
           />
         </Suspense>
 
-        <FeatureLockedModal
-          feature={lockedFeature}
-          onClose={() => setLockedFeature(null)}
-        />
-        <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+        {lockedFeature && (
+          <Suspense fallback={null}>
+            <FeatureLockedModal
+              feature={lockedFeature}
+              onClose={() => setLockedFeature(null)}
+            />
+          </Suspense>
+        )}
+        {platformNotices.length > 0 && (
+          <Suspense fallback={null}>
+            {platformNotices.length > 0 && (
+          <Suspense fallback={null}>
+            <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+          </Suspense>
+        )}
+          </Suspense>
+        )}
       </>
     );
   }
@@ -3571,7 +2310,11 @@ export default function App() {
             }}
           />
         </Suspense>
-        <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+        {platformNotices.length > 0 && (
+          <Suspense fallback={null}>
+            <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+          </Suspense>
+        )}
       </>
     );
   }
@@ -3598,7 +2341,11 @@ export default function App() {
             }}
           />
         </Suspense>
-        <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+        {platformNotices.length > 0 && (
+          <Suspense fallback={null}>
+            <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+          </Suspense>
+        )}
       </>
     );
   }
@@ -3612,13 +2359,18 @@ export default function App() {
           themeMode={themeMode}
           onToggleTheme={toggleTheme}
           onLogout={() => {
+            disconnectAcademyWS(true);
             clearSession();
             setSession(null);
             navigateToTab("dashboard");
           }}
         />
 </Suspense>
-        <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+        {platformNotices.length > 0 && (
+          <Suspense fallback={null}>
+            <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+          </Suspense>
+        )}
       </>
     );
   }
@@ -3630,13 +2382,18 @@ export default function App() {
 <StudentPortal
           departmentName={String(activeDepartment?.name || "Quran Department")}
           onLogout={() => {
+            disconnectAcademyWS(true);
             clearSession();
             setSession(null);
             navigateToTab("dashboard");
           }}
         />
 </Suspense>
-        <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+        {platformNotices.length > 0 && (
+          <Suspense fallback={null}>
+            <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
+          </Suspense>
+        )}
       </>
     );
   }
@@ -3711,1839 +2468,88 @@ export default function App() {
   // ---------------- Main Quran Department UI ----------------
   return (
     <>
-
-      <div className="min-h-screen bg-slate-50">
-        <div className="flex">
-          {/* ═══════════════════════════════════════════════════════
-    SIDEBAR
-    Collapsed : logo → admin icon → nav icons → logout icon
-    Expanded  : full glass cards + dividers + tight icon-label gap
-═══════════════════════════════════════════════════════ */}
-          {/* Permanent desktop sidebar footprint.
-              The real sidebar is fixed so its hover expansion overlays
-              content instead of shifting the main Dashboard layout. */}
-          <div
-            className="hidden md:block w-[108px] shrink-0"
-            aria-hidden="true"
-          />
-
-          {/* Single mouse hit region includes the left screen edge and the inset sidebar.
-              92px collapsed = 16px gutter + 76px sidebar; 302px expanded = 16px + 286px.
-              Keeping one parent hover target prevents enter/leave flicker at the gutter. */}
-          <div
-            className={`fixed inset-y-0 left-0 z-40 w-0 pointer-events-none md:pointer-events-auto ${sidebarEdgeHover ? "md:w-[302px]" : "md:w-[92px]"}`}
-            onMouseEnter={() => {
-              if (window.matchMedia("(min-width: 768px)").matches) setSidebarEdgeHover(true);
-            }}
-            onMouseLeave={() => {
-              if (window.matchMedia("(min-width: 768px)").matches) {
-                setSidebarEdgeHover(false);
-              }
-            }}
-          >
-          <aside
-            className={`
-    group ivs-quran-sidebar pointer-events-auto
-${sidebarEdgeHover ? "sidebar-content-ready" : ""}
-    fixed inset-y-0 left-0 z-40
-    transform transition-transform duration-300 ease-in-out
-    ${mobileMenuOpen ? "translate-x-0" : "-translate-x-[110%]"}
-    md:translate-x-0
-
-    shrink-0
-    m-3 md:m-4
-  w-[286px] ${sidebarEdgeHover ? "md:w-[286px]" : "md:w-[76px]"}
-    rounded-[28px]
-    border border-white/70
-    bg-white/68 backdrop-blur-2xl
-    overflow-hidden
-
-    shadow-none md:shadow-[-12px_-12px_28px_rgba(255,255,255,0.90),16px_20px_48px_rgba(15,23,42,0.13),inset_0_1px_0_rgba(255,255,255,0.88)]
-
-    md:transition-none
-  `}
-          >
-            <div className="h-full flex flex-col">
-
-              {/* ─────────────────────────────────────
-        LOGO
-    ───────────────────────────────────── */}
-              <div className="px-3 pt-3 pb-0">
-
-                {/* Collapsed */}
-                <div className="hidden md:flex ivs-sidebar-collapsed items-center justify-center py-2">
-                  <div className="w-[52px] h-[52px] rounded-[17px] bg-white border border-slate-200/80 flex items-center justify-center overflow-hidden shadow-[-6px_-6px_14px_rgba(255,255,255,0.98),6px_8px_18px_rgba(15,23,42,0.10),inset_0_1px_0_rgba(255,255,255,0.95)]">
-                    <img src="/ivs-logo.webp" alt="IVS" className="w-10 h-10 object-contain" />
-                  </div>
-                </div>
-
-                {/* Expanded */}
-                <div className="flex md:hidden ivs-sidebar-expanded items-center gap-2.5 rounded-[20px] bg-white/80 border border-white/90 px-2.5 py-2.5 shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)]">
-                  <div className="w-[48px] h-[48px] rounded-[16px] bg-white border border-slate-200/70 flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_10px_20px_rgba(15,23,42,0.07)] shrink-0 overflow-hidden">
-                    <img src="/ivs-logo.webp" alt="Iqra Virtual School" className="w-9 h-9 object-contain" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[13.5px] font-extrabold text-slate-950 leading-tight truncate">Iqra Virtual School</div>
-                    <div className="text-[10.5px] font-semibold text-slate-500 mt-0.5 leading-snug whitespace-normal break-words" title={quranDepartmentDisplayName}>{quranDepartmentDisplayName}</div>
-                  </div>
-                  <button onClick={() => setMobileMenuOpen(false)} className="md:hidden h-7 w-7 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-500 shrink-0" title="Close">
-                    <X size={14} />
-                  </button>
-                </div>
-              </div>
-
-              {/* Divider after brand */}
-              <div className="mx-4 mt-3 h-px bg-slate-200/70 hidden md:hidden ivs-sidebar-expanded-divider" />
-              <div className="mx-4 mt-3 h-px bg-slate-200/70 md:hidden" />
-
-              {/* ─────────────────────────────────────
-        ROLE / ACCOUNT
-    ───────────────────────────────────── */}
-              <div className="px-3 pt-3 pb-0">
-
-                {/* Collapsed */}
-                <div className="hidden md:flex ivs-sidebar-collapsed items-center justify-center py-2">
-                  <div className="w-[52px] h-[52px] rounded-[17px] bg-slate-900 border border-slate-700/50 flex items-center justify-center overflow-hidden shadow-[0_12px_28px_rgba(15,23,42,0.30)]">
-                    <RoleSidebarIcon size={22} className="text-white" aria-hidden="true" />
-                  </div>
-                </div>
-
-                {/* Expanded */}
-                <div className="flex md:hidden ivs-sidebar-expanded items-center gap-2.5 rounded-[20px] bg-slate-950 px-2.5 py-2.5 text-white shadow-[0_20px_48px_rgba(15,23,42,0.28),inset_0_1px_0_rgba(255,255,255,0.08)]">
-                  <div className="w-[48px] h-[48px] rounded-[16px] bg-white/10 border border-white/10 flex items-center justify-center shadow-[0_12px_24px_rgba(0,0,0,0.25)] shrink-0 overflow-hidden">
-                    <RoleSidebarIcon size={20} className="text-white" aria-hidden="true" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="max-w-full text-[12.5px] font-extrabold leading-snug whitespace-normal break-words" title={roleLabel}>{roleLabel}</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5 truncate font-semibold">{sidebarDisplayName}</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Divider after account */}
-              <div className="mx-4 mt-3 h-px bg-slate-200/70 hidden md:hidden ivs-sidebar-expanded-divider" />
-              <div className="mx-4 mt-3 h-px bg-slate-200/70 md:hidden" />
-
-              {/* ─────────────────────────────────────
-        NAVIGATION
-    ───────────────────────────────────── */}
-              <nav className="flex-1 px-3 pt-3 overflow-y-auto" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
-
-                {/* Collapsed: stacked bare icons */}
-                <div className="hidden md:flex ivs-sidebar-collapsed flex-col items-center gap-2.5 py-1">
-                  {coordinatorNavItems.map((id) => {
-                    const item = NAV_META[id];
-                    const Icon = item.icon;
-                    const active = effectiveActiveTab === id;
-                    const locked = isTabLocked(id);
-                    return (
-                      <button
-                        key={id}
-                        onClick={() => { handleSidebarTabClick(id); setMobileMenuOpen(false); }}
-                        title={locked ? `${item.label} is locked` : item.label}
-                        aria-disabled={locked}
-                        className="transition-all duration-300"
-                      >
-                        <div className={`relative w-[52px] h-[52px] rounded-[17px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${locked
-                          ? "border border-slate-300 bg-slate-100 text-slate-400 grayscale opacity-75 shadow-inner"
-                          : active
-                            ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]"
-                            : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"
-                          }`}>
-                          <Icon size={20} className={locked ? "opacity-45" : ""} />
-                          {locked && (
-                            <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full border border-white bg-slate-700 text-white shadow-sm">
-                              <LockKeyhole size={10} />
-                            </span>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Expanded: icon + label — grid-cols-[52px_1fr] keeps icon & text close */}
-                <div className="flex md:hidden ivs-sidebar-expanded flex-col gap-1">
-                  {coordinatorNavItems.map((id) => {
-                    const item = NAV_META[id];
-                    const Icon = item.icon;
-                    const active = effectiveActiveTab === id;
-                    const locked = isTabLocked(id);
-                    return (
-                      <button
-                        key={id}
-                        onClick={() => { handleSidebarTabClick(id); setMobileMenuOpen(false); }}
-                        title={locked ? `${item.label} is locked` : item.label}
-                        aria-disabled={locked}
-                        className={`w-full rounded-[18px] transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${locked
-                          ? "bg-slate-100/85 grayscale opacity-75"
-                          : active
-                            ? "bg-white/72 shadow-[-5px_-5px_14px_rgba(255,255,255,0.97),7px_9px_18px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,1)]"
-                            : "hover:bg-white/45"
-                          }`}
-                      >
-                        <div className="grid grid-cols-[52px_1fr_26px] items-center">
-                          <div className="flex items-center justify-center py-1.5">
-                            <div className={`relative w-[46px] h-[46px] rounded-[15px] flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] ${locked
-                              ? "border border-slate-300 bg-slate-200 text-slate-400 shadow-inner"
-                              : active
-                                ? "bg-white border border-slate-200/55 text-indigo-700 shadow-[-7px_-7px_18px_rgba(255,255,255,1),9px_12px_26px_rgba(15,23,42,0.13),inset_0_2px_0_rgba(255,255,255,1),inset_0_-1px_0_rgba(15,23,42,0.05)]"
-                                : "bg-white/90 border border-slate-200/75 text-slate-500 shadow-[-5px_-5px_12px_rgba(255,255,255,0.97),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,0.9)]"
-                              }`}>
-                              <Icon size={19} className={locked ? "opacity-45" : ""} />
-                            </div>
-                          </div>
-                          <div className="min-w-0 pr-2">
-                            <span className={`block font-extrabold text-[13.5px] whitespace-nowrap truncate ${locked ? "text-slate-500" : active ? "text-indigo-700" : "text-slate-700"
-                              }`}>
-                              {item.label}
-                            </span>
-                          </div>
-                          <div className="flex justify-center">
-                            {locked && (
-                              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-700 text-white shadow-sm">
-                                <LockKeyhole size={12} />
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </nav>
-
-              {/* ─────────────────────────────────────
-    AI ASSISTANT BOT
-───────────────────────────────────── */}
-              <div className="px-3 pt-3 pb-2">
-                {/* Collapsed */}
-                <div className="hidden md:flex ivs-sidebar-collapsed items-center justify-center">
-                  <button
-                    type="button"
-                    onMouseEnter={() => {
-                      if (hasFeature("ai_assistant")) requestAiAssistantAssets();
-                    }}
-                    onFocus={() => {
-                      if (hasFeature("ai_assistant")) requestAiAssistantAssets();
-                    }}
-                    onClick={() => {
-                      if (!hasFeature("ai_assistant")) {
-                        showFeatureLocked(
-                          "AI Assistant",
-                          `${quranDepartmentDisplayName} AI Assistant is currently disabled by Main Admin.`,
-                        );
-                        return;
-                      }
-                      requestAiAssistantAssets();
-                      setAssistantHasOpened(true);
-                      setAssistantOpen(true);
-                    }}
-                    className={`relative h-[54px] w-[54px] rounded-[18px] border flex items-center justify-center overflow-hidden transition active:scale-[0.97] ${hasFeature("ai_assistant")
-                      ? "bg-white/90 border-slate-200/80 shadow-[-6px_-6px_14px_rgba(255,255,255,0.95),6px_8px_18px_rgba(15,23,42,0.10)] hover:bg-white"
-                      : "border-slate-300 bg-slate-100 text-slate-500 grayscale opacity-75 shadow-inner"
-                      }`}
-                    title={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
-                    aria-label={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
-                  >
-                    {hasFeature("ai_assistant") ? (
-                      aiBotAnimation ? (
-                        <Suspense fallback={<div className="h-12 w-12 flex items-center justify-center text-[10px] font-black text-slate-500">AI</div>}>
-                          <Lottie
-                            animationData={aiBotAnimation}
-                            loop
-                            autoplay
-                            className="h-12 w-12 pointer-events-none"
-                          />
-                        </Suspense>
-                      ) : (
-                        <div className="text-[10px] font-black text-slate-500">AI</div>
-                      )
-                    ) : (
-                      <LockKeyhole size={20} />
-                    )}
-                  </button>
-                </div>
-
-                {/* Expanded */}
-                <button
-                  type="button"
-                  onMouseEnter={() => {
-                    if (hasFeature("ai_assistant")) requestAiAssistantAssets();
-                  }}
-                  onFocus={() => {
-                    if (hasFeature("ai_assistant")) requestAiAssistantAssets();
-                  }}
-                  onClick={() => {
-                    if (!hasFeature("ai_assistant")) {
-                      showFeatureLocked(
-                        "AI Assistant",
-                        `${quranDepartmentDisplayName} AI Assistant is currently disabled by Main Admin.`,
-                      );
-                      return;
-                    }
-                    requestAiAssistantAssets();
-                    setAssistantHasOpened(true);
-                    setAssistantOpen(true);
-                    setMobileMenuOpen(false);
-                  }}
-                  className={`flex md:hidden ivs-sidebar-expanded w-full items-center gap-3 rounded-[22px] border px-3 py-3 text-left transition active:scale-[0.99] ${hasFeature("ai_assistant")
-                    ? "bg-white/80 border-white/90 shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)] hover:bg-white"
-                    : "border-slate-300 bg-slate-100 text-slate-500 grayscale opacity-75 shadow-inner"
-                    }`}
-                  title={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
-                  aria-label={hasFeature("ai_assistant") ? "Open AI Assistant" : "AI Assistant is locked"}
-                >
-                  <div className={`h-[58px] w-[58px] rounded-[20px] border flex items-center justify-center overflow-hidden shrink-0 ${hasFeature("ai_assistant")
-                    ? "bg-white border-slate-200/70"
-                    : "border-slate-300 bg-slate-200 text-slate-500"
-                    }`}>
-                    {hasFeature("ai_assistant") ? (
-                      aiBotAnimation ? (
-                        <Suspense fallback={<div className="h-14 w-14 flex items-center justify-center text-xs font-black text-slate-500">AI</div>}>
-                          <Lottie
-                            animationData={aiBotAnimation}
-                            loop
-                            autoplay
-                            className="h-14 w-14 pointer-events-none"
-                          />
-                        </Suspense>
-                      ) : (
-                        <div className="text-xs font-black text-slate-500">AI</div>
-                      )
-                    ) : (
-                      <LockKeyhole size={22} />
-                    )}
-                  </div>
-
-                  <div className="min-w-0">
-                    <div className={`text-[13px] font-extrabold truncate ${hasFeature("ai_assistant") ? "text-slate-950" : "text-slate-500"}`}>
-                      AI Assistant
-                    </div>
-                    <div className="text-[10.5px] font-semibold text-slate-500 truncate mt-0.5">
-                      {hasFeature("ai_assistant") ? "Quick help anytime" : "Locked by Main Admin"}
-                    </div>
-                  </div>
-                </button>
-              </div>
-
-              <div className="mx-4 mt-2 h-px bg-slate-200/70" />
-
-              {/* ─────────────────────────────────────
-        LOGOUT
-    ───────────────────────────────────── */}
-              <div className="px-3 pt-2 pb-3">
-
-                {/* Collapsed */}
-                <div className="hidden md:flex ivs-sidebar-collapsed items-center justify-center py-1">
-                  <button onClick={() => { disconnectAcademyWS(); clearSession(); setSession(null); navigateToTab("dashboard"); }} title="Logout" className="transition-all duration-300">
-                    <div className="w-[52px] h-[52px] rounded-[17px] bg-white/95 border border-rose-100 flex items-center justify-center text-rose-600 shadow-[-5px_-5px_12px_rgba(255,255,255,0.95),5px_7px_16px_rgba(244,63,94,0.12),inset_0_1px_0_rgba(255,255,255,1)]">
-                      <LogOut size={19} />
-                    </div>
-                  </button>
-                </div>
-
-                {/* Expanded — compact pill */}
-                <button
-                  onClick={() => { disconnectAcademyWS(); clearSession(); setSession(null); navigateToTab("dashboard"); }}
-                  title="Logout"
-                  className="w-full flex md:hidden ivs-sidebar-expanded rounded-[16px] bg-rose-50/90 border border-rose-100/80 hover:bg-rose-100/90 transition-all duration-300 ease-[cubic-bezier(.2,.8,.2,1)] shadow-[-4px_-4px_12px_rgba(255,255,255,0.95),4px_6px_14px_rgba(244,63,94,0.08)]"
-                >
-                  {/* Same 52px col as nav items — perfectly aligned */}
-                  <div className="grid grid-cols-[52px_1fr] items-center w-full">
-                    <div className="flex items-center justify-center py-1.5">
-                      <div className="w-[40px] h-[40px] rounded-[13px] bg-white/95 border border-rose-100 flex items-center justify-center text-rose-600 shadow-[-4px_-4px_10px_rgba(255,255,255,0.95),4px_5px_12px_rgba(244,63,94,0.12),inset_0_1px_0_rgba(255,255,255,1)]">
-                        <LogOut size={16} />
-                      </div>
-                    </div>
-                    <div className="min-w-0 pr-2">
-                      <span className="block font-extrabold text-[13px] whitespace-nowrap text-rose-600">Logout</span>
-                    </div>
-                  </div>
-                </button>
-              </div>
-
-            </div>
-          </aside>
-          </div>
-
-          {/* Content */}
-          <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
-            <header className="mx-3 md:mx-4 mt-2 md:mt-3 mb-1.5">
-              <div className="rounded-[24px] border border-slate-200/80 bg-white/82 backdrop-blur-xl shadow-[0_16px_40px_rgba(15,23,42,0.06)] px-4 md:px-5 py-2">
-                <div className="flex items-center justify-between gap-4">
-                  {/* Left */}
-                  <div className="flex items-center gap-3 min-w-0">
-                    <button
-                      onClick={() => setMobileMenuOpen(true)}
-                      className="md:hidden w-10 h-10 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-slate-700 shadow-sm active:scale-95 transition"
-                      aria-label="Open menu"
-                    >
-                      <Menu size={20} />
-                    </button>
-                    <div className="hidden md:flex items-center gap-3">
-                      <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-[0_18px_34px_-18px_rgba(37,99,235,0.70)] shrink-0">
-                        <ActiveTopIcon size={21} />
-                      </div>
-                      <div className="min-w-0">
-                        <h2 className="text-lg md:text-xl font-extrabold text-slate-950 truncate">
-                          {activeMeta.label}
-                        </h2>
-                        <div className="text-xs font-semibold text-slate-500 mt-0.5 truncate">
-                          {roleLabel} Panel
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Right */}
-                  <div className="flex items-center gap-3 sm:gap-4">
-                    <TopbarClock />
-
-                    {(isSuperAdmin || isDepartmentAdmin) ? (
-                      <button
-                        onClick={() => {
-                          setModalMode("settings");
-                          setShowModal(true);
-                        }}
-                        className="
-      inline-flex items-center justify-center
-      w-10 h-10 rounded-2xl
-      bg-white/80 backdrop-blur
-      border border-slate-200/80
-      shadow-[0_12px_28px_rgba(15,23,42,0.07)]
-      active:scale-[0.98] transition-all
-      text-slate-700 hover:text-slate-950
-    "
-                        title="Settings"
-                      >
-                        <Settings size={18} />
-                      </button>
-                    ) : (
-                      <button
-                        onClick={toggleTheme}
-                        className="
-      inline-flex items-center justify-center
-      w-10 h-10 rounded-2xl
-      bg-white/80 backdrop-blur
-      border border-slate-200/80
-      shadow-[0_12px_28px_rgba(15,23,42,0.07)]
-      active:scale-[0.98] transition-all
-      text-slate-700 hover:text-slate-950
-    "
-                        title={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-                      >
-                        {themeMode === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </header>
-
-            <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-16 md:pb-8">
-
-              {effectiveActiveTab === "dashboard" && canAccessPortalTab("dashboard") && hasFeature("tab_daily_classes") && (
-                !hydrated ? (
-                  <div className="w-full max-w-none mx-auto">
-                    <PageSkeleton
-                      variant="dashboard"
-                      cards={6}
-                      delayMs={0}
-                      label="Loading dashboard"
-                      className="min-h-[640px]"
-                    />
-                  </div>
-                ) : (
-                <div className="w-full max-w-none mx-auto space-y-6">
-                  {/* ✅ KPI Row */}
-                  {/* ✅ Pretty background banner like your reference */}
-                  <div className="relative overflow-hidden rounded-[32px] border border-slate-200/70 bg-white/55 backdrop-blur-xl shadow-[0_18px_55px_rgba(15,23,42,0.10)] p-6 md:p-7">
-                    <DashboardBackdrop />
-
-                    <div className="relative z-10">
-                      {/* ✅ KPI Row */}
-                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                        <div className="ui-glass ui-card ui-gradient-border p-4 ui-card-hover">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <div className="text-xs font-semibold text-slate-500">Students</div>
-                              <div className="text-2xl font-extrabold text-emerald-600 mt-1">{viewStudents.length}</div>
-                            </div>
-                            <div className="h-10 w-10 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-600">
-                              <Users size={20} />
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="ui-glass ui-card ui-gradient-border p-4 ui-card-hover">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <div className="text-xs font-semibold text-slate-500">Teachers</div>
-                              <div className="text-2xl font-extrabold text-blue-600 mt-1">{viewTeachers.length}</div>
-                            </div>
-                            <div className="h-10 w-10 rounded-2xl bg-blue-50 flex items-center justify-center text-blue-600">
-                              <BookOpen size={20} />
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="ui-glass ui-card ui-gradient-border p-4 ui-card-hover">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <div className="text-xs font-semibold text-slate-500">Live Now</div>
-                              <div className="text-2xl font-extrabold text-slate-900 mt-1">{currentClasses.length}</div>
-                              <div className="text-[11px] text-slate-500 mt-1">{formatTime12(currentSlot)}</div>
-                            </div>
-                            <div className="h-10 w-10 rounded-2xl bg-rose-50 flex items-center justify-center text-rose-600">
-                              <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="ui-glass ui-card ui-gradient-border p-4 ui-card-hover">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <div className="text-xs font-semibold text-slate-500">Up Next</div>
-                              <div className="text-2xl font-extrabold text-slate-900 mt-1">{nextClasses.length}</div>
-                              <div className="text-[11px] text-slate-500 mt-1">{formatTime12(nextSlot)}</div>
-                            </div>
-                            <div className="h-10 w-10 rounded-2xl bg-slate-50 flex items-center justify-center text-slate-600">
-                              <ChevronRight size={18} />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-
-                  {/* ✅ Collapsible Insights (Hidden by default = looks more premium) */}
-                  <details
-                    className="ui-glass ui-card ui-gradient-border ui-card-hover p-4"
-                    onToggle={(e) => setInsightsOpen((e.currentTarget as HTMLDetailsElement).open)}
-                  >
-                    <summary className="cursor-pointer list-none">
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="min-w-0">
-                          <div className="text-sm font-extrabold text-slate-800 dark:text-slate-100">
-                            Insights
-                          </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                            Attendance snapshot + timeline
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <span className="hidden sm:inline-flex rounded-xl bg-indigo-50 px-3 py-2 text-xs font-extrabold text-indigo-700 border border-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-200 dark:border-indigo-400/20">
-                            Click to open
-                          </span>
-
-                          <div className="h-9 w-9 rounded-2xl bg-white/70 border border-slate-100 flex items-center justify-center text-slate-600 dark:bg-slate-900/70 dark:border-slate-700 dark:text-slate-300">
-                            <ChevronRight size={18} />
-                          </div>
-                        </div>
-                      </div>
-                    </summary>
-
-                    {insightsOpen && (
-                    <div className="mt-5 grid grid-cols-1 xl:grid-cols-2 gap-5">
-                      {/* Attendance Snapshot */}
-                      <div className="relative overflow-hidden rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_22px_rgba(15,23,42,0.035)] dark:bg-slate-900/75 dark:border-slate-700/70">
-                        <div className="pointer-events-none absolute -top-20 -right-20 h-44 w-44 rounded-full bg-emerald-200/35 blur-3xl dark:bg-emerald-500/10" />
-                        <div className="pointer-events-none absolute -bottom-20 -left-20 h-44 w-44 rounded-full bg-indigo-200/25 blur-3xl dark:bg-indigo-500/10" />
-
-                        <div className="relative">
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <div className="text-sm font-extrabold text-slate-800 dark:text-slate-100">
-                                Today’s Attendance
-                              </div>
-                              <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                                Teachers + Students summary
-                              </div>
-                            </div>
-
-                            <span className="text-xs font-semibold text-slate-600 bg-white/80 border border-slate-100 px-3 py-1.5 rounded-full dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300">
-                              {new Date().toLocaleDateString(undefined, {
-                                weekday: "short",
-                                month: "short",
-                                day: "numeric",
-                              })}
-                            </span>
-                          </div>
-
-                          <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <div className="rounded-2xl border border-slate-100 bg-white/90 p-4 dark:bg-slate-950/55 dark:border-slate-700">
-                              <div className="text-[12px] text-slate-500 dark:text-slate-400 font-bold">
-                                Teachers
-                              </div>
-
-                              <div className="mt-3 grid grid-cols-4 gap-2 text-center">
-                                {[
-                                  ["P", todayAttendanceSummary.teachers.present],
-                                  ["A", todayAttendanceSummary.teachers.absent],
-                                  ["L", todayAttendanceSummary.teachers.leave],
-                                  ["U", todayAttendanceSummary.teachers.unmarked],
-                                ].map(([label, value]) => (
-                                  <div key={label}>
-                                    <div className="text-[10px] text-slate-400 font-bold">{label}</div>
-                                    <div className="font-extrabold text-lg text-slate-900 dark:text-white">
-                                      {value}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-
-                            <div className="rounded-2xl border border-slate-100 bg-white/90 p-4 dark:bg-slate-950/55 dark:border-slate-700">
-                              <div className="text-[12px] text-slate-500 dark:text-slate-400 font-bold">
-                                Students
-                              </div>
-
-                              <div className="mt-3 grid grid-cols-4 gap-2 text-center">
-                                {[
-                                  ["P", todayAttendanceSummary.students.present],
-                                  ["A", todayAttendanceSummary.students.absent],
-                                  ["L", todayAttendanceSummary.students.leave],
-                                  ["U", todayAttendanceSummary.students.unmarked],
-                                ].map(([label, value]) => (
-                                  <div key={label}>
-                                    <div className="text-[10px] text-slate-400 font-bold">{label}</div>
-                                    <div className="font-extrabold text-lg text-slate-900 dark:text-white">
-                                      {value}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="mt-4 text-[11px] text-slate-500 dark:text-slate-400 font-semibold">
-                            P = Present, A = Absent, L = Leave, U = Unmarked
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Timeline */}
-                      {(() => {
-                        const todaySlots = Array.from(
-                          new Set(
-                            viewStudents
-                              .filter((s) => (s.classDays || []).includes(currentDayName))
-                              .map((s) => String(s.timeSlot || "").slice(0, 5))
-                              .filter(Boolean)
-                          )
-                        ).sort((a, b) => timeSlotToMinutes(a) - timeSlotToMinutes(b));
-
-                        const chartData = todaySlots.map((slot) => {
-                          const studentsInSlot = viewStudents.filter(
-                            (s) =>
-                              String(s.timeSlot || "").slice(0, 5) === slot &&
-                              (s.classDays || []).includes(currentDayName)
-                          );
-
-                          return {
-                            time: slot,
-                            timeLabel: formatTime12(slot),
-                            count: studentsInSlot.length,
-                            studentNames: studentsInSlot.map((s) => s.name),
-                            students: studentsInSlot,
-                          };
-                        });
-
-                        const totalTodayClasses = chartData.reduce((sum, item) => sum + item.count, 0);
-
-                        const currentSlotCount =
-                          chartData.find((item) => item.time === currentSlot)?.count || 0;
-
-                        const peakSlot =
-                          chartData.length > 0
-                            ? chartData.reduce((best, item) => (item.count > best.count ? item : best), chartData[0])
-                            : null;
-
-
-                        return (
-                          <div
-                            ref={timelineCardRef}
-                            className="relative overflow-hidden rounded-[26px] border border-slate-200/60 bg-white/70 p-4 shadow-[0_12px_32px_rgba(15,23,42,0.045)] dark:bg-slate-900/70 dark:border-slate-700/70"
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="text-sm font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                                <BarChart3 size={17} className="text-emerald-600" />
-                                Timeline Today
-                              </div>
-
-                              <span className="text-xs font-semibold text-slate-600 bg-white/75 border border-slate-100 px-3 py-1.5 rounded-full dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300">
-                                Now: {formatTime12(currentSlot)}
-                              </span>
-                            </div>
-
-                            <div
-                              className="relative mt-4 w-full h-[245px] rounded-[22px] border border-slate-200/60 bg-white/65 p-3 dark:bg-slate-950/35 dark:border-slate-700"
-                              onMouseLeave={() => {
-                                setTimelinePopup((prev) => {
-                                  if (!prev || prev.pinned) return prev;
-                                  return null;
-                                });
-                              }}
-                            >
-                              {chartData.length === 0 ? (
-                                <div className="flex h-full items-center justify-center rounded-[22px] border border-dashed border-slate-200/80 text-center dark:border-slate-700">
-                                  <div>
-                                    <div className="text-sm font-black text-slate-700 dark:text-slate-200">
-                                      No classes found for today
-                                    </div>
-                                    <div className="mt-1 text-xs font-semibold text-slate-400 dark:text-slate-500">
-                                      Once today’s schedules are available, the graph will appear here.
-                                    </div>
-                                  </div>
-                                </div>
-                              ) : (
-                                insightsOpen ? (
-                                  <Suspense
-                                    fallback={
-                                      <div className="flex h-[205px] items-center justify-center text-xs font-bold text-slate-400">
-                                        Loading timeline…
-                                      </div>
-                                    }
-                                  >
-                                    <DashboardTimelineChart
-                                      chartData={chartData}
-                                      currentSlot={currentSlot}
-                                      timelinePopup={timelinePopup}
-                                      setTimelinePopup={setTimelinePopup}
-                                      timelineCardRef={timelineCardRef}
-                                    />
-                                  </Suspense>
-                                ) : (
-                                  <div className="h-[205px]" aria-hidden="true" />
-                                )
-                              )}
-
-                              {/* Floating hover / pinned popup */}
-                              {timelinePopup && (
-                                <div
-                                  className={`
-              absolute z-30 w-[260px] rounded-[20px]
-              border border-slate-200/80 bg-white/96
-              p-3 backdrop-blur-xl
-              shadow-[0_18px_45px_rgba(15,23,42,0.14)]
-              dark:bg-slate-900/96 dark:border-slate-700
-              ${timelinePopup.pinned ? "pointer-events-auto" : "pointer-events-none"}
-            `}
-                                  style={{
-                                    left: timelinePopup.x,
-                                    top: timelinePopup.y,
-                                  }}
-                                >
-                                  <div className="mb-2 flex items-start justify-between gap-3">
-                                    <div>
-                                      <div className="text-xs font-black text-slate-900 dark:text-white">
-                                        {formatTime12(timelinePopup.slot)} Classes
-                                      </div>
-
-                                      <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
-                                        {timelinePopup.pinned
-                                          ? "Pinned. Scroll this list."
-                                          : "Click this bar to pin"}
-                                      </div>
-                                    </div>
-
-                                    {timelinePopup.pinned && (
-                                      <button
-                                        type="button"
-                                        onClick={() => setTimelinePopup(null)}
-                                        className="rounded-full px-2 py-1 text-[10px] font-black text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
-                                      >
-                                        Clear
-                                      </button>
-                                    )}
-                                  </div>
-
-                                  <div
-                                    className={`
-                space-y-1.5 pr-1 custom-scrollbar
-                ${timelinePopup.pinned ? "max-h-[155px] overflow-y-auto" : "max-h-[135px] overflow-hidden"}
-              `}
-                                  >
-                                    {viewStudents
-                                      .filter(
-                                        (s) =>
-                                          String(s.timeSlot || "").slice(0, 5) === timelinePopup.slot &&
-                                          (s.classDays || []).includes(currentDayName)
-                                      )
-                                      .map((s) => (
-                                        <div
-                                          key={s.id}
-                                          className="rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-2 text-[11px] font-bold text-slate-700 dark:bg-slate-950/70 dark:border-slate-700 dark:text-slate-200"
-                                        >
-                                          {s.name}
-                                        </div>
-                                      ))}
-
-                                    {viewStudents.filter(
-                                      (s) =>
-                                        String(s.timeSlot || "").slice(0, 5) === timelinePopup.slot &&
-                                        (s.classDays || []).includes(currentDayName)
-                                    ).length === 0 && (
-                                        <div className="rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-3 text-[11px] font-semibold text-slate-400 italic dark:bg-slate-950/70 dark:border-slate-700">
-                                          No classes in this slot.
-                                        </div>
-                                      )}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                    )}
-                  </details>
-
-                  {/* ✅ Main content: Classes first (this is what admins care about) */}
-                  <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start lg:gap-6">
-                    {/* Live Now */}
-                    <section className="min-w-0 space-y-2 lg:max-h-[calc(100vh-14rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                      <div className="flex items-center justify-between gap-3">
-                        <h3 className="flex items-center gap-3 text-xl font-black text-slate-950 dark:text-white">
-                          <span className="h-3 w-3 rounded-full bg-rose-500 animate-pulse" />
-                          Live Now
-                        </h3>
-                        <span className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                          {currentClasses.length} class{currentClasses.length === 1 ? "" : "es"}
-                        </span>
-                      </div>
-
-                      {currentClasses.length === 0 ? (
-                        <div className="text-center p-8 ui-glass ui-card ui-gradient-border text-slate-600">
-                          No classes scheduled for {formatTime12(currentSlot)}
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {currentClasses.map((student) => {
-                            const teacher = teacherById.get(student.teacherId);
-                            const teacherRec = teacher ? getTeacherAttendance(teacher.id, student.timeSlot) : undefined;
-
-                            return (
-                              <React.Fragment key={student.id}>
-                                <ClassCard
-                                  student={student}
-                                  teacher={teacher}
-                                  attendanceToday={studentAttendanceToday.get(student.id)}
-                                  onMarkAttendance={markAttendance}
-                                  onUnmarkAttendance={(id: string) => unmarkAttendance(id)}
-                                  teacherAttendanceToday={teacherRec}
-                                  attendanceDate={todayStr}
-                                  onMarkTeacherAttendance={(
-                                    teacherId: string,
-                                    status: AttendanceStatus,
-                                    coverageAssignments = [],
-                                  ) =>
-                                    markAttendance(
-                                      teacherId,
-                                      status,
-                                      EntityType.TEACHER,
-                                      student.timeSlot,
-                                      coverageAssignments,
-                                    )
-                                  }
-                                  onUnmarkTeacherAttendance={(teacherId: string) =>
-                                    unmarkAttendance(teacherId, EntityType.TEACHER, student.timeSlot)
-                                  }
-                                  isCurrentSession={true}
-                                  onOpenStudent={(item) => openDashboardAccountEditor("student", item.id)}
-                                  onOpenTeacher={(item) => openDashboardAccountEditor("teacher", item.id)}
-                                />
-                              </React.Fragment>
-                            );
-                          })}
-
-
-                        </div>
-                      )}
-                    </section>
-
-                    {/* Up Next */}
-                    <section className="min-w-0 space-y-2 lg:max-h-[calc(100vh-14rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                      <div className="flex items-center justify-between gap-3">
-                        <h3 className="flex items-center gap-2 text-xl font-black text-slate-950 dark:text-white">
-                          Up Next <ChevronRight size={19} className="text-slate-400" />
-                        </h3>
-                        <span className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-black text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                          Next scheduled classes
-                        </span>
-                      </div>
-
-                      {nextClasses.length === 0 ? (
-                        <div className="text-center p-8 ui-glass ui-card ui-gradient-border text-slate-600">
-                          No classes scheduled for {formatTime12(nextSlot)}
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {nextClasses.map((student) => {
-                            const teacher = teacherById.get(student.teacherId);
-                            const teacherRec = teacher ? getTeacherAttendance(teacher.id, student.timeSlot) : undefined;
-
-                            return (
-                              <React.Fragment key={student.id}>
-                                <ClassCard
-                                  student={student}
-                                  teacher={teacher}
-                                  attendanceToday={studentAttendanceToday.get(student.id)}
-                                  onMarkAttendance={markAttendance}
-                                  onUnmarkAttendance={(id: string) => unmarkAttendance(id)}
-                                  teacherAttendanceToday={teacherRec}
-                                  attendanceDate={todayStr}
-                                  onMarkTeacherAttendance={(
-                                    teacherId: string,
-                                    status: AttendanceStatus,
-                                    coverageAssignments = [],
-                                  ) =>
-                                    markAttendance(
-                                      teacherId,
-                                      status,
-                                      EntityType.TEACHER,
-                                      student.timeSlot,
-                                      coverageAssignments,
-                                    )
-                                  }
-                                  onUnmarkTeacherAttendance={(teacherId: string) =>
-                                    unmarkAttendance(teacherId, EntityType.TEACHER, student.timeSlot)
-                                  }
-                                  isCurrentSession={false}
-                                  onOpenStudent={(item) => openDashboardAccountEditor("student", item.id)}
-                                  onOpenTeacher={(item) => openDashboardAccountEditor("teacher", item.id)}
-                                />
-                              </React.Fragment>
-                            );
-                          })}
-
-
-                        </div>
-                      )}
-                    </section>
-                  </div>
-                </div>
-                )
-              )}
-
-
-              {/* SCHEDULING */}
-              {effectiveActiveTab === "scheduling" && canAccessPortalTab("scheduling") && hasFeature("tab_scheduling") && (
-                <Suspense fallback={<TabLoading />}>
-<SchedulingTab
-                  appState={viewAppState}
-                  onCellClick={(teacherId, timeSlot, students) => {
-                    setViewingClass({ teacherId, timeSlot, students });
-                    setModalMode("class-details");
-                    setShowModal(true);
-                  }}
-                />
-</Suspense>
-              )}
-
-
-
-
-              {/* ATTENDANCE */}
-              {effectiveActiveTab === "attendance" && canAccessPortalTab("attendance") && hasFeature("tab_attendance") && (
-                <div className="w-full max-w-none mx-auto space-y-6">
-                  <div className="bg-white/85 backdrop-blur-xl p-6 rounded-[28px] shadow-[0_18px_55px_rgba(15,23,42,0.08)] border border-slate-200/80">
-                    <h3 className="font-bold text-lg text-slate-950">Attendance</h3>
-                    <p className="text-sm text-slate-500 mt-1">
-                      Student and teacher attendance are recorded separately. Teacher absences require substitute coverage when applicable.
-                    </p>
-                  </div>
-
-                  <Suspense fallback={<TabLoading />}>
-                    <AttendanceEditor
-                      appState={viewAppState}
-                      loadAttendanceForDate={loadEditorAttendance}
-                      onUpsert={upsertAttendance}
-                      onDelete={deleteAttendance}
-                    />
-                  </Suspense>
-                </div>
-              )}
-
-              {/* ACCOUNTS */}
-              {effectiveActiveTab === "accounts" && canAccessPortalTab("accounts") && hasFeature("tab_accounts_enrollment") && (
-                <Suspense fallback={<TabLoading />}>
-                  <CoordinatorAccounts
-                    canBulkImport={hasFeature("bulk_import")}
-                    canDeleteAccounts={hasFeature("delete_accounts")}
-                    features={enabledFeatures}
-                    editTarget={dashboardAccountEditTarget}
-                    onEditTargetHandled={() => setDashboardAccountEditTarget(null)}
-                  />
-                </Suspense>
-              )}
-
-              {/* DROPPED & LEAVE */}
-              {effectiveActiveTab === "dropped-leave" && canAccessPortalTab("dropped-leave") && hasFeature("tab_dropped_leave") && (
-                <Suspense fallback={<TabLoading />}>
-                  <QuranDroppedLeave />
-                </Suspense>
-              )}
-
-              {/* TEACHER SALARY MANAGEMENT */}
-              {effectiveActiveTab === "teacher-salary" && session?.role !== "coordinator" && (isSuperAdmin || isDepartmentAdmin || hasFeature("tab_teacher_salary")) && (
-                <Suspense fallback={<TabLoading />}>
-                  <TeacherSalaryManagement
-                    departmentId={Number(activeDepartment?.id || 0)}
-                    departmentName={quranDepartmentDisplayName}
-                    institutionId={Number(authContext?.institution?.id || (session as any)?.user?.institution_id || 0)}
-                    institutionName={String(authContext?.institution?.name || "")}
-                    salaryLifecycleRole={
-                      isSuperAdmin
-                        ? "super_admin"
-                        : String(
-                          (session as any)?.user?.role
-                          || (session as any)?.role
-                          || ""
-                        )
-                    }
-                  />
-                </Suspense>
-              )}
-
-              {/* PLATFORM ADMIN */}
-              {effectiveActiveTab === "platform-admin" && isPlatformAdmin && (
-                <Suspense fallback={<TabLoading />}>
-                  <PlatformAdmin />
-                </Suspense>
-              )}
-
-
-              {/* LESSONS CONTROL */}
-              {effectiveActiveTab === "lessons" && canAccessPortalTab("lessons") && hasFeature("tab_lessons_control") && (
-                <div className="w-full max-w-none mx-auto">
-                  <Suspense fallback={<TabLoading />}>
-                    <CoordinatorLessons notificationRequestsVersion={notificationRequestsVersion} />
-                  </Suspense>
-                </div>
-              )}
-
-              {/* REPORTS */}
-              {effectiveActiveTab === "reports" && canAccessPortalTab("reports") && hasFeature("tab_reports") && (
-                <div className="w-full max-w-none mx-auto">
-                  <Suspense fallback={<TabLoading />}>
-                    <ReportsTab
-                      appState={viewAppState}
-                      departmentName={quranDepartmentDisplayName}
-                      canExportPdf={hasFeature("pdf_reports")}
-                      canExportCsv={hasFeature("csv_export")}
-                      canExportExcel={hasFeature("excel_export")}
-                      generatedBy={
-                        (session as any)?.user?.full_name ||
-                        `${(session as any)?.user?.first_name || ""} ${(session as any)?.user?.last_name || ""}`.trim() ||
-                        (session as any)?.user?.username ||
-                        "Coordinator"
-                      }
-                    />
-                  </Suspense>
-                </div>
-              )}
-
-              {/* EXPLICIT NO-ACCESS STATE IF ALL COORDINATOR TABS ARE REVOKED */}
-              {session?.role === "coordinator" && featureContextLoaded && coordinatorNavItems.length === 0 && (
-                <div className="flex flex-col items-center justify-center p-12 text-center my-auto min-h-[400px]">
-                  <div className="w-16 h-16 rounded-3xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600 mb-4 shadow-sm">
-                    <LockKeyhole size={28} />
-                  </div>
-                  <h3 className="text-xl font-extrabold text-slate-900">No Tab Access Assigned</h3>
-                  <p className="mt-2 max-w-md text-sm text-slate-500">
-                    Your Department Administrator has not granted access to any workspace tabs for your coordinator account. Please contact your department admin to assign tab permissions.
-                  </p>
-                </div>
-              )}
-
-
-            </div>
-
-            {hasFeature("ai_assistant") && assistantHasOpened && (
-              <Suspense fallback={null}>
-                <AssistantChat
-                  appState={viewAppState}
-                  isOpen={assistantOpen}
-                  onClose={() => setAssistantOpen(false)}
-                />
-              </Suspense>
-            )}
-
-          </main>
-
+      <Suspense fallback={<DepartmentWorkspaceLoading />}>
+        <QuranCoordinatorPortal
+          session={session}
+          onSessionUpdated={(nextSession) => {
+            setSession(nextSession);
+            saveSession(nextSession);
+          }}
+          onLogout={() => {
+            disconnectAcademyWS(true);
+            clearSession();
+            setSession(null);
+            setAuthContext(null);
+            navigateToTab("dashboard");
+          }}
+          themeMode={themeMode}
+          onToggleTheme={toggleTheme}
+          effectiveActiveTab={effectiveActiveTab}
+          navigateToTab={navigateToTab}
+          handleSidebarTabClick={handleSidebarTabClick}
+          coordinatorNavItems={coordinatorNavItems}
+          isPlatformAdmin={isPlatformAdmin}
+          isSuperAdmin={isSuperAdmin}
+          isDepartmentAdmin={isDepartmentAdmin}
+          isCoordinator={isCoordinator}
+          featureContextLoaded={featureContextLoaded}
+          hasFeature={hasFeature}
+          canAccessPortalTab={canAccessPortalTab}
+          isTabLocked={isTabLocked}
+          showFeatureLocked={showFeatureLocked}
+          quranDepartmentDisplayName={quranDepartmentDisplayName}
+          roleLabel={roleLabel}
+          viewAppState={viewAppState}
+          viewTeachers={viewTeachers}
+          viewStudents={viewStudents}
+          viewAtt={viewAtt}
+          hydrated={hydrated}
+          loadEditorAttendance={loadEditorAttendance}
+          upsertAttendance={upsertAttendance}
+          deleteAttendance={deleteAttendance}
+          markAttendance={markAttendance}
+          unmarkAttendance={unmarkAttendance}
+          enabledFeatures={enabledFeatures}
+          activeDepartment={activeDepartment}
+          authContext={authContext}
+          dashboardAccountEditTarget={dashboardAccountEditTarget}
+          setDashboardAccountEditTarget={setDashboardAccountEditTarget}
+          notificationRequestsVersion={notificationRequestsVersion}
+          showModal={showModal}
+          setShowModal={setShowModal}
+          modalMode={modalMode}
+          setModalMode={setModalMode}
+          viewingClass={viewingClass}
+          setViewingClass={setViewingClass}
+          viewingTeacherId={viewingTeacherId}
+          setViewingTeacherId={setViewingTeacherId}
+          editingStudent={editingStudent}
+          setEditingStudent={setEditingStudent}
+          studentDaysDraft={studentDaysDraft}
+          setStudentDaysDraft={setStudentDaysDraft}
+          scheduleSaving={scheduleSaving}
+          scheduleError={scheduleError}
+          setScheduleError={setScheduleError}
+          saveStudent={saveStudent}
+          removeStudentFromClass={removeStudentFromClass}
+          deleteClass={deleteClass}
+          openDashboardAccountEditor={openDashboardAccountEditor}
+        />
+      </Suspense>
+
+      {lockedFeature && (
+        <Suspense fallback={null}>
           <FeatureLockedModal
             feature={lockedFeature}
             onClose={() => setLockedFeature(null)}
           />
+        </Suspense>
+      )}
+      {platformNotices.length > 0 && (
+        <Suspense fallback={null}>
           <GlobalNoticeCenter notices={platformNotices} onClose={closePlatformNotice} />
-
-          {/* MODALS */}
-          {showModal && (
-            <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 sm:p-4 backdrop-blur-md">
-              <div
-                className={`ui-glass-strong ui-card ui-gradient-border w-full max-w-5xl ui-glow ${modalMode === "settings"
-                  ? "p-0 overflow-hidden"
-                  : "p-6 max-h-[88vh] overflow-y-auto"
-                  } w-full sm:w-auto sm:max-w-2xl rounded-t-[28px] sm:rounded-[28px]`}
-              >
-                {modalMode !== "settings" && (
-                  <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-xl font-bold text-slate-800">
-                      Class Details
-                    </h3>
-                    <button
-                      onClick={() => {
-                        setShowModal(false);
-                        setEditingStudent(null);
-                        setViewingClass(null);
-                      }}
-                      className="text-slate-400 hover:text-slate-600"
-                    >
-                      <X size={24} />
-                    </button>
-                  </div>
-                )}
-
-                {/* CLASS DETAILS */}
-                {modalMode === "class-details" && viewingClass && (
-                  <div className="space-y-5">
-                    {/* Top summary card */}
-                    <div className="relative overflow-hidden rounded-3xl border border-slate-200/70 bg-white/70 backdrop-blur-xl p-4 shadow-[0_18px_50px_rgba(15,23,42,0.10)]">
-                      {/* soft glow */}
-                      <div className="pointer-events-none absolute -top-24 -right-24 h-56 w-56 rounded-full bg-indigo-200/35 blur-3xl" />
-                      <div className="pointer-events-none absolute -bottom-24 -left-24 h-56 w-56 rounded-full bg-blue-200/25 blur-3xl" />
-
-                      <div className="relative">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="text-xs font-extrabold text-slate-500 uppercase tracking-wide">
-                              Teacher
-                            </div>
-
-                            <div className="mt-1 flex items-center gap-3">
-                              <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-[0_18px_34px_-18px_rgba(37,99,235,0.60)]">
-                                <Users2 size={18} />
-                              </div>
-
-                              <div className="min-w-0">
-                                <div className="text-base font-extrabold text-slate-900 truncate">
-                                  {viewTeachers.find(t => t.id === viewingClass.teacherId)?.name ?? "—"}
-                                </div>
-                                <div className="text-xs text-slate-500 truncate">
-                                  Class details & enrolled students
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* time chip */}
-                          <div className="shrink-0">
-                            <div className="inline-flex items-center gap-2 rounded-full bg-white/85 border border-slate-200/70 px-3 py-1.5 text-xs font-extrabold text-slate-700 shadow-[0_10px_18px_rgba(15,23,42,0.06)] whitespace-nowrap">
-                              <CalendarDays size={14} className="text-slate-500" />
-                              {formatTime12(viewingClass.timeSlot)}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Students header */}
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-extrabold text-slate-900">
-                          Enrolled Students
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          {viewingClass.students.length} student{viewingClass.students.length === 1 ? "" : "s"} in this class
-                        </div>
-                      </div>
-
-                      <div className="shrink-0 flex items-center gap-2">
-                        <span className="text-xs font-extrabold px-3 py-1.5 rounded-full bg-white/90 text-slate-700 border border-slate-200 shadow-[0_10px_18px_rgba(15,23,42,0.05)]">
-                          {viewingClass.students.length}
-                        </span>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const newStudent: Student = {
-                              id: "",
-                              name: "",
-                              teacherId: viewingClass.teacherId,
-                              timeSlot: viewingClass.timeSlot,
-                              classType: ClassType.FIVE_DAY,
-                              classDays: defaultDaysFromClassType(ClassType.FIVE_DAY),
-                              loginId: generateStudentId(),
-                            };
-
-                            setEditingStudent(newStudent);
-                            setModalMode("add-student");
-                          }}
-                          className="
-      h-10 w-10 rounded-2xl
-      bg-white/95 border border-slate-200/80
-      text-slate-700 hover:text-slate-950 hover:bg-white
-      shadow-[-5px_-5px_12px_rgba(255,255,255,0.95),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,1)]
-      transition active:scale-[0.98]
-    "
-                          title="Add student"
-                        >
-                          <Plus size={17} className="mx-auto" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Students list */}
-                    <div className="rounded-3xl border border-slate-200/70 bg-white/70 backdrop-blur-xl shadow-[0_18px_50px_rgba(15,23,42,0.08)] overflow-hidden">
-                      {viewingClass.students.length === 0 ? (
-                        <div className="p-6 text-center">
-                          <div className="text-sm font-bold text-slate-700">No students yet</div>
-                          <div className="text-xs text-slate-500 mt-1">
-                            Add a student to this class using the button below.
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="divide-y divide-slate-100">
-                          {viewingClass.students.map((s) => (
-                            <div
-                              key={s.id}
-                              className="px-4 py-3 flex items-center justify-between gap-3 hover:bg-white/60 transition"
-                            >
-                              <div className="min-w-0 flex items-center gap-3">
-                                {/* student avatar */}
-                                <div className="h-10 w-10 rounded-2xl bg-white border border-slate-200/70 shadow-sm flex items-center justify-center">
-                                  <span className="font-extrabold text-slate-900">
-                                    {(s.name || "S").trim().slice(0, 1).toUpperCase()}
-                                  </span>
-                                </div>
-
-                                <div className="min-w-0">
-                                  <div className="font-extrabold text-slate-900 truncate">{s.name}</div>
-
-                                  <div className="mt-0.5 flex flex-wrap gap-2 text-xs">
-                                    <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200/70 font-semibold">
-                                      ID: <span className="font-extrabold text-slate-800">{s.loginId ?? "—"}</span>
-                                    </span>
-
-                                    <span className="px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 font-semibold">
-                                      {(s.classDays && s.classDays.length) ? s.classDays.join(", ") : s.classType}
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="shrink-0 flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingStudent(s);
-                                    setModalMode("edit-student");
-                                  }}
-                                  className="
-      h-10 w-10 rounded-2xl
-      bg-white/95 border border-slate-200/80
-      text-slate-600 hover:text-slate-950 hover:bg-white
-      shadow-[-5px_-5px_12px_rgba(255,255,255,0.95),5px_7px_16px_rgba(15,23,42,0.09),inset_0_1px_0_rgba(255,255,255,1)]
-      transition active:scale-[0.98]
-    "
-                                  title="Edit student"
-                                >
-                                  <Edit2 size={16} className="mx-auto" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => removeStudentFromClass(s.id)}
-                                  className="
-        h-10 w-10 rounded-2xl
-        bg-rose-50 border border-rose-100
-        text-rose-600 hover:bg-rose-100
-        shadow-[0_10px_22px_rgba(244,63,94,0.10)]
-        transition active:scale-[0.98]
-      "
-                                  title="Remove student from this class"
-                                >
-                                  <Trash2 size={16} className="mx-auto" />
-                                </button>
-                              </div>
-
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* ADD / EDIT STUDENT */}
-                {(modalMode === "add-student" || modalMode === "edit-student") && editingStudent && (
-                  <form onSubmit={saveStudent} className="space-y-5">
-                    <div className="relative overflow-hidden rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
-                      <div className="pointer-events-none absolute -top-24 -right-24 h-56 w-56 rounded-full bg-slate-200/35 blur-3xl" />
-                      <div className="pointer-events-none absolute -bottom-24 -left-24 h-56 w-56 rounded-full bg-blue-100/25 blur-3xl" />
-
-                      <div className="relative flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wide">
-                            {modalMode === "add-student" ? "Create Student" : "Update Student"}
-                          </div>
-                          <div className="text-lg font-extrabold text-slate-950 truncate mt-1">
-                            {modalMode === "add-student" ? "Add student to this class" : "Edit student details"}
-                          </div>
-                        </div>
-
-                        <div className="shrink-0 inline-flex items-center gap-2 rounded-full bg-white/90 border border-slate-200 px-3 py-1.5 text-xs font-extrabold text-slate-700 shadow-[0_10px_18px_rgba(15,23,42,0.05)]">
-                          Student
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                      <div className="rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
-                        <label className="block text-xs font-extrabold text-slate-700 mb-2">
-                          Student Name
-                        </label>
-
-                        <input
-                          name="name"
-                          defaultValue={editingStudent.name}
-                          required
-                          className="w-full rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-extrabold text-slate-900 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-indigo-200 transition"
-                          placeholder="Student name"
-                        />
-                      </div>
-
-                      <div className="rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
-                        <label className="block text-xs font-extrabold text-slate-700 mb-2">
-                          Assigned Teacher
-                        </label>
-
-                        <select
-                          name="teacherId"
-                          defaultValue={editingStudent.teacherId}
-                          required
-                          className="w-full rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-extrabold text-slate-900 outline-none focus:ring-2 focus:ring-indigo-200 transition"
-                        >
-                          {viewTeachers.map((teacher) => (
-                            <option key={teacher.id} value={teacher.id}>
-                              {teacher.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                      <div className="lg:col-span-1 rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
-                        <label className="block text-xs font-extrabold text-slate-700 mb-2">
-                          Class Time
-                        </label>
-
-                        <select
-                          name="timeSlot"
-                          defaultValue={editingStudent.timeSlot || viewingClass?.timeSlot || "16:00"}
-                          required
-                          className="w-full rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-extrabold text-slate-900 outline-none focus:ring-2 focus:ring-indigo-200 transition"
-                        >
-                          {TIME_SLOTS.map((time) => (
-                            <option key={time} value={time}>
-                              {formatTime12(time)}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="lg:col-span-2 rounded-3xl border border-slate-200/70 bg-white/80 backdrop-blur-xl p-4 shadow-[0_14px_34px_rgba(15,23,42,0.06)]">
-                        <div className="flex items-center justify-between gap-3">
-                          <label className="block text-xs font-extrabold text-slate-700">
-                            Class Days
-                          </label>
-
-                          <span className="text-[11px] font-extrabold px-3 py-1.5 rounded-full bg-white border border-slate-200 text-slate-700 shadow-sm">
-                            {studentDaysDraft.length} selected
-                          </span>
-                        </div>
-
-                        <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                          {WEEKDAYS.map((day) => {
-                            const checked = studentDaysDraft.includes(day);
-
-                            return (
-                              <button
-                                key={day}
-                                type="button"
-                                onClick={() => {
-                                  startTransition(() => {
-                                    setStudentDaysDraft((prev) => {
-                                      const next = new Set(prev);
-                                      if (next.has(day)) {
-                                        next.delete(day);
-                                      } else {
-                                        next.add(day);
-                                      }
-                                      const arr = Array.from(next);
-                                      return arr.length ? arr : ["Monday"];
-                                    });
-                                  });
-                                }}
-                                className={`rounded-2xl px-3 py-2 border text-xs font-extrabold transition ${checked
-                                  ? "bg-white border-indigo-200 text-indigo-700 shadow-[0_10px_18px_rgba(99,102,241,0.12)]"
-                                  : "bg-white/90 border-slate-200 text-slate-600 hover:bg-white shadow-[0_10px_18px_rgba(15,23,42,0.04)]"
-                                  }`}
-                              >
-                                {day}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                    <button
-                      type="submit"
-                      className="
-        w-full rounded-2xl
-        bg-white/95 hover:bg-white
-        border border-slate-200/80
-        text-slate-900 font-extrabold
-        py-3.5
-        shadow-[-6px_-6px_16px_rgba(255,255,255,0.95),6px_8px_20px_rgba(15,23,42,0.08)]
-        transition active:scale-[0.99]
-      "
-                    >
-                      {modalMode === "add-student" ? "Add Student" : "Save Changes"}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowModal(false);
-                        setEditingStudent(null);
-                        setViewingClass(null);
-                      }}
-                      className="
-        w-full rounded-2xl
-        bg-white/80 hover:bg-white
-        border border-slate-200/80
-        text-slate-700 font-extrabold
-        py-3
-        shadow-[0_10px_22px_rgba(15,23,42,0.04)]
-        transition active:scale-[0.99]
-      "
-                    >
-                      Cancel
-                    </button>
-                  </form>
-                )}
-
-                {/* SETTINGS */}
-                {modalMode === "settings" && (
-                  <div className="rounded-t-[28px] sm:rounded-[28px] border border-slate-200 bg-white text-slate-950 shadow-[0_24px_70px_rgba(15,23,42,0.12)] animate-settings-pop max-h-[92vh] overflow-y-auto">
-                    <div className="border-b border-slate-200 px-6 py-5">
-                      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <h3 className="text-2xl font-black tracking-tight text-slate-950">
-                            Settings
-                          </h3>
-                          <p className="mt-1 text-sm font-semibold text-slate-500">
-                            Manage your profile and dashboard appearance.
-                          </p>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={toggleTheme}
-                          className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white transition hover:bg-slate-800 active:scale-[0.98]"
-                        >
-                          {themeMode === "dark" ? <Sun size={17} /> : <Moon size={17} />}
-                          {themeMode === "dark" ? "Light Mode" : "Dark Mode"}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="p-6">
-                      {(isSuperAdmin || isDepartmentAdmin) && (
-                        <form onSubmit={saveSuperAdminProfile} className="space-y-5">
-                          <div>
-                            <h4 className="text-lg font-black text-slate-950">
-                              Department Admin Profile
-                            </h4>
-                            <p className="mt-1 text-sm font-semibold text-slate-500">
-                              Update your username, name, email, and password.
-                            </p>
-                          </div>
-
-                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                            <label className="block">
-                              <div className="mb-2 text-xs font-black text-slate-600">
-                                Username
-                              </div>
-                              <input
-                                id="superadmin-username"
-                                name="superadmin_username"
-                                value={superAdminForm.username}
-                                onChange={(e) =>
-                                  setSuperAdminForm({
-                                    ...superAdminForm,
-                                    username: e.target.value,
-                                  })
-                                }
-                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
-                                placeholder="Username"
-                              />
-                            </label>
-
-                            <label className="block">
-                              <div className="mb-2 text-xs font-black text-slate-600">
-                                Email
-                              </div>
-                              <input
-                                id="superadmin-email"
-                                name="superadmin_email"
-                                type="email"
-                                value={superAdminForm.email}
-                                onChange={(e) =>
-                                  setSuperAdminForm({
-                                    ...superAdminForm,
-                                    email: e.target.value,
-                                  })
-                                }
-                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
-                                placeholder="Email"
-                              />
-                            </label>
-
-                            <label className="block">
-                              <div className="mb-2 text-xs font-black text-slate-600">
-                                First Name
-                              </div>
-                              <input
-                                id="superadmin-first-name"
-                                name="superadmin_first_name"
-                                value={(superAdminForm as any).first_name || ""}
-                                onChange={(e) =>
-                                  setSuperAdminForm({
-                                    ...superAdminForm,
-                                    first_name: e.target.value,
-                                  } as any)
-                                }
-                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
-                                placeholder="First name"
-                              />
-                            </label>
-
-                            <label className="block">
-                              <div className="mb-2 text-xs font-black text-slate-600">
-                                Last Name
-                              </div>
-                              <input
-                                id="superadmin-last-name"
-                                name="superadmin_last_name"
-                                value={(superAdminForm as any).last_name || ""}
-                                onChange={(e) =>
-                                  setSuperAdminForm({
-                                    ...superAdminForm,
-                                    last_name: e.target.value,
-                                  } as any)
-                                }
-                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
-                                placeholder="Last name"
-                              />
-                            </label>
-
-                            <label className="block md:col-span-2">
-                              <div className="mb-2 text-xs font-black text-slate-600">
-                                New Password
-                              </div>
-                              <input
-                                id="superadmin-password"
-                                name="superadmin_password"
-                                type="password"
-                                value={superAdminForm.password}
-                                onChange={(e) =>
-                                  setSuperAdminForm({
-                                    ...superAdminForm,
-                                    password: e.target.value,
-                                  })
-                                }
-                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200"
-                                placeholder="Leave blank to keep current password"
-                              />
-                              <div className="mt-2 text-xs font-semibold text-slate-500">
-                                Minimum 6 characters if changing password.
-                              </div>
-                            </label>
-                          </div>
-
-                          <div className="flex flex-col gap-3 sm:flex-row">
-                            <button
-                              type="submit"
-                              disabled={superAdminSaving}
-                              className="inline-flex flex-1 items-center justify-center rounded-2xl bg-gradient-to-r from-indigo-600 to-blue-600 px-5 py-3.5 text-sm font-black text-white shadow-[0_16px_36px_rgba(37,99,235,0.25)] transition hover:brightness-110 active:scale-[0.99] disabled:opacity-60"
-                            >
-                              {superAdminSaving ? "Saving..." : "Save Profile"}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => { setShowModal(false); }}
-                              className="rounded-2xl border border-slate-200 bg-white px-5 py-3.5 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50 active:scale-[0.99]"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </form>
-                      )}
-
-                      {!(isSuperAdmin || isDepartmentAdmin) && (
-                        <div>
-                          <h4 className="text-lg font-black text-slate-950">
-                            Appearance
-                          </h4>
-                          <p className="mt-1 text-sm font-semibold text-slate-500">
-                            Switch between light and dark mode.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-        {/* TOAST */}
-        {toast && (
-          <div className="fixed bottom-6 right-6 z-[70] flex items-center gap-3 rounded-2xl border border-slate-100 bg-white px-5 py-3.5 shadow-[0_8px_30px_rgba(0,0,0,0.12)]" style={{ animation: "slideUp 0.22s ease forwards" }}>
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-50">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <circle cx="8" cy="8" r="8" fill="#10b981" opacity="0.15" />
-                <path d="M4.5 8l2.5 2.5 4.5-4.5" stroke="#10b981" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
-            <span className="text-sm font-semibold text-slate-800">{toast}</span>
-          </div>
-        )}
-        <style>{`
-  @keyframes settingsPop {
-    0% {
-      opacity: 0;
-      transform: translateY(18px) scale(0.96);
-      filter: blur(8px);
-    }
-    60% {
-      opacity: 1;
-      transform: translateY(-2px) scale(1.01);
-      filter: blur(0);
-    }
-    100% {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-      filter: blur(0);
-    }
-  }
-
-.animate-settings-pop {
-    animation: settingsPop 0.35s cubic-bezier(0.22, 1, 0.36, 1);
-  }
-    @keyframes slideUp {
-    from { opacity: 0; transform: translateY(14px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-
-
-
-/* Keep only the compact icons visible while the desktop sidebar animates.
-   Reveal the full cards after the width transition; this prevents the dark
-   account card from briefly appearing as a narrow vertical strip. */
-@media (min-width: 768px) {
-  .ivs-quran-sidebar .ivs-sidebar-collapsed {
-    display: flex !important;
-    width: 52px;
-  }
-  .ivs-quran-sidebar .ivs-sidebar-expanded,
-  .ivs-quran-sidebar .ivs-sidebar-expanded-divider {
-    display: none !important;
-  }
-  .ivs-quran-sidebar.sidebar-content-ready .ivs-sidebar-collapsed {
-    display: none !important;
-  }
-  .ivs-quran-sidebar.sidebar-content-ready .ivs-sidebar-expanded {
-    display: flex !important;
-  }
-  .ivs-quran-sidebar.sidebar-content-ready .ivs-sidebar-expanded-divider {
-    display: block !important;
-  }
-}
-
-/* Dark mode: remove bright clock glow in top navbar */
-.dark header .shadow-\[0_12px_28px_rgba\(15\,23\,42\,0\.07\)\] {
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.28) !important;
-}
-
-/* Dark mode: calm clock card glow */
-.dark header .rounded-3xl {
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.24) !important;
-}
-
-/* Dark mode: remove white clock face glow */
-.dark header .rounded-full {
-  box-shadow: none !important;
-}
-
-/* AI chat dark mode root panel */
-.dark .ai-chat-dark-panel,
-.dark .fixed.bottom-6.right-6.w-96,
-.dark .fixed.bottom-4.right-4.w-96,
-.dark .fixed.right-6.w-96,
-.dark .fixed.right-4.w-96 {
-  background: rgba(15, 23, 42, 0.98) !important;
-  border-color: rgba(148, 163, 184, 0.22) !important;
-  color: #e5e7eb !important;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55) !important;
-}
-
-/* AI chat inner white/light surfaces */
-.dark .ai-chat-dark-panel [class*="bg-white"],
-.dark .ai-chat-dark-panel [class*="bg-slate-50"],
-.dark .fixed.bottom-6.right-6.w-96 [class*="bg-white"],
-.dark .fixed.bottom-6.right-6.w-96 [class*="bg-slate-50"],
-.dark .fixed.bottom-4.right-4.w-96 [class*="bg-white"],
-.dark .fixed.bottom-4.right-4.w-96 [class*="bg-slate-50"],
-.dark .fixed.right-6.w-96 [class*="bg-white"],
-.dark .fixed.right-6.w-96 [class*="bg-slate-50"],
-.dark .fixed.right-4.w-96 [class*="bg-white"],
-.dark .fixed.right-4.w-96 [class*="bg-slate-50"] {
-  background: rgba(30, 41, 59, 0.96) !important;
-  border-color: rgba(148, 163, 184, 0.22) !important;
-  color: #e5e7eb !important;
-}
-
-/* AI chat header/sub areas */
-.dark .ai-chat-dark-panel [class*="border-slate"],
-.dark .fixed.bottom-6.right-6.w-96 [class*="border-slate"],
-.dark .fixed.bottom-4.right-4.w-96 [class*="border-slate"],
-.dark .fixed.right-6.w-96 [class*="border-slate"],
-.dark .fixed.right-4.w-96 [class*="border-slate"] {
-  border-color: rgba(148, 163, 184, 0.22) !important;
-}
-
-/* AI chat text colors */
-.dark .ai-chat-dark-panel [class*="text-slate-900"],
-.dark .ai-chat-dark-panel [class*="text-slate-800"],
-.dark .ai-chat-dark-panel [class*="text-slate-700"],
-.dark .fixed.bottom-6.right-6.w-96 [class*="text-slate-900"],
-.dark .fixed.bottom-6.right-6.w-96 [class*="text-slate-800"],
-.dark .fixed.bottom-6.right-6.w-96 [class*="text-slate-700"],
-.dark .fixed.bottom-4.right-4.w-96 [class*="text-slate-900"],
-.dark .fixed.bottom-4.right-4.w-96 [class*="text-slate-800"],
-.dark .fixed.bottom-4.right-4.w-96 [class*="text-slate-700"],
-.dark .fixed.right-6.w-96 [class*="text-slate-900"],
-.dark .fixed.right-6.w-96 [class*="text-slate-800"],
-.dark .fixed.right-6.w-96 [class*="text-slate-700"],
-.dark .fixed.right-4.w-96 [class*="text-slate-900"],
-.dark .fixed.right-4.w-96 [class*="text-slate-800"],
-.dark .fixed.right-4.w-96 [class*="text-slate-700"] {
-  color: #f8fafc !important;
-}
-
-.dark .ai-chat-dark-panel [class*="text-slate-500"],
-.dark .ai-chat-dark-panel [class*="text-slate-400"],
-.dark .fixed.bottom-6.right-6.w-96 [class*="text-slate-500"],
-.dark .fixed.bottom-6.right-6.w-96 [class*="text-slate-400"],
-.dark .fixed.bottom-4.right-4.w-96 [class*="text-slate-500"],
-.dark .fixed.bottom-4.right-4.w-96 [class*="text-slate-400"],
-.dark .fixed.right-6.w-96 [class*="text-slate-500"],
-.dark .fixed.right-6.w-96 [class*="text-slate-400"],
-.dark .fixed.right-4.w-96 [class*="text-slate-500"],
-.dark .fixed.right-4.w-96 [class*="text-slate-400"] {
-  color: #94a3b8 !important;
-}
-
-/* AI chat quick question chips */
-.dark .ai-chat-dark-panel button[class*="bg-blue-50"],
-.dark .fixed.bottom-6.right-6.w-96 button[class*="bg-blue-50"],
-.dark .fixed.bottom-4.right-4.w-96 button[class*="bg-blue-50"],
-.dark .fixed.right-6.w-96 button[class*="bg-blue-50"],
-.dark .fixed.right-4.w-96 button[class*="bg-blue-50"] {
-  background: rgba(37, 99, 235, 0.16) !important;
-  border-color: rgba(96, 165, 250, 0.35) !important;
-  color: #93c5fd !important;
-}
-
-/* AI chat input */
-.dark .ai-chat-dark-panel input,
-.dark .fixed.bottom-6.right-6.w-96 input,
-.dark .fixed.bottom-4.right-4.w-96 input,
-.dark .fixed.right-6.w-96 input,
-.dark .fixed.right-4.w-96 input {
-  background: rgba(15, 23, 42, 0.96) !important;
-  border-color: rgba(96, 165, 250, 0.35) !important;
-  color: #f8fafc !important;
-  box-shadow: none !important;
-}
-
-.dark .ai-chat-dark-panel input::placeholder,
-.dark .fixed.bottom-6.right-6.w-96 input::placeholder,
-.dark .fixed.bottom-4.right-4.w-96 input::placeholder,
-.dark .fixed.right-6.w-96 input::placeholder,
-.dark .fixed.right-4.w-96 input::placeholder {
-  color: #64748b !important;
-}
-
-/* AI chat send/close buttons */
-.dark .ai-chat-dark-panel button,
-.dark .fixed.bottom-6.right-6.w-96 button,
-.dark .fixed.bottom-4.right-4.w-96 button,
-.dark .fixed.right-6.w-96 button,
-.dark .fixed.right-4.w-96 button {
-  border-color: rgba(148, 163, 184, 0.22) !important;
-}
-
-/* Recharts: remove ugly black focus border */
-.recharts-wrapper,
-.recharts-wrapper *,
-.recharts-surface,
-.recharts-surface * {
-  outline: none !important;
-}
-
-.recharts-wrapper:focus,
-.recharts-wrapper *:focus,
-.recharts-surface:focus,
-.recharts-surface *:focus {
-  outline: none !important;
-}
-
-/* Small clean scrollbar */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.45);
-  border-radius: 999px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.65);
-}
-
-.dark .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(71, 85, 105, 0.8);
-}
-
-`}</style>
-
-      </div>
+        </Suspense>
+      )}
     </>
   );
 }

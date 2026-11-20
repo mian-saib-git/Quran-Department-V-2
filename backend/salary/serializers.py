@@ -556,6 +556,22 @@ class TeacherPolicyAssignmentSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class TeacherPolicyAssignmentListSerializer(TeacherPolicyAssignmentSerializer):
+    """Lightweight assignment serializer for list/table views without the full archived JSON snapshot."""
+
+    class Meta(TeacherPolicyAssignmentSerializer.Meta):
+        fields = [
+            field
+            for field in TeacherPolicyAssignmentSerializer.Meta.fields
+            if field != "archived_policy_snapshot"
+        ]
+        read_only_fields = [
+            field
+            for field in TeacherPolicyAssignmentSerializer.Meta.read_only_fields
+            if field != "archived_policy_snapshot"
+        ]
+
+
 class TeacherSalaryOverrideSerializer(serializers.ModelSerializer):
     department_name = serializers.CharField(source="department.name", read_only=True)
     teacher_name = serializers.SerializerMethodField()

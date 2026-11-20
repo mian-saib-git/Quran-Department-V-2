@@ -193,12 +193,27 @@ export async function fetchDepartmentStudents(departmentId: number, teacherId?: 
   return authenticatedRequest<DepartmentStudent[]>(url);
 }
 
-export async function fetchTeacherAssignments(departmentId: number, teacherId?: number): Promise<TeacherPolicyAssignment[]> {
+export async function fetchTeacherAssignments(
+  departmentId: number,
+  teacherId?: number,
+  options?: { signal?: AbortSignal }
+): Promise<TeacherPolicyAssignment[]> {
   let url = `/api/salary/assignments/?department_id=${departmentId}`;
   if (teacherId) {
     url += `&teacher_id=${teacherId}`;
   }
-  return authenticatedRequest<TeacherPolicyAssignment[]>(url);
+  return authenticatedRequest<TeacherPolicyAssignment[]>(
+    url,
+    options?.signal ? { signal: options.signal } : undefined
+  );
+}
+
+export async function fetchTeacherAssignmentDetail(
+  assignmentId: number
+): Promise<TeacherPolicyAssignment & { archived_policy_snapshot?: Record<string, unknown> | null }> {
+  return authenticatedRequest<TeacherPolicyAssignment & { archived_policy_snapshot?: Record<string, unknown> | null }>(
+    `/api/salary/assignments/${assignmentId}/`
+  );
 }
 
 export async function createTeacherAssignment(payload: {

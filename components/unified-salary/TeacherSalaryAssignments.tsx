@@ -237,21 +237,34 @@ export default function TeacherSalaryAssignments({
     }
   }, [showOverrideModal, students.length, loadStudents]);
 
+  const detailsEpochRef = React.useRef(0);
+  const detailsAbortRef = React.useRef<AbortController | null>(null);
+
   // Load Selected Teacher Details (Assignments & Overrides)
   const loadTeacherDetails = useCallback(async (teacherId: number) => {
     if (!effectiveDepartmentId) return;
+    if (detailsAbortRef.current) {
+      detailsAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    detailsAbortRef.current = controller;
+    const epoch = ++detailsEpochRef.current;
     setLoadingDetails(true);
     try {
       const [assigns, ovs] = await Promise.all([
-        fetchTeacherAssignments(effectiveDepartmentId, teacherId),
+        fetchTeacherAssignments(effectiveDepartmentId, teacherId, { signal: controller.signal }),
         fetchTeacherOverrides(effectiveDepartmentId, teacherId),
       ]);
+      if (epoch !== detailsEpochRef.current) return;
       setAssignments(assigns);
       setOverrides(ovs);
     } catch (err: any) {
+      if (err?.name === "AbortError") return;
       console.warn("Could not load teacher assignments/overrides:", err);
     } finally {
-      setLoadingDetails(false);
+      if (epoch === detailsEpochRef.current) {
+        setLoadingDetails(false);
+      }
     }
   }, [effectiveDepartmentId]);
 

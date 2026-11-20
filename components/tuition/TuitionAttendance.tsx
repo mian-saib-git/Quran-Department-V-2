@@ -61,6 +61,15 @@ function scheduleTitle(schedule: TuitionScheduleRecord) {
   return `${schedule.student_name} — ${subject}`;
 }
 
+function tuitionRecordKey(item: TuitionAttendanceRecord): string {
+  const entityKey =
+    item.entity_type === "teacher"
+      ? String(item.teacher_id || "")
+      : String(item.schedule_id || item.student_id || "");
+  const classKey = item.entity_type === "student" ? "" : (item.class_key || item.classKey || "");
+  return `${item.entity_type}:${entityKey}:${item.date}:${classKey}`;
+}
+
 function tuitionMatrixToAppState(matrix: TuitionSchedulingMatrix, attendance: TuitionAttendanceRecord[]): AppState {
   const activeSchedules = matrix.schedules.filter((item) => item.is_active);
 
@@ -131,20 +140,6 @@ export default function TuitionAttendance({ departmentId, features }: Props) {
     }
   }, [departmentId]);
 
-  const loadAttendanceOnly = useCallback(async (): Promise<boolean> => {
-    // The editor selects a date before it requests attendance.  Do not turn an
-    // initial render into an unbounded historical read while that date is empty.
-    if (!selectedDate.current) return true;
-    try {
-      const rows = await getAllTuitionAttendance({ department_id: departmentId, date: selectedDate.current });
-      setAttendance(rows);
-      return true;
-    } catch (error: any) {
-      setMessage(error?.message || "Unable to refresh Tuition attendance.");
-      return false;
-    }
-  }, [departmentId]);
-
   useEffect(() => {
     loadData();
   }, [loadData]);
@@ -185,34 +180,42 @@ export default function TuitionAttendance({ departmentId, features }: Props) {
 
     setMessage("");
     try {
-      if (args.entityType === EntityType.STUDENT) {
-        await markTuitionAttendance({
-          department_id: departmentId,
-          entity_type: "student",
-          schedule_id: Number(args.entityId),
-          date: args.date,
-          status: statusToApi(args.status),
-          class_key: args.classKey || "",
-        });
-      } else {
-        const scheduleMatch = String(args.classKey || "").match(/^schedule:(\d+)$/);
-        await markTuitionAttendance({
-          department_id: departmentId,
-          entity_type: "teacher",
-          schedule_id: scheduleMatch ? Number(scheduleMatch[1]) : undefined,
-          teacher_id: Number(args.entityId),
-          date: args.date,
-          status: statusToApi(args.status),
-          class_key: args.classKey || "",
-        });
-      }
+      const savedRecord =
+        args.entityType === EntityType.STUDENT
+          ? await markTuitionAttendance({
+              department_id: departmentId,
+              entity_type: "student",
+              schedule_id: Number(args.entityId),
+              date: args.date,
+              status: statusToApi(args.status),
+              class_key: args.classKey || "",
+            })
+          : await markTuitionAttendance({
+              department_id: departmentId,
+              entity_type: "teacher",
+              schedule_id: (() => {
+                const scheduleMatch = String(args.classKey || "").match(/^schedule:(\d+)$/);
+                return scheduleMatch ? Number(scheduleMatch[1]) : undefined;
+              })(),
+              teacher_id: Number(args.entityId),
+              date: args.date,
+              status: statusToApi(args.status),
+              class_key: args.classKey || "",
+            });
 
-      return await loadAttendanceOnly();
+      if (selectedDate.current === args.date) {
+        const savedKey = tuitionRecordKey(savedRecord);
+        setAttendance((prev) => [
+          ...prev.filter((item) => item.id !== savedRecord.id && tuitionRecordKey(item) !== savedKey),
+          savedRecord,
+        ]);
+      }
+      return true;
     } catch (error: any) {
       setMessage(error?.message || "Unable to save attendance.");
       return false;
     }
-  }, [departmentId, features.tuition_mark_attendance, loadAttendanceOnly]);
+  }, [departmentId, features.tuition_mark_attendance]);
 
   const handleDelete = useCallback(async (args: {
     entityId: string;
@@ -232,12 +235,15 @@ export default function TuitionAttendance({ departmentId, features }: Props) {
       const existing = attendanceByKey.get(key);
       if (!existing) return false;
       await deleteTuitionAttendance(existing.id, departmentId);
-      return await loadAttendanceOnly();
+      if (selectedDate.current === args.date) {
+        setAttendance((prev) => prev.filter((item) => item.id !== existing.id));
+      }
+      return true;
     } catch (error: any) {
       setMessage(error?.message || "Unable to clear attendance.");
       return false;
     }
-  }, [attendanceByKey, departmentId, features.tuition_mark_attendance, loadAttendanceOnly]);
+  }, [attendanceByKey, departmentId, features.tuition_mark_attendance]);
 
   return (
     <div className="space-y-4">

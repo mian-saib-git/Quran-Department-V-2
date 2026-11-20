@@ -1,7 +1,7 @@
 import { useCompleteAttendance } from "../hooks/useCompleteAttendance";
 import { getAllQuranAttendance, getQuranReportScheduledSessions, toAttendanceRecord, type QuranReportScheduledSession } from "../services/djangoApiService";
 // IVS_ATTENDANCE_TIME_CLASS_BASED_V24
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { showFeatureLocked } from "../services/featureAccess";
 import {
   AppState,
@@ -1543,7 +1543,8 @@ export function ReportsTab({
     scheduledSessions.error,
   ]);
 
-  const normalizedReportSearch = reportSearch.trim().toLocaleLowerCase();
+  const deferredReportSearch = useDeferredValue(reportSearch);
+  const normalizedReportSearch = deferredReportSearch.trim().toLocaleLowerCase();
 
   const filteredAttendanceRows = useMemo(() => {
     return rows.filter((row) => {

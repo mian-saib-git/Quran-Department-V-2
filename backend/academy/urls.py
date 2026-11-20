@@ -31,6 +31,7 @@ from .views import (
     MonthlyLessonPlanDetailView,
     MonthlyLessonSummaryView,
     GeminiAssistantView,
+    SchedulingMutationView,
     LessonAccessRequestView,
 LessonAccessRequestDetailView,
 )
@@ -77,6 +78,7 @@ path("lesson-access-requests/<int:pk>/", LessonAccessRequestDetailView.as_view()
     ),
 
     path("state/", AcademyStateView.as_view(), name="academy_state"),
+    path("scheduling/", SchedulingMutationView.as_view(), name="academy_scheduling"),
     path("assistant/", GeminiAssistantView.as_view(), name="academy_assistant"),
 
     # Attendance API

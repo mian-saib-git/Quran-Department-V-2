@@ -4,6 +4,7 @@ const SESSION_KEY = "quran_academy_session_v2";
 
 type AcademyWSMessage = Record<string, unknown>;
 type AcademyWSListener = (data: AcademyWSMessage) => void;
+type AcademyWSStatusListener = (connected: boolean) => void;
 
 let ws: WebSocket | null = null;
 let reconnectTimer: number | null = null;
@@ -11,8 +12,34 @@ let closeTimer: number | null = null;
 let heartbeatTimer: number | null = null;
 let reconnectAttempts = 0;
 let manualClose = false;
+let hasConnectedOnce = false;
 
 const listeners = new Set<AcademyWSListener>();
+const statusListeners = new Set<AcademyWSStatusListener>();
+
+export function isAcademyWSConnected(): boolean {
+  return ws?.readyState === WebSocket.OPEN;
+}
+
+export function subscribeAcademyWSStatus(
+  listener: AcademyWSStatusListener
+): () => void {
+  statusListeners.add(listener);
+  return () => {
+    statusListeners.delete(listener);
+  };
+}
+
+function notifyStatusListeners() {
+  const connected = isAcademyWSConnected();
+  for (const listener of statusListeners) {
+    try {
+      listener(connected);
+    } catch {
+      // ignore subscriber errors
+    }
+  }
+}
 
 function getToken(): string {
   try {
@@ -131,24 +158,43 @@ export function connectAcademyWS() {
     `${base}/ws/academy/`
   );
 
-  ws = new WebSocket(url);
+  const socket = new WebSocket(url);
+  ws = socket;
 
-  ws.onopen = () => {
+  socket.onopen = () => {
+    if (ws !== socket || manualClose) {
+      try {
+        socket.close(1000, "Manual disconnect");
+      } catch {
+        // ignore close errors on superseded socket
+      }
+      return;
+    }
+
     reconnectAttempts = 0;
     clearReconnectTimer();
     startHeartbeat();
+    notifyStatusListeners();
 
     console.log("WS: Connected successfully");
   };
 
-  ws.onmessage = event => {
+  socket.onmessage = event => {
+    if (ws !== socket) return;
+
     try {
-      const data = JSON.parse(
+      const parsed = JSON.parse(
         event.data
       ) as AcademyWSMessage;
 
-      if (data.type === "pong") {
+      if (parsed.type === "pong") {
         return;
+      }
+
+      let data = parsed;
+      if (parsed.type === "connected") {
+        data = { ...parsed, isReconnect: hasConnectedOnce };
+        hasConnectedOnce = true;
       }
 
       console.log("WS received:", data);
@@ -171,13 +217,17 @@ export function connectAcademyWS() {
     }
   };
 
-  ws.onerror = event => {
+  socket.onerror = event => {
+    if (ws !== socket) return;
     console.error("WS: Connection error", event);
   };
 
-  ws.onclose = event => {
+  socket.onclose = event => {
+    if (ws !== socket) return;
+
     stopHeartbeat();
     ws = null;
+    notifyStatusListeners();
 
     console.warn(
       "WS: Closed",
@@ -202,11 +252,16 @@ export function disconnectAcademyWS(
 
   if (force) {
     manualClose = true;
+    hasConnectedOnce = false;
     clearCloseTimer();
 
     if (ws) {
-      ws.close(1000, "Manual disconnect");
+      const activeSocket = ws;
       ws = null;
+      if (activeSocket.readyState === WebSocket.OPEN) {
+        activeSocket.close(1000, "Manual disconnect");
+      }
+      notifyStatusListeners();
     }
 
     return;
@@ -219,8 +274,10 @@ export function disconnectAcademyWS(
 
     if (listeners.size === 0 && ws) {
       manualClose = true;
+      hasConnectedOnce = false;
       ws.close(1000, "No listeners");
       ws = null;
+      notifyStatusListeners();
     }
   }, 1500);
 }

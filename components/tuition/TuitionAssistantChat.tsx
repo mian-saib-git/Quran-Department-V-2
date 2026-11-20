@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import Lottie from "lottie-react";
 import { Loader2, Send, X } from "lucide-react";
+import { TuitionAiAvatar } from "./TuitionAiAvatar";
 import {
   getTuitionAccounts,
   getTuitionEnrollments,
@@ -8,8 +8,9 @@ import {
   type TuitionEnrollment,
 } from "../../services/tuitionApiService";
 
+export { TuitionAiAvatar };
+
 // TUITION_ASSISTANT_NO_CROSS_DEPARTMENT_COPY_V1
-const TUITION_AI_LOTTIE_URL: string | null = '/ai-bot.json';
 
 type Message = { role: "assistant" | "user"; text: string };
 
@@ -138,32 +139,6 @@ function localTuitionAnswer(query: string, dashboard: any, teachers: TuitionAcco
   }
 
   return `I could not find a Tuition record for “${raw}”. I checked the available Tuition Department records. Try a student name, teacher name, “today’s classes”, “total students”, or “total teachers”.`;
-}
-
-export function TuitionAiAvatar({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
-  const [animationData, setAnimationData] = useState<any>(null);
-
-  useEffect(() => {
-    let mounted = true;
-    async function loadAnimation() {
-      if (!TUITION_AI_LOTTIE_URL) return;
-      try {
-        const response = await fetch(TUITION_AI_LOTTIE_URL);
-        const data = await response.json();
-        if (mounted) setAnimationData(data);
-      } catch {
-        if (mounted) setAnimationData(null);
-      }
-    }
-    void loadAnimation();
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  const className = size === "sm" ? "h-12 w-12" : size === "lg" ? "h-16 w-16" : "h-14 w-14";
-  if (animationData) return <Lottie animationData={animationData} loop autoplay className={`${className} pointer-events-none`} />;
-  return <div className={`${className} flex items-center justify-center rounded-2xl bg-blue-600 text-lg shadow-sm`}>🤖</div>;
 }
 
 export default function TuitionAssistantChat({ open, onClose, departmentId, departmentName = "Tuition Department", dashboard }: Props) {

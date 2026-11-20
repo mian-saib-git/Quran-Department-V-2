@@ -687,6 +687,7 @@ def _build_session_payload(
     target_date,
     class_key,
     session_time,
+    include_available_substitutes=True,
 ):
     schedules = _session_rows(
         department,
@@ -791,15 +792,19 @@ def _build_session_payload(
         )
     )
 
-    substitutes = _available_substitutes(
-        department=department,
-        original_teacher=teacher,
-        target_date=target_date,
-        class_key=class_key,
-        session_time=session_time,
-        session_duration_minutes=(
-            session_duration_minutes
-        ),
+    substitutes = (
+        _available_substitutes(
+            department=department,
+            original_teacher=teacher,
+            target_date=target_date,
+            class_key=class_key,
+            session_time=session_time,
+            session_duration_minutes=(
+                session_duration_minutes
+            ),
+        )
+        if include_available_substitutes
+        else []
     )
 
     return {
@@ -1785,25 +1790,31 @@ class QuranTeacherSessionAttendanceView(APIView):
                     student_id
                 ] = substitute
 
-        # Build one rate context for this department/month.
-        rate_context = (
-            build_department_month_context(
-                department,
-                target_date.year,
-                target_date.month,
-                request.user,
+        # Build the department month rate context only when absence/leave
+        # coverage rows actually need teacher/substitute rates.
+        rate_context = None
+        original_rate = None
+        original_class_count = None
+        original_policy = None
+        if teacher_status != Attendance.Status.PRESENT:
+            rate_context = (
+                build_department_month_context(
+                    department,
+                    target_date.year,
+                    target_date.month,
+                    request.user,
+                )
             )
-        )
 
-        (
-            original_rate,
-            original_class_count,
-            original_policy,
-        ) = teacher_rate_for_date(
-            rate_context,
-            teacher.id,
-            target_date,
-        )
+            (
+                original_rate,
+                original_class_count,
+                original_policy,
+            ) = teacher_rate_for_date(
+                rate_context,
+                teacher.id,
+                target_date,
+            )
 
         attendance, _created = (
             Attendance.objects
@@ -1979,14 +1990,18 @@ class QuranTeacherSessionAttendanceView(APIView):
                 "class_key": class_key,
                 "teacher_status": teacher_status,
                 "student_count": len(student_ids),
-                "original_rate": decimal_text(
-                    original_rate
+                "original_rate": (
+                    decimal_text(original_rate)
+                    if original_rate is not None
+                    else None
                 ),
                 "original_class_count": (
                     original_class_count
                 ),
                 "original_policy_id": (
                     original_policy.id
+                    if original_policy is not None
+                    else None
                 ),
                 "substitute_assignments": [
                     {
@@ -2033,6 +2048,7 @@ class QuranTeacherSessionAttendanceView(APIView):
             target_date=target_date,
             class_key=class_key,
             session_time=session_time,
+            include_available_substitutes=False,
         )
 
         return Response(
@@ -2206,6 +2222,7 @@ class QuranTeacherSessionAttendanceView(APIView):
             target_date=target_date,
             class_key=class_key,
             session_time=session_time,
+            include_available_substitutes=False,
         )
 
         return Response(

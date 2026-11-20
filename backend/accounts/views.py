@@ -21,7 +21,11 @@ from .models import (
 )
 from .deletion_service import permanently_delete_department, permanently_delete_institution
 from .platform_runtime import record_audit_event
-from .platform_communications import active_maintenance_for_user, maintenance_payload
+from .platform_communications import (
+    active_maintenance_for_user,
+    maintenance_payload,
+    user_scope_from_links,
+)
 from .serializers import (
     CreateAccountSerializer,
     UpdateAccountSerializer,
@@ -584,7 +588,12 @@ class AuthContextView(APIView):
                 else {}
             ),
             "roles": roles,
-            "maintenance": maintenance_payload(active_maintenance_for_user(user)),
+            "maintenance": maintenance_payload(
+                active_maintenance_for_user(
+                    user,
+                    scope=user_scope_from_links(user, roles_qs),
+                )
+            ),
         })
         response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response["Pragma"] = "no-cache"

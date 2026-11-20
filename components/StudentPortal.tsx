@@ -1,6 +1,8 @@
 import IVSClockCard from "./IVSClockCard";
 import NotificationBell from "./NotificationBell";
 import { useCompleteAttendance } from "../hooks/useCompleteAttendance";
+import { useMinuteNow } from "../hooks/useMinuteNow";
+import { useVisibilityPolling } from "../hooks/useVisibilityPolling";
 import { getAllQuranAttendance } from "../services/djangoApiService";
 // IVS_QURAN_STUDENT_PORTAL_V49_SAFE_CARD_REVEAL_FIX
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -34,7 +36,10 @@ import { useAcademyWS } from "../hooks/useAcademyWS";
 
 import QRCode from "qrcode";
 import { PageSkeleton } from "./ui/SkeletonLoaders";
-import Lanyard from "./tuition/lanyard/Lanyard";
+import { LazyChunkErrorBoundary } from "./ui/LazyChunkErrorBoundary";
+
+import "./tuition/lanyard/Lanyard.css";
+const Lanyard = React.lazy(() => import("./tuition/lanyard/Lanyard"));
 type Props = {
   onLogout: () => void;
   departmentName?: string;
@@ -695,10 +700,17 @@ export function StudentPortal({ onLogout, departmentName = "Quran Department" }:
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState("");
 
-  const [clockNow, setClockNow] = useState(new Date());
+  const clockNow = useMinuteNow();
   const [studentTheme, setStudentTheme] = useState<"light" | "dark">("light");
   const [studentCardVisible, setStudentCardVisible] = useState(true);
   const [studentCardHasToggled, setStudentCardHasToggled] = useState(false);
+  const [lanyardMounted, setLanyardMounted] = useState(false);
+
+  useEffect(() => {
+    if (loading || !studentCardVisible || lanyardMounted) return;
+    const id = window.setTimeout(() => setLanyardMounted(true), 1800);
+    return () => window.clearTimeout(id);
+  }, [loading, studentCardVisible, lanyardMounted]);
   const [studentCardImages, setStudentCardImages] = useState<{ front: string | null; back: string | null }>({ front: null, back: null });
   const portalSurfaceRef = useRef<HTMLElement | null>(null);
 
@@ -717,7 +729,11 @@ export function StudentPortal({ onLogout, departmentName = "Quran Department" }:
 
   const [schedulePage, setSchedulePage] = useState(1);
 
+  const inFlightRef = useRef(false);
+
   const loadDashboard = async (silent = false) => {
+    if (silent && inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       if (!silent) setRefreshing(true);
 
@@ -727,6 +743,7 @@ export function StudentPortal({ onLogout, departmentName = "Quran Department" }:
     } catch (error: any) {
       setMessage(error?.message || "Could not load student portal.");
     } finally {
+      inFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
@@ -734,16 +751,14 @@ export function StudentPortal({ onLogout, departmentName = "Quran Department" }:
 
   useEffect(() => {
     void loadDashboard();
-
-    const refreshMs = window.matchMedia("(max-width: 767px)").matches ? 60000 : 15000;
-    const timer = window.setInterval(() => void loadDashboard(true), refreshMs);
-    const clockTimer = window.setInterval(() => setClockNow(new Date()), 1000);
-
-    return () => {
-      window.clearInterval(timer);
-      window.clearInterval(clockTimer);
-    };
   }, []);
+
+  useVisibilityPolling({
+    connectedIntervalMs: 120_000,
+    disconnectedIntervalMs: 45_000,
+    staleOnVisibleMs: 30_000,
+    onTick: () => loadDashboard(true),
+  });
 
   useEffect(() => {
     setLessonPage(1);
@@ -757,7 +772,7 @@ export function StudentPortal({ onLogout, departmentName = "Quran Department" }:
     const type = String(event?.type || "");
 
     if (
-      type === "connected" ||
+      (type === "connected" && Boolean(event?.isReconnect)) ||
       type === "academy.update" ||
       type === "academy_update" ||
       type === "attendance_marked" ||
@@ -792,7 +807,11 @@ export function StudentPortal({ onLogout, departmentName = "Quran Department" }:
 
   const handleStudentCardToggle = () => {
     setStudentCardHasToggled(true);
-    setStudentCardVisible((visible) => !visible);
+    setStudentCardVisible((visible) => {
+      const next = !visible;
+      if (next && !lanyardMounted) setLanyardMounted(true);
+      return next;
+    });
   };
 
   const schedules = dashboard?.schedules || [];
@@ -1126,8 +1145,8 @@ const lessons = (dashboard as any)?.lessons || [];
         </div>
       </aside>
 
-      <main ref={portalSurfaceRef} className="relative flex-1 min-w-0 flex flex-col h-screen overflow-hidden">
-        <header className="sp-topbar flex items-center justify-between px-6 py-3">
+      <main ref={portalSurfaceRef} className="relative isolate z-0 flex-1 min-w-0 flex flex-col h-screen overflow-hidden">
+        <header className="sp-topbar relative z-30 flex items-center justify-between px-6 py-3">
           <div className="flex items-center gap-4 min-w-0">
             <button
               type="button"
@@ -1150,7 +1169,7 @@ const lessons = (dashboard as any)?.lessons || [];
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
-            <ClockCard now={clockNow} />
+            <ClockCard />
               <div className="sm:hidden"><NotificationBell /></div>
 
             <button
@@ -1192,18 +1211,24 @@ const lessons = (dashboard as any)?.lessons || [];
           aria-hidden={!studentCardVisible}
           aria-label="Interactive Quran student identity lanyard"
         >
-          <Lanyard
-            eventSource={portalSurfaceRef}
-            position={[0, 0, 15.4]}
-            gravity={[0, -34, 0]}
-            fov={29}
-            frontImage={studentCardImages.front}
-            backImage={studentCardImages.back}
-            imageFit="cover"
-            lanyardWidth={1.2}
-            interactive={studentCardVisible}
-            safeReveal
-          />
+          {lanyardMounted && (
+            <LazyChunkErrorBoundary fallback={null}>
+              <React.Suspense fallback={null}>
+                <Lanyard
+                  eventSource={portalSurfaceRef}
+                  position={[0, 0, 15.4]}
+                  gravity={[0, -34, 0]}
+                  fov={29}
+                  frontImage={studentCardImages.front}
+                  backImage={studentCardImages.back}
+                  imageFit="cover"
+                  lanyardWidth={1.2}
+                  interactive={studentCardVisible}
+                  safeReveal
+                />
+              </React.Suspense>
+            </LazyChunkErrorBoundary>
+          )}
         </div>
 
         {message && (
@@ -1213,7 +1238,7 @@ const lessons = (dashboard as any)?.lessons || [];
           </div>
         )}
 
-        <div className="flex-1 min-h-0 overflow-y-auto p-6 sp-page-scroll">
+        <div className={`flex-1 min-h-0 overflow-y-auto p-6 sp-page-scroll ${studentCardVisible ? "lanyard-stage-active" : ""}`}>
           {activeTab === "overview" && (
             <div className="space-y-6">
               <section className="sp-hero-panel">
@@ -2658,8 +2683,8 @@ const lessons = (dashboard as any)?.lessons || [];
   );
 }
 
-function ClockCard({ now }: { now: Date }) {
-  return <div className="hidden sm:block"><IVSClockCard now={now} compact /></div>;
+function ClockCard() {
+  return <div className="hidden sm:block"><IVSClockCard compact /></div>;
 }
 
 function AttendanceFilters({

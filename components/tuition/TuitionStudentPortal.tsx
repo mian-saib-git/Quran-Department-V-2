@@ -1,6 +1,9 @@
 import IVSClockCard from "../IVSClockCard";
 import NotificationBell from "../NotificationBell";
 import { useCompleteAttendance } from "../../hooks/useCompleteAttendance";
+import { useMinuteNow } from "../../hooks/useMinuteNow";
+import { useVisibilityPolling } from "../../hooks/useVisibilityPolling";
+import { LiveCountdown } from "../ui/LiveCountdown";
 import { getAllTuitionStudentAttendance } from "../../services/tuitionApiService";
 // IVS_STUDENT_PORTALS_V48_PHYSICS_DROP_DATE_FORMAT
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -41,7 +44,10 @@ import {
 } from "../../services/tuitionApiService";
 import { useAcademyWS } from "../../hooks/useAcademyWS";
 import { PageSkeleton } from "../ui/SkeletonLoaders";
-import Lanyard from "./lanyard/Lanyard";
+import { LazyChunkErrorBoundary } from "../ui/LazyChunkErrorBoundary";
+
+import "./lanyard/Lanyard.css";
+const Lanyard = React.lazy(() => import("./lanyard/Lanyard"));
 
 type Props = {
   departmentId?: number;
@@ -573,9 +579,16 @@ export default function TuitionStudentPortal({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [now, setNow] = useState(new Date());
+  const now = useMinuteNow();
   const [studentCardVisible, setStudentCardVisible] = useState(true);
   const [studentCardHasToggled, setStudentCardHasToggled] = useState(false);
+  const [lanyardMounted, setLanyardMounted] = useState(false);
+
+  useEffect(() => {
+    if (loading || !studentCardVisible || lanyardMounted) return;
+    const id = window.setTimeout(() => setLanyardMounted(true), 1800);
+    return () => window.clearTimeout(id);
+  }, [loading, studentCardVisible, lanyardMounted]);
   const [studentCardImages, setStudentCardImages] = useState<{ front: string | null; back: string | null }>({
     front: null,
     back: null,
@@ -596,7 +609,11 @@ export default function TuitionStudentPortal({
   const [scheduleSearch, setScheduleSearch] = useState("");
   const [schedulePage, setSchedulePage] = useState(1);
 
+  const inFlightRef = useRef(false);
+
   const loadPortal = async (silent = false) => {
+    if (silent && inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       if (!silent) setRefreshing(true);
       const response = await getTuitionStudentPortal(departmentId);
@@ -606,6 +623,7 @@ export default function TuitionStudentPortal({
       const message = caught instanceof Error ? caught.message : "Could not load the Tuition Student Portal.";
       setError(message);
     } finally {
+      inFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
@@ -613,18 +631,19 @@ export default function TuitionStudentPortal({
 
   useEffect(() => {
     void loadPortal();
-    const refreshTimer = window.setInterval(() => void loadPortal(true), 30_000);
-    const clockTimer = window.setInterval(() => setNow(new Date()), 1_000);
-    return () => {
-      window.clearInterval(refreshTimer);
-      window.clearInterval(clockTimer);
-    };
   }, [departmentId]);
+
+  useVisibilityPolling({
+    connectedIntervalMs: 120_000,
+    disconnectedIntervalMs: 45_000,
+    staleOnVisibleMs: 30_000,
+    onTick: () => loadPortal(true),
+  });
 
   useAcademyWS((event) => {
     const type = String(event?.type || "");
     if (
-      type === "connected" ||
+      (type === "connected" && Boolean(event?.isReconnect)) ||
       type === "academy.update" ||
       type === "academy_update" ||
       type === "tuition_attendance_updated" ||
@@ -785,7 +804,11 @@ export default function TuitionStudentPortal({
 
   const handleStudentCardToggle = () => {
     setStudentCardHasToggled(true);
-    setStudentCardVisible((visible) => !visible);
+    setStudentCardVisible((visible) => {
+      const next = !visible;
+      if (next && !lanyardMounted) setLanyardMounted(true);
+      return next;
+    });
   };
 
   const handleLogout = () => {
@@ -889,7 +912,7 @@ export default function TuitionStudentPortal({
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <header className="z-20 flex min-h-[78px] items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur-xl dark:border-slate-800 dark:bg-[#0b1424]/95 sm:px-6 lg:px-8">
+          <header className="z-30 flex min-h-[78px] items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur-xl dark:border-slate-800 dark:bg-[#0b1424]/95 sm:px-6 lg:px-8">
             <div className="flex min-w-0 items-center gap-3">
               <button
                 type="button"
@@ -913,7 +936,7 @@ export default function TuitionStudentPortal({
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3">
-              <PortalClock now={now} />
+              <PortalClock />
               <div className="sm:hidden"><NotificationBell /></div>
               <button
                 type="button"
@@ -956,7 +979,7 @@ export default function TuitionStudentPortal({
             </div>
           </header>
 
-          <div ref={portalSurfaceRef} className="relative isolate flex min-h-0 flex-1 flex-col overflow-visible">
+          <div ref={portalSurfaceRef} className="relative isolate z-0 flex min-h-0 flex-1 flex-col overflow-visible">
             <div
               className={`tuition-global-lanyard-layer ${studentCardVisible ? "is-visible" : "is-hidden"} ${
                 studentCardHasToggled
@@ -968,17 +991,23 @@ export default function TuitionStudentPortal({
               aria-hidden={!studentCardVisible}
               aria-label="Interactive student identity lanyard"
             >
-              <Lanyard
-                eventSource={portalSurfaceRef}
-                position={[0, 0, 15.4]}
-                gravity={[0, -34, 0]}
-                fov={29}
-                frontImage={studentCardImages.front}
-                backImage={studentCardImages.back}
-                imageFit="cover"
-                lanyardWidth={1.2}
-                interactive={studentCardVisible}
-              />
+              {lanyardMounted && (
+                <LazyChunkErrorBoundary fallback={null}>
+                  <React.Suspense fallback={null}>
+                    <Lanyard
+                      eventSource={portalSurfaceRef}
+                      position={[0, 0, 15.4]}
+                      gravity={[0, -34, 0]}
+                      fov={29}
+                      frontImage={studentCardImages.front}
+                      backImage={studentCardImages.back}
+                      imageFit="cover"
+                      lanyardWidth={1.2}
+                      interactive={studentCardVisible}
+                    />
+                  </React.Suspense>
+                </LazyChunkErrorBoundary>
+              )}
             </div>
 
             {error && (
@@ -989,7 +1018,7 @@ export default function TuitionStudentPortal({
             </div>
           )}
 
-          <div className="student-portal-scroll flex-1 overflow-y-auto px-4 py-5 pb-6 sm:px-6 sm:py-6 lg:px-8 lg:pb-8">
+          <div className={`student-portal-scroll flex-1 overflow-y-auto px-4 py-5 pb-6 sm:px-6 sm:py-6 lg:px-8 lg:pb-8 ${studentCardVisible ? "lanyard-stage-active" : ""}`}>
             <div className="mx-auto max-w-[1560px]">
               {activeTab === "overview" && (
                 <OverviewTab
@@ -1100,12 +1129,12 @@ function OverviewTab({
 }) {
   return (
     <div className="space-y-6">
-      <section className="relative z-0 grid gap-4 sm:grid-cols-2">
+      <section className="tuition-lanyard-top-reserve relative z-0 grid gap-4 2xl:grid-cols-2">
         <SpotlightCard title="Live Now" item={liveClasses[0] || null} live empty="No class is live right now." />
         <SpotlightCard title="Up Next" item={nextClass} empty="No upcoming class is scheduled." />
       </section>
 
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="tuition-lanyard-top-reserve grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
         <MetricCard label="Active subjects" value={subjects.length} detail="Current enrollments" icon={BookOpen} tone="indigo" />
         <MetricCard label="Weekly classes" value={schedules.length} detail="Scheduled sessions" icon={CalendarDays} tone="cyan" />
         <MetricCard label="Attendance rate" value={`${attendanceRate}%`} detail="Present versus absent" icon={CheckCircle2} tone="emerald" />
@@ -1212,7 +1241,7 @@ function AttendanceTab({
   const years = Array.from({ length: 9 }, (_, index) => new Date().getFullYear() - 4 + index);
   return (
     <div className="space-y-6">
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="tuition-lanyard-top-reserve grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
         <MetricCard label="Attendance rate" value={`${totals.attendanceRate}%`} detail="Present versus absent" icon={CheckCircle2} tone="indigo" />
         <MetricCard label="Present" value={totals.present} detail="Classes attended" icon={CheckCircle2} tone="emerald" />
         <MetricCard label="Absent" value={totals.absent} detail="Classes missed" icon={XCircle} tone="rose" />
@@ -1291,7 +1320,7 @@ function AttendanceTab({
 
 function AssignmentsTab({ subjects }: { subjects: TuitionStudentPortalSubject[] }) {
   return (
-    <div className="space-y-6">
+    <div className="tuition-lanyard-top-reserve space-y-6">
       <section className={`${CARD} p-6 sm:p-8`}>
         <SectionHeading icon={ClipboardList} title="Assignments" description="Assignments will appear here when the assignment workflow is added." badge={`${subjects.length} subjects`} />
         <div className="mt-6">
@@ -1335,7 +1364,7 @@ function ScheduleTab({
 }) {
   return (
     <div className="space-y-6">
-      <section className="grid gap-4 xl:grid-cols-2">
+      <section className="tuition-lanyard-top-reserve grid gap-4 2xl:grid-cols-2">
         <SpotlightCard title="Live Now" item={liveClasses[0] || null} live empty="No class is live right now." />
         <SpotlightCard title="Up Next" item={nextClass} empty="No upcoming class is scheduled." />
       </section>
@@ -1394,14 +1423,14 @@ function MetricCard({
     amber: "from-amber-400 to-orange-500 shadow-amber-500/20",
   } as const;
   return (
-    <article className={`${CARD} flex items-center gap-4 p-4 sm:p-5`}>
-      <div className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-gradient-to-br text-white shadow-xl ${palettes[tone]}`}>
-        <Icon size={24} />
+    <article className={`${CARD} flex items-center gap-3.5 p-4 sm:gap-4 sm:p-5`}>
+      <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px] bg-gradient-to-br text-white shadow-xl sm:h-14 sm:w-14 sm:rounded-[20px] ${palettes[tone]}`}>
+        <Icon size={22} />
       </div>
       <div className="min-w-0">
-        <p className="text-[11px] font-black uppercase tracking-[0.15em] text-slate-400">{label}</p>
+        <p className="text-[11px] font-black uppercase tracking-[0.1em] text-slate-400">{label}</p>
         <p className="mt-1 text-2xl font-black text-slate-950 dark:text-white">{value}</p>
-        <p className="mt-0.5 truncate text-xs font-bold text-slate-500 dark:text-slate-400">{detail}</p>
+        <p className="mt-0.5 text-xs font-bold leading-snug text-slate-500 dark:text-slate-400">{detail}</p>
       </div>
     </article>
   );
@@ -1482,13 +1511,13 @@ function CountdownBadge({ timing, compact = false }: { timing: ScheduleTiming; c
   }
   return (
     <span aria-label={`Starts in ${countdownLabel(timing.secondsUntil)}`} className={`inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 font-black text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-200 ${compact ? "px-2.5 py-1 text-[10px]" : "px-3 py-2 text-xs"}`}>
-      <Timer size={compact ? 13 : 15} /> Starts in {countdownLabel(timing.secondsUntil)}
+      <Timer size={compact ? 13 : 15} /> <LiveCountdown targetTimeMs={timing.start.getTime()} prefix="Starts in " />
     </span>
   );
 }
 
-function PortalClock({ now }: { now: Date }) {
-  return <div className="hidden sm:block"><IVSClockCard now={now} compact /></div>;
+function PortalClock() {
+  return <div className="hidden sm:block"><IVSClockCard compact /></div>;
 }
 
 function ScheduleCard({ item }: { item: { schedule: TuitionStudentPortalSchedule; timing: ScheduleTiming } }) {
@@ -1504,20 +1533,20 @@ function ScheduleCard({ item }: { item: { schedule: TuitionStudentPortalSchedule
           <p className="text-xs font-bold text-slate-500 dark:text-slate-400">to {formatClockTime(timing.end)}</p>
         </div>
 
-        <div className="p-4 sm:p-5">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
+        <div className="min-w-0 p-4 sm:p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-base font-black text-slate-950 dark:text-white">{schedule.subject_name || "Tuition class"}</h3>
+                <h3 className="break-words text-base font-black text-slate-950 dark:text-white">{schedule.subject_name || "Tuition class"}</h3>
                 {timing.isLive && <span className="rounded-full bg-emerald-500 px-2.5 py-1 text-[10px] font-black text-white">LIVE</span>}
               </div>
-              <p className="mt-1 text-sm font-bold text-slate-600 dark:text-slate-300">{schedule.class_name || "Class"}</p>
-              <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400 sm:grid-cols-2">
-                <p className="flex items-center gap-2"><UserRound size={15} className="text-indigo-500" /> {schedule.teacher_name || "Teacher not assigned"}</p>
-                <p className="flex items-center gap-2"><CalendarDays size={15} className="text-indigo-500" /> {formatScheduleDate(timing.start)}</p>
+              <p className="mt-1 break-words text-sm font-bold text-slate-600 dark:text-slate-300">{schedule.class_name || "Class"}</p>
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                <p className="flex min-w-0 items-center gap-2"><UserRound size={15} className="shrink-0 text-indigo-500" /> <span className="truncate">{schedule.teacher_name || "Teacher not assigned"}</span></p>
+                <p className="flex shrink-0 items-center gap-2"><CalendarDays size={15} className="shrink-0 text-indigo-500" /> {formatScheduleDate(timing.start)}</p>
               </div>
             </div>
-            <div className="flex shrink-0 flex-wrap items-center gap-2 lg:max-w-[250px] lg:justify-end">
+            <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
               <CountdownBadge timing={timing} compact />
               {schedule.meeting_link && (
                 <a href={schedule.meeting_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-black text-white transition hover:bg-indigo-700">

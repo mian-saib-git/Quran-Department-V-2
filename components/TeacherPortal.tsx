@@ -2,9 +2,11 @@ import IVSClockCard from "./IVSClockCard";
 import NotificationBell from "./NotificationBell";
 import { IVS_NOTIFICATION_NAVIGATE_EVENT, type NotificationNavigateDetail } from "./notificationNavigation";
 import { useCompleteAttendance } from "../hooks/useCompleteAttendance";
+import { useMinuteNow } from "../hooks/useMinuteNow";
+import { useVisibilityPolling } from "../hooks/useVisibilityPolling";
 import { getAllQuranAttendance } from "../services/djangoApiService";
 // IVS_ATTENDANCE_TIME_CLASS_BASED_V24
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   BookOpen,
@@ -59,9 +61,10 @@ import {
 } from "../services/djangoApiService";
 
 import { useAcademyWS } from "./../hooks/useAcademyWS";
-import TeacherSalarySelfService from "./TeacherSalarySelfService";
-
 import { PageSkeleton } from "./ui/SkeletonLoaders";
+import { LazyChunkErrorBoundary } from "./ui/LazyChunkErrorBoundary";
+
+const TeacherSalarySelfService = React.lazy(() => import("./TeacherSalarySelfService"));
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Props = {
@@ -876,6 +879,9 @@ export function TeacherPortal({ themeMode, onToggleTheme, onLogout }: Props) {
 const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [lessons, setLessons] = useState<LessonPayload[]>([]);
   const [dailyReports, setDailyReports] = useState<DailyLessonReportPayload[]>([]);
+  const [dailyReportsTotalCount, setDailyReportsTotalCount] = useState(0);
+  const [dailyReportsNextPage, setDailyReportsNextPage] = useState<number | null>(null);
+  const [dailyReportsLoadingMore, setDailyReportsLoadingMore] = useState(false);
   const [permissions, setPermissions] = useState<LessonPermission[]>([]);
   const [lessonRequests, setLessonRequests] = useState<LessonAccessRequestPayload[]>([]);
   const [requestingPermission, setRequestingPermission] = useState(false);
@@ -896,7 +902,7 @@ const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState("");
-  const [clockNow, setClockNow] = useState(new Date());
+  const clockNow = useMinuteNow();
 
   // ── Lesson form state ──
   const [studentId, setStudentId] = useState("");
@@ -984,6 +990,11 @@ useAcademyWS((data) => {
   const type = String(data.type || "");
   const eventName = String((data as any).event || "");
 
+  if (type === "connected" && Boolean((data as any).isReconnect)) {
+    void loadDashboard(true);
+    return;
+  }
+
   if (
     type === "academy_update" ||
     eventName === "account_created" ||
@@ -992,7 +1003,7 @@ useAcademyWS((data) => {
     eventName === "schedule_updated"
   ) {
     // Small delay to ensure DB transaction is committed before reloading
-    setTimeout(() => void loadDashboard(true), 500);
+    window.setTimeout(() => void loadCoreDashboard(true), 500);
   }
 
   if (type === "permission_granted" || type === "permission_disabled") {
@@ -1025,12 +1036,11 @@ useAcademyWS((data) => {
   }
 
   if (type === "attendance_marked") {
-    void loadDashboard(true);
+    void loadCoreDashboard(true);
   }
 
   if (type === "lesson_saved") {
-    getDailyLessonReports().then(res => setDailyReports(res.results || []));
-    getLessons().then(res => setLessons(res.results || []));
+    void loadSecondaryLessons(1, false);
   }
 
   if (type === "lesson_request_created") {
@@ -1065,39 +1075,112 @@ useAcademyWS((data) => {
 
   // ─── Data loading ──────────────────────────────────────────────────────────
 
-const loadDashboard = async (silent = false) => {
+  const coreInFlightRef = useRef(false);
+  const dailyReportsEpochRef = useRef(0);
+  const dailyReportsAbortRef = useRef<AbortController | null>(null);
+
+  const loadCoreDashboard = async (silent = false) => {
+    if (silent && coreInFlightRef.current) return;
+    coreInFlightRef.current = true;
     try {
       if (!silent) setRefreshing(true);
-      const [dashRes, lessonsRes, dailyRes, permRes, reqRes, authRes] = await Promise.all([
+      const [dashRes, permRes, reqRes] = await Promise.all([
         getDjangoDashboard(),
-        getLessons(),
-        getDailyLessonReports(),
         getLessonPermissions({ is_active: true }),
         getLessonAccessRequests({ status: "pending" }),
-        getAuthContext().catch(() => null),
       ]);
       setDashboard(dashRes);
-      setLessons(lessonsRes.results || []);
-      setDailyReports(dailyRes.results || []);
       setPermissions((permRes.results || []) as LessonPermission[]);
       setLessonRequests(reqRes.results || []);
-      setSalaryEnabled(Boolean(authRes?.features?.tab_teacher_salary));
       setMessage("");
     } catch (error: any) {
       setMessage(error?.message || "Could not load teacher dashboard.");
     } finally {
+      coreInFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
   };
 
+  const loadSecondaryLessons = async (
+    page = 1,
+    append = false,
+    studentFilterOverride?: string,
+  ) => {
+    const activeStudentFilter =
+      studentFilterOverride !== undefined ? studentFilterOverride : historyStudentFilter;
+    if (append) {
+      setDailyReportsLoadingMore(true);
+    } else if (dailyReportsAbortRef.current) {
+      dailyReportsAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    if (!append) {
+      dailyReportsAbortRef.current = controller;
+    }
+    const epoch = ++dailyReportsEpochRef.current;
+    try {
+      const dailyPromise = getDailyLessonReports(
+        {
+          page,
+          page_size: 50,
+          ...(activeStudentFilter ? { student_id: Number(activeStudentFilter) } : {}),
+        },
+        { signal: controller.signal },
+      );
+      const [lessonsRes, dailyRes] = await Promise.all([
+        append ? Promise.resolve(null) : getLessons(),
+        dailyPromise,
+      ]);
+      if (epoch !== dailyReportsEpochRef.current) return;
+      if (lessonsRes) {
+        setLessons(lessonsRes.results || []);
+      }
+      const nextRows = dailyRes.results || [];
+      setDailyReports((prev) => {
+        if (!append) return nextRows;
+        const existingIds = new Set(prev.map((r) => r.id));
+        return [...prev, ...nextRows.filter((r) => !existingIds.has(r.id))];
+      });
+      setDailyReportsTotalCount(Number(dailyRes.count ?? nextRows.length));
+      setDailyReportsNextPage(dailyRes.next ?? null);
+    } catch (err: any) {
+      if (err?.name === "AbortError") return;
+      // Secondary lesson lists keep previous state on transient failure.
+    } finally {
+      if (append) {
+        setDailyReportsLoadingMore(false);
+      }
+    }
+  };
+
+  const loadAuthFeatures = async () => {
+    const authRes = await getAuthContext().catch(() => null);
+    if (authRes) {
+      setSalaryEnabled(Boolean(authRes?.features?.tab_teacher_salary));
+    }
+  };
+
+  const loadDashboard = async (silent = false) => {
+    await Promise.all([
+      loadCoreDashboard(silent),
+      loadSecondaryLessons(),
+      ...(silent ? [] : [loadAuthFeatures()]),
+    ]);
+  };
+
   useEffect(() => {
-    void loadDashboard();
-    const refreshMs = window.matchMedia("(max-width: 767px)").matches ? 60000 : 12000;
-    const dashboardTimer = window.setInterval(() => void loadDashboard(true), refreshMs);
-    const clockTimer = window.setInterval(() => setClockNow(new Date()), 1000);
-    return () => { window.clearInterval(dashboardTimer); window.clearInterval(clockTimer); };
+    void loadCoreDashboard();
+    void loadSecondaryLessons();
+    void loadAuthFeatures();
   }, []);
+
+  useVisibilityPolling({
+    connectedIntervalMs: 120_000,
+    disconnectedIntervalMs: 45_000,
+    staleOnVisibleMs: 30_000,
+    onTick: () => loadCoreDashboard(true),
+  });
 
   // ─── Derived values ────────────────────────────────────────────────────────
 
@@ -1720,6 +1803,36 @@ const historyGroups = useMemo(() => {
 
   useEffect(() => { setClassPage(1); }, [classSearch]);
   useEffect(() => { setHistoryPage(1); }, [historyStudentFilter]);
+  const initialStudentFilterSkippedRef = useRef(false);
+  useEffect(() => {
+    if (!initialStudentFilterSkippedRef.current) {
+      initialStudentFilterSkippedRef.current = true;
+      return;
+    }
+    void loadSecondaryLessons(1, false, historyStudentFilter);
+  }, [historyStudentFilter]);
+
+  useEffect(() => {
+    if (!studentId || !lessonDate) return;
+    const existsLocally = dailyReports.some(
+      (r) => String(r.student_id) === String(studentId) && String(r.date) === String(lessonDate),
+    );
+    if (existsLocally || dailyReportsNextPage === null) return;
+    let cancelled = false;
+    getDailyLessonReports({ student_id: Number(studentId), date: lessonDate, page_size: 5 })
+      .then((res) => {
+        if (cancelled || !res.results?.length) return;
+        setDailyReports((prev) => {
+          const existingIds = new Set(prev.map((r) => r.id));
+          const fresh = res.results.filter((r) => !existingIds.has(r.id));
+          return fresh.length ? [...prev, ...fresh] : prev;
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId, lessonDate]);
   useEffect(() => {
     setAttendancePage(1);
   }, [
@@ -2366,7 +2479,7 @@ const historyGroups = useMemo(() => {
           </div>
 
           <div className="flex items-center gap-3">
-            <IVSClockCard now={clockNow} compact />
+            <IVSClockCard compact />
             <button type="button" onClick={onToggleTheme} className="tp-theme-btn">
               {themeMode === "dark" ? <Sun size={18} /> : <Moon size={18} />}
             </button>
@@ -3645,7 +3758,11 @@ const historyGroups = useMemo(() => {
 
           {/* ── Salary Tab ── */}
           {activeTab === "salary" && salaryEnabled && (
-            <TeacherSalarySelfService />
+            <LazyChunkErrorBoundary>
+              <React.Suspense fallback={<PageSkeleton />}>
+                <TeacherSalarySelfService />
+              </React.Suspense>
+            </LazyChunkErrorBoundary>
           )}
 
           {/* ── Attendance Tab ── */}
@@ -4181,6 +4298,20 @@ const historyGroups = useMemo(() => {
 
               {historyGroups.length > PAGE_SIZE && (
                 <Pagination page={safeHistoryPage} totalPages={historyTotalPages} onPrev={() => setHistoryPage(p => Math.max(1, p - 1))} onNext={() => setHistoryPage(p => Math.min(historyTotalPages, p + 1))} />
+              )}
+              {dailyReportsNextPage !== null && (
+                <div className="flex items-center justify-center pt-2">
+                  <button
+                    type="button"
+                    disabled={dailyReportsLoadingMore}
+                    onClick={() => void loadSecondaryLessons(dailyReportsNextPage, true)}
+                    className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {dailyReportsLoadingMore
+                      ? "Loading older reports..."
+                      : `Load older reports (${dailyReports.length} of ${dailyReportsTotalCount} loaded)`}
+                  </button>
+                </div>
               )}
             </div>
           )}

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
   ClipboardList,
@@ -213,6 +213,9 @@ function getPagedItems<T>(items: T[], page: number, pageSize: number) {
 export default function CoordinatorLessons({ notificationRequestsVersion = 0 }: { notificationRequestsVersion?: number }) {
 const [lessons, setLessons] = useState<LessonPayload[]>([]);
   const [dailyReports, setDailyReports] = useState<DailyLessonReportPayload[]>([]);
+  const [dailyReportsTotalCount, setDailyReportsTotalCount] = useState(0);
+  const [dailyReportsNextPage, setDailyReportsNextPage] = useState<number | null>(null);
+  const [dailyReportsLoadingMore, setDailyReportsLoadingMore] = useState(false);
   const [permissions, setPermissions] = useState<PermissionRow[]>([]);
 
   // Store ALL requests so reviewed ones stay visible after action
@@ -320,29 +323,86 @@ useAcademyWS((data) => {
 
   // ── Data loading ──────────────────────────────────────────
 
+  const dailyReportsEpochRef = useRef(0);
+  const dailyReportsAbortRef = useRef<AbortController | null>(null);
+
+  const buildDailyReportParams = (targetPage: number) => {
+    const params: Parameters<typeof getDailyLessonReports>[0] = {
+      page: targetPage,
+      page_size: 50,
+    };
+    const trimmedSearch = search.trim();
+    if (trimmedSearch) params.search = trimmedSearch;
+    if (selectedMonth !== "all") {
+      const [yStr, mStr] = selectedMonth.split("-");
+      const y = Number(yStr);
+      const m = Number(mStr);
+      if (y && m) {
+        params.year = y;
+        params.month = m;
+      }
+    }
+    if (selectedTeacher !== "all") params.teacher_id = Number(selectedTeacher);
+    if (selectedStudentFilter !== "all") params.student_id = Number(selectedStudentFilter);
+    if (selectedSubject !== "all") params.subject = selectedSubject;
+    if (selectedProgress !== "all") params.progress_status = selectedProgress;
+    if (dateFrom) params.date_from = dateFrom;
+    if (dateTo) params.date_to = dateTo;
+    return params;
+  };
+
+  const fetchDailyReportsPage = async (targetPage = 1, append = false) => {
+    if (append) {
+      setDailyReportsLoadingMore(true);
+    } else if (dailyReportsAbortRef.current) {
+      dailyReportsAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    if (!append) {
+      dailyReportsAbortRef.current = controller;
+    }
+    const epoch = ++dailyReportsEpochRef.current;
+    try {
+      const dailyRes = await getDailyLessonReports(buildDailyReportParams(targetPage), {
+        signal: controller.signal,
+      });
+      if (epoch !== dailyReportsEpochRef.current) return;
+      const nextRows = dailyRes.results || [];
+      setDailyReports((prev) => {
+        if (!append) return nextRows;
+        const existingIds = new Set(prev.map((r) => r.id));
+        return [...prev, ...nextRows.filter((r) => !existingIds.has(r.id))];
+      });
+      setDailyReportsTotalCount(Number(dailyRes.count ?? nextRows.length));
+      setDailyReportsNextPage(dailyRes.next ?? null);
+    } catch (err: any) {
+      if (err?.name === "AbortError") return;
+      throw err;
+    } finally {
+      if (append) setDailyReportsLoadingMore(false);
+    }
+  };
+
   const load = async (silent = false) => {
     try {
       if (!silent) setRefreshing(true);
       setMessage("");
 
       // Fetch ALL request statuses so reviewed ones are not lost
-const [lessonsRes, dailyRes, permissionsRes, requestsRes] = await Promise.all([
+      const [lessonsRes, , permissionsRes, requestsRes] = await Promise.all([
         getLessons(),
-        getDailyLessonReports(),
+        fetchDailyReportsPage(1, false),
         getLessonPermissions({ is_active: true }),
         getLessonAccessRequests({ status: "all" }),
       ]);
 
       setLessons(lessonsRes.results || []);
-      setDailyReports(dailyRes.results || []);
-      setPermissions((permissionsRes.results || []) as PermissionRow[]);
-      setAllRequests(requestsRes.results || []);
-
-      setLessons(lessonsRes.results || []);
       setPermissions((permissionsRes.results || []) as PermissionRow[]);
       setAllRequests(requestsRes.results || []);
     } catch (error: any) {
-      setMessage(error?.message || "Could not load lesson control data.");
+      if (error?.name !== "AbortError") {
+        setMessage(error?.message || "Could not load lesson control data.");
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -350,6 +410,46 @@ const [lessonsRes, dailyRes, permissionsRes, requestsRes] = await Promise.all([
   };
 
   useEffect(() => { void load(); }, []);
+
+  const initialFilterSyncRef = useRef(false);
+  useEffect(() => {
+    if (!initialFilterSyncRef.current) {
+      initialFilterSyncRef.current = true;
+      return;
+    }
+    const delay = search.trim() ? 250 : 0;
+    const timer = window.setTimeout(() => {
+      void fetchDailyReportsPage(1, false).catch(() => undefined);
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [
+    search,
+    selectedMonth,
+    selectedTeacher,
+    selectedStudentFilter,
+    selectedSubject,
+    selectedProgress,
+    dateFrom,
+    dateTo,
+  ]);
+
+  useEffect(() => {
+    if (!selectedStudentId || dailyReportsNextPage === null) return;
+    let cancelled = false;
+    getDailyLessonReports({ student_id: selectedStudentId, page: 1, page_size: 200 })
+      .then((res) => {
+        if (cancelled || !res.results?.length) return;
+        setDailyReports((prev) => {
+          const existingIds = new Set(prev.map((r) => r.id));
+          const fresh = res.results.filter((r) => !existingIds.has(r.id));
+          return fresh.length ? [...prev, ...fresh] : prev;
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedStudentId]);
 
   useEffect(() => {
     saveNumberSet(DISMISSED_ACTIVITY_KEY, dismissedActivityIds);
@@ -1948,6 +2048,20 @@ const { permission: editPerm, locallyGranted: editLocal } = getPermissionForLess
                 totalItems={studentGroups.length}
                 onPageChange={setPage}
               />
+            )}
+            {dailyReportsNextPage !== null && (
+              <div className="mt-4 flex items-center justify-center">
+                <button
+                  type="button"
+                  disabled={dailyReportsLoadingMore}
+                  onClick={() => void fetchDailyReportsPage(dailyReportsNextPage, true)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-extrabold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {dailyReportsLoadingMore
+                    ? "Loading older reports..."
+                    : `Load older reports (${dailyReports.length} of ${dailyReportsTotalCount} loaded)`}
+                </button>
+              </div>
             )}
           </div>
         )}

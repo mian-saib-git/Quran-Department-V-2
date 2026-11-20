@@ -1292,16 +1292,38 @@ export async function createDailyLessonReport(
   });
 }
 
-export async function getDailyLessonReports(params?: {
-  month?: number;
-  year?: number;
-  student_id?: number;
-  teacher_id?: number;
-}): Promise<{ count: number; results: DailyLessonReportPayload[] }> {
+export type DailyLessonReportPageResponse = {
+  count: number;
+  page?: number;
+  page_size?: number;
+  total_pages?: number;
+  next?: number | null;
+  previous?: number | null;
+  results: DailyLessonReportPayload[];
+};
+
+export async function getDailyLessonReports(
+  params?: {
+    month?: number;
+    year?: number;
+    student_id?: number;
+    teacher_id?: number;
+    date?: string;
+    date_from?: string;
+    date_to?: string;
+    subject?: string;
+    progress_status?: string;
+    search?: string;
+    page?: number;
+    page_size?: number;
+  },
+  options?: { signal?: AbortSignal }
+): Promise<DailyLessonReportPageResponse> {
   const suffix = buildQuery(params);
 
-  return request<{ count: number; results: DailyLessonReportPayload[] }>(
-    `/api/academy/daily-lesson-reports/${suffix}`
+  return request<DailyLessonReportPageResponse>(
+    `/api/academy/daily-lesson-reports/${suffix}`,
+    options?.signal ? { signal: options.signal } : undefined
   );
 }
 
@@ -2812,5 +2834,73 @@ export async function updateQuranSalarySettings(
   return request<QuranSalaryConfiguration>("/api/academy/teacher-salary/settings/", {
     method: "PATCH",
     body: JSON.stringify(input),
+  });
+}
+
+export async function updateStudentScheduleInDjango(input: {
+  student_id: string | number;
+  teacher_id: string | number;
+  time_slot: string;
+  class_days: string[];
+}): Promise<{
+  detail: string;
+  student: {
+    id: string;
+    name: string;
+    teacherId: string;
+    timeSlot: string;
+    classType: string;
+    classDays: string[];
+  };
+}> {
+  return request("/api/academy/scheduling/", {
+    method: "POST",
+    body: JSON.stringify({
+      action: "edit_student",
+      student_id: Number(input.student_id),
+      teacher_id: Number(input.teacher_id),
+      time_slot: input.time_slot,
+      class_days: input.class_days,
+    }),
+  });
+}
+
+export async function removeStudentFromClassInDjango(input: {
+  student_id: string | number;
+  teacher_id: string | number;
+  time_slot: string;
+}): Promise<{
+  detail: string;
+  student_id: string;
+  remaining_time_slot: string;
+  removed_count: number;
+}> {
+  return request("/api/academy/scheduling/", {
+    method: "POST",
+    body: JSON.stringify({
+      action: "remove_student",
+      student_id: Number(input.student_id),
+      teacher_id: Number(input.teacher_id),
+      time_slot: input.time_slot,
+    }),
+  });
+}
+
+export async function deleteClassSlotInDjango(input: {
+  teacher_id: string | number;
+  time_slot: string;
+}): Promise<{
+  detail: string;
+  teacher_id: string;
+  time_slot: string;
+  removed_count: number;
+}> {
+  return request("/api/academy/scheduling/", {
+    method: "POST",
+    body: JSON.stringify({
+      action: "delete_class",
+      teacher_id: Number(input.teacher_id),
+      time_slot: input.time_slot,
+    }),
   });
 }

@@ -2,8 +2,10 @@ import React, { memo, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Bell, CheckCheck, CircleCheck, RefreshCw, X, Trash2, ArrowUpRight } from "lucide-react";
 import { authenticatedRequest } from "../services/authenticatedRequest";
-import { getAccessToken, getCurrentUser, SESSION_UPDATED_EVENT, SESSION_EXPIRED_EVENT } from "../services/sessionService";
+import { getCurrentUser, SESSION_UPDATED_EVENT, SESSION_EXPIRED_EVENT } from "../services/sessionService";
 import { navigateFromNotification } from "./notificationNavigation";
+import { useAcademyWS } from "../hooks/useAcademyWS";
+import { useVisibilityPolling } from "../hooks/useVisibilityPolling";
 
 type InboxNotification = {
   id: number;
@@ -16,7 +18,6 @@ type InboxNotification = {
 };
 type InboxResponse = { results: InboxNotification[]; unread_count: number; page: number; has_more: boolean };
 
-const WS_BASE = ((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host);
 const INBOX_REFRESH_EVENT = "ivs:notification-inbox-changed";
 const ACTION_LABELS: Record<string, string> = {
   lesson_requests: "Open requests",
@@ -60,6 +61,13 @@ function NotificationBellInner({ appearance = "default" }: { appearance?: "defau
     setError("");
   }, []);
 
+  const refreshInbox = useCallback(() => {
+    if (!userId || pendingActionRef.current || document.visibilityState === "hidden") return;
+    return fetchInbox().catch(() => {
+      setError("Notifications could not be refreshed.");
+    });
+  }, [userId, fetchInbox]);
+
   useEffect(() => {
     epochRef.current += 1;
     pendingActionRef.current = false;
@@ -77,33 +85,29 @@ function NotificationBellInner({ appearance = "default" }: { appearance?: "defau
       });
     };
     refresh();
-    const poll = window.setInterval(refresh, 30000);
     window.addEventListener("focus", refresh);
     window.addEventListener(INBOX_REFRESH_EVENT, refresh);
-    document.addEventListener("visibilitychange", refresh);
-    let socket: WebSocket | null = null;
-    const token = getAccessToken();
-    if (token) {
-      try {
-        const socketBase = String(WS_BASE).replace(/\/$/, "");
-        socket = new WebSocket(`${socketBase}/ws/academy/?token=${encodeURIComponent(token)}`);
-        socket.onmessage = event => {
-          try {
-            const data = JSON.parse(event.data);
-            if (data.type === "notification_created") refresh();
-          } catch { /* not a notification event */ }
-        };
-      } catch { /* polling is the reliable fallback */ }
-    }
     return () => {
       stopped = true;
-      window.clearInterval(poll);
       window.removeEventListener("focus", refresh);
       window.removeEventListener(INBOX_REFRESH_EVENT, refresh);
-      document.removeEventListener("visibilitychange", refresh);
-      if (socket) socket.close();
     };
   }, [userId, fetchInbox]);
+
+  useVisibilityPolling({
+    enabled: Boolean(userId),
+    connectedIntervalMs: 120_000,
+    disconnectedIntervalMs: 30_000,
+    staleOnVisibleMs: 30_000,
+    onTick: () => refreshInbox(),
+  });
+
+  useAcademyWS((data) => {
+    if (!userId) return;
+    if (data?.type === "notification_created" || (data?.type === "connected" && data?.isReconnect)) {
+      void refreshInbox();
+    }
+  });
 
   const positionPopup = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect();

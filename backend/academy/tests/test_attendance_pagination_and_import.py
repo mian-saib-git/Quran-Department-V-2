@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from accounts.models import Department, Feature, Institution, User
@@ -59,7 +60,7 @@ class QuranFixtureMixin:
 class AttendancePaginationTests(QuranFixtureMixin, TestCase):
     def setUp(self):
         super().setUp()
-        start = date.today() - timedelta(days=4000)
+        start = timezone.localdate() - timedelta(days=4000)
         rows = [
             Attendance(
                 entity_type=Attendance.EntityType.STUDENT,
@@ -128,7 +129,7 @@ class AttendancePaginationTests(QuranFixtureMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["attendance_count"], 4001)
         self.assertLessEqual(len(response.data["attendance"]), 1)
-        self.assertTrue(all(item["date"] == str(date.today()) for item in response.data["attendance"]))
+        self.assertTrue(all(item["date"] == str(timezone.localdate()) for item in response.data["attendance"]))
 
 
 class QuranImportSafetyTests(QuranFixtureMixin, TestCase):

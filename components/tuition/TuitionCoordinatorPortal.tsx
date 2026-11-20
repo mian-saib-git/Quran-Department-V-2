@@ -32,13 +32,17 @@ import {
   LockKeyhole,
 } from "lucide-react";
 
-import TuitionAccountsEnrollment from "./TuitionAccountsEnrollment";
-import TuitionAttendance from "./TuitionAttendance";
-import TuitionReports from "./TuitionReports";
-import TuitionScheduling from "./TuitionScheduling";
-import TuitionInsightsPanel from "./TuitionInsightsPanel";
-import TuitionDepartmentSettingsModal from "./TuitionDepartmentSettingsModal";
-import TuitionAssistantChat, { TuitionAiAvatar } from "./TuitionAssistantChat";
+import { TuitionAiAvatar } from "./TuitionAiAvatar";
+import { PageSkeleton } from "../ui/SkeletonLoaders";
+import { LazyChunkErrorBoundary } from "../ui/LazyChunkErrorBoundary";
+
+const TuitionAccountsEnrollment = React.lazy(() => import("./TuitionAccountsEnrollment"));
+const TuitionAttendance = React.lazy(() => import("./TuitionAttendance"));
+const TuitionReports = React.lazy(() => import("./TuitionReports"));
+const TuitionScheduling = React.lazy(() => import("./TuitionScheduling"));
+const TuitionInsightsPanel = React.lazy(() => import("./TuitionInsightsPanel"));
+const TuitionDepartmentSettingsModal = React.lazy(() => import("./TuitionDepartmentSettingsModal"));
+const TuitionAssistantChat = React.lazy(() => import("./TuitionAssistantChat"));
 import { showFeatureLocked } from "../../services/featureAccess";
 import {
   getTuitionDashboard,
@@ -1131,13 +1135,19 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
 
         {mobileOpen && <button type="button" onClick={() => setMobileOpen(false)} className="tuition-mobile-sidebar-backdrop fixed inset-0 z-[60] bg-slate-950/30 md:hidden" aria-label="Close menu" />}
 
-        <TuitionAssistantChat
-          open={tuitionAssistantOpen}
-          onClose={() => setTuitionAssistantOpen(false)}
-          departmentId={department.id}
-          departmentName={department.name || "Tuition Department"}
-          dashboard={dashboard}
-        />
+        {tuitionAssistantOpen && (
+          <LazyChunkErrorBoundary fallback={null}>
+            <React.Suspense fallback={null}>
+              <TuitionAssistantChat
+                open={tuitionAssistantOpen}
+                onClose={() => setTuitionAssistantOpen(false)}
+                departmentId={department.id}
+                departmentName={department.name || "Tuition Department"}
+                dashboard={dashboard}
+              />
+            </React.Suspense>
+          </LazyChunkErrorBoundary>
+        )}
 
         <main className="tuition-portal-main flex-1 flex flex-col h-screen overflow-hidden relative">
           <header className="tuition-portal-header mx-3 mb-1.5 mt-2 md:mx-4 md:mt-3">
@@ -1195,7 +1205,11 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
                   </div>
                 </section>
 
-                <TuitionInsightsPanel dashboard={dashboard} />
+                <LazyChunkErrorBoundary fallback={null}>
+                  <React.Suspense fallback={null}>
+                    <TuitionInsightsPanel dashboard={dashboard} />
+                  </React.Suspense>
+                </LazyChunkErrorBoundary>
 
                 {dashboardAttendanceMessage && (
                   <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900 shadow-sm dark:border-amber-900/70 dark:bg-amber-950/35 dark:text-amber-200">
@@ -1255,37 +1269,57 @@ ${sidebarEdgeHover ? "is-sidebar-open" : ""}
             )}
 
             {activeTab === "accounts" && canOpenTab(nav[1]) && (
-              <TuitionAccountsEnrollment
-                departmentId={department.id}
-                features={features}
-                currentUserId={profileUser?.id}
-                currentUserRole={profileUser?.role}
-                editTarget={dashboardAccountEditTarget}
-                onEditTargetHandled={() => setDashboardAccountEditTarget(null)}
-              />
+              <LazyChunkErrorBoundary>
+                <React.Suspense fallback={<PageSkeleton />}>
+                  <TuitionAccountsEnrollment
+                    departmentId={department.id}
+                    features={features}
+                    currentUserId={profileUser?.id}
+                    currentUserRole={profileUser?.role}
+                    editTarget={dashboardAccountEditTarget}
+                    onEditTargetHandled={() => setDashboardAccountEditTarget(null)}
+                  />
+                </React.Suspense>
+              </LazyChunkErrorBoundary>
             )}
 
             {activeTab === "scheduling" && canOpenTab(nav[2]) && (
-              <TuitionScheduling departmentId={department.id} features={features} />
+              <LazyChunkErrorBoundary>
+                <React.Suspense fallback={<PageSkeleton />}>
+                  <TuitionScheduling departmentId={department.id} features={features} />
+                </React.Suspense>
+              </LazyChunkErrorBoundary>
             )}
 
             {activeTab === "attendance" && canOpenTab(nav[3]) && (
-              <TuitionAttendance departmentId={department.id} features={features} />
+              <LazyChunkErrorBoundary>
+                <React.Suspense fallback={<PageSkeleton />}>
+                  <TuitionAttendance departmentId={department.id} features={features} />
+                </React.Suspense>
+              </LazyChunkErrorBoundary>
             )}
 
             {activeTab === "reports" && canOpenTab(nav[4]) && (
-              <TuitionReports departmentId={department.id} features={features} generatedBy={(() => { const p = profileUser as any; const values = [p?.full_name, p?.display_name, p?.name, [p?.first_name, p?.last_name].filter(Boolean).join(" "), p?.first_name, p?.username].map((value) => String(value || "").trim()).filter(Boolean); return values.sort((a, b) => b.length - a.length)[0] || "Tuition Coordinator"; })()} />
+              <LazyChunkErrorBoundary>
+                <React.Suspense fallback={<PageSkeleton />}>
+                  <TuitionReports departmentId={department.id} features={features} generatedBy={(() => { const p = profileUser as any; const values = [p?.full_name, p?.display_name, p?.name, [p?.first_name, p?.last_name].filter(Boolean).join(" "), p?.first_name, p?.username].map((value) => String(value || "").trim()).filter(Boolean); return values.sort((a, b) => b.length - a.length)[0] || "Tuition Coordinator"; })()} />
+                </React.Suspense>
+              </LazyChunkErrorBoundary>
             )}
           </div>
 
           {settingsOpen && isDepartmentAdmin && (
-            <TuitionDepartmentSettingsModal
-              user={profileUser as any}
-              themeMode={themeMode}
-              onToggleTheme={onToggleTheme}
-              onClose={() => setSettingsOpen(false)}
-              onProfileUpdated={(profile) => setProfileUser(profile as any)}
-            />
+            <LazyChunkErrorBoundary>
+              <React.Suspense fallback={null}>
+                <TuitionDepartmentSettingsModal
+                  user={profileUser as any}
+                  themeMode={themeMode}
+                  onToggleTheme={onToggleTheme}
+                  onClose={() => setSettingsOpen(false)}
+                  onProfileUpdated={(profile) => setProfileUser(profile as any)}
+                />
+              </React.Suspense>
+            </LazyChunkErrorBoundary>
           )}
         </main>
       </div>

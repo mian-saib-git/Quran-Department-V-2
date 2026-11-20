@@ -1,9 +1,12 @@
 import IVSClockCard from "../IVSClockCard";
 import NotificationBell from "../NotificationBell";
 import { useCompleteAttendance } from "../../hooks/useCompleteAttendance";
+import { useMinuteNow } from "../../hooks/useMinuteNow";
+import { useVisibilityPolling } from "../../hooks/useVisibilityPolling";
+import { LiveCountdown } from "../ui/LiveCountdown";
 import { getAllTuitionTeacherAttendance } from "../../services/tuitionApiService";
 // IVS_TUITION_TEACHER_PORTAL_V53_DAILY_CLASSES_MOBILE_POLISH
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowRight,
@@ -281,7 +284,7 @@ export default function TuitionTeacherPortal({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [now, setNow] = useState(new Date());
+  const now = useMinuteNow();
 
   const [classSubject, setClassSubject] = useState("all");
   const [classSearch, setClassSearch] = useState("");
@@ -296,7 +299,11 @@ export default function TuitionTeacherPortal({
   const [attendanceSearch, setAttendanceSearch] = useState("");
   const [attendancePage, setAttendancePage] = useState(1);
 
+  const inFlightRef = useRef(false);
+
   const loadPortal = async (silent = false) => {
+    if (silent && inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       if (!silent) setRefreshing(true);
       const response = await getTuitionTeacherPortal(departmentId);
@@ -305,6 +312,7 @@ export default function TuitionTeacherPortal({
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : "Could not load the Tuition Teacher Portal.");
     } finally {
+      inFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
@@ -312,18 +320,19 @@ export default function TuitionTeacherPortal({
 
   useEffect(() => {
     void loadPortal();
-    const refreshTimer = window.setInterval(() => void loadPortal(true), 30_000);
-    const clockTimer = window.setInterval(() => setNow(new Date()), 1_000);
-    return () => {
-      window.clearInterval(refreshTimer);
-      window.clearInterval(clockTimer);
-    };
   }, [departmentId]);
+
+  useVisibilityPolling({
+    connectedIntervalMs: 120_000,
+    disconnectedIntervalMs: 45_000,
+    staleOnVisibleMs: 30_000,
+    onTick: () => loadPortal(true),
+  });
 
   useAcademyWS((event) => {
     const type = String(event?.type || "");
     if (
-      type === "connected" ||
+      (type === "connected" && Boolean(event?.isReconnect)) ||
       type === "academy.update" ||
       type === "academy_update" ||
       type === "tuition_attendance_updated" ||
@@ -572,7 +581,7 @@ export default function TuitionTeacherPortal({
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3">
-              <PortalClock now={now} />
+              <PortalClock />
               <div className="sm:hidden"><NotificationBell /></div>
               <button
                 type="button"
@@ -688,8 +697,8 @@ export default function TuitionTeacherPortal({
   );
 }
 
-function PortalClock({ now }: { now: Date }) {
-  return <div className="hidden sm:block"><IVSClockCard now={now} compact /></div>;
+function PortalClock() {
+  return <div className="hidden sm:block"><IVSClockCard compact /></div>;
 }
 
 function OverviewTab({
@@ -1129,7 +1138,7 @@ function ClassRow({ row, compact = false, spotlight = false }: { row: { item: Tu
           {timing.isUpcoming && (
             <span className="flex max-w-full items-center gap-1.5 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-black text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300">
               <Clock3 size={14} className="shrink-0" />
-              <span className="truncate">Starts in {countdownLabel(timing.secondsUntil)}</span>
+              <span className="truncate"><LiveCountdown targetTimeMs={timing.start.getTime()} prefix="Starts in " /></span>
             </span>
           )}
           {item.meeting_link && (

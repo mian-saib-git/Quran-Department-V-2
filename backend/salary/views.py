@@ -97,6 +97,7 @@ from salary.serializers import (
     SalaryRateTierSerializer,
     SalaryTeachingPlanSerializer,
     TeacherPolicyAssignmentSerializer,
+    TeacherPolicyAssignmentListSerializer,
     BulkTeacherPolicyAssignmentSerializer,
     BulkTeacherPolicyUnassignSerializer,
     TeacherSalaryOverrideSerializer,
@@ -1512,6 +1513,15 @@ class TeacherPolicyAssignmentViewSet(viewsets.ModelViewSet):
     serializer_class = TeacherPolicyAssignmentSerializer
     permission_classes = [IsAuthenticated, IsSalaryPolicyAdminOrReadOnly]
 
+    def _wants_snapshot(self):
+        flag = str(self.request.query_params.get("include_snapshot", "") or "").strip().lower()
+        return flag in {"true", "1"}
+
+    def get_serializer_class(self):
+        if getattr(self, "action", None) == "list" and not self._wants_snapshot():
+            return TeacherPolicyAssignmentListSerializer
+        return TeacherPolicyAssignmentSerializer
+
     def get_queryset(self):
         user = self.request.user
         role = str(getattr(user, "role", "") or "").lower()
@@ -1519,11 +1529,13 @@ class TeacherPolicyAssignmentViewSet(viewsets.ModelViewSet):
         if getattr(self, "action", None) and self.action != "list":
             return self.queryset
 
+        base_qs = self.queryset if self._wants_snapshot() else self.queryset.defer("archived_policy_snapshot")
+
         # Super Admin / Platform Admin
         if getattr(user, "is_superuser", False) or role == User.Role.PLATFORM_ADMIN:
-            qs = self.queryset
+            qs = base_qs
         elif role == User.Role.INSTITUTION_ADMIN:
-            qs = self.queryset.filter(department__institution_id=user.institution_id)
+            qs = base_qs.filter(department__institution_id=user.institution_id)
         else:
             # Department Admin
             user_dept_ids = []
@@ -1537,8 +1549,8 @@ class TeacherPolicyAssignmentViewSet(viewsets.ModelViewSet):
             user_dept_ids.extend(sec_dept_ids)
             user_dept_ids = list(set(user_dept_ids))
             if not user_dept_ids:
-                return self.queryset.none()
-            qs = self.queryset.filter(department_id__in=user_dept_ids)
+                return base_qs.none()
+            qs = base_qs.filter(department_id__in=user_dept_ids)
 
         dept_id = self.request.query_params.get("department_id")
         if dept_id:
@@ -1559,6 +1571,41 @@ class TeacherPolicyAssignmentViewSet(viewsets.ModelViewSet):
             )
 
         return qs.order_by("-effective_from", "-id")
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        if "page" in request.query_params or "page_size" in request.query_params:
+            raw_page = request.query_params.get("page", 1)
+            raw_size = request.query_params.get("page_size", 50)
+            try:
+                page = int(raw_page)
+                if page < 1:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return Response({"page": "Use a positive integer."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                page_size = int(raw_size)
+                if page_size < 1:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return Response({"page_size": "Use a positive integer."}, status=status.HTTP_400_BAD_REQUEST)
+            page_size = min(page_size, 200)
+            total_count = queryset.count()
+            total_pages = max(1, (total_count + page_size - 1) // page_size)
+            offset = (page - 1) * page_size
+            serializer = self.get_serializer(queryset[offset : offset + page_size], many=True)
+            return Response({
+                "count": total_count,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "next": page + 1 if page < total_pages else None,
+                "previous": page - 1 if page > 1 else None,
+                "results": serializer.data,
+            })
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def perform_create(self, serializer):
         user = self.request.user

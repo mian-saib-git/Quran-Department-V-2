@@ -11,8 +11,6 @@ const EMPTY_STATE: AppState = {
   attendance: [],
 };
 
-let lastSyncedAttendanceJson = "";
-
 const safeParse = (raw: string | null): any | null => {
   if (!raw) return null;
 
@@ -185,30 +183,57 @@ const readCache = (): AppState | null => {
   return null;
 };
 
-const fetchAcademyState = async (dashboardOnly = false): Promise<AppState> => {
+export type LoadStateOptions = {
+  force?: boolean;
+  scopeKey?: string;
+};
+
+const inFlightAcademyState = new Map<string, Promise<AppState>>();
+
+const fetchAcademyState = async (
+  dashboardOnly = false,
+  options?: LoadStateOptions
+): Promise<AppState> => {
   if (!hasAuthToken()) {
     throw new Error("No auth token found. Please login again.");
   }
 
-  const data = await withTimeout(authenticatedRequest<AppState>(
-    `/api/academy/state/${dashboardOnly ? "?dashboard=true" : ""}`
-  ), 60000);
-  const normalized = normalizeState(data);
-  normalized.isPartial = dashboardOnly;
+  const scopePart = options?.scopeKey ? String(options.scopeKey) : "";
+  const requestKey = `${loadSession()?.user?.id || "anon"}:${getSavedAccessToken()}:${scopePart}:${dashboardOnly ? "partial" : "full"}`;
+  if (!options?.force) {
+    const existing = inFlightAcademyState.get(requestKey);
+    if (existing) {
+      return existing;
+    }
+  }
 
-  lastSyncedAttendanceJson = JSON.stringify(normalized.attendance);
+  const promise = (async () => {
+    const data = await withTimeout(authenticatedRequest<AppState>(
+      `/api/academy/state/${dashboardOnly ? "?dashboard=true" : ""}`
+    ), 60000);
+    const normalized = normalizeState(data);
+    normalized.isPartial = dashboardOnly;
 
-  return normalized;
+    return normalized;
+  })().finally(() => {
+    if (inFlightAcademyState.get(requestKey) === promise) {
+      inFlightAcademyState.delete(requestKey);
+    }
+  });
+
+  inFlightAcademyState.set(requestKey, promise);
+  return promise;
 };
 
-export const loadState = async (dashboardOnly = false): Promise<AppState> => {
-  const cached = readCache();
-
+export const loadState = async (
+  dashboardOnly = false,
+  options?: LoadStateOptions
+): Promise<AppState> => {
   // When logged in, always prefer the server state.
   // This prevents old local cache from showing stale attendance after refresh.
   if (hasAuthToken()) {
     try {
-      const fresh = await fetchAcademyState(dashboardOnly);
+      const fresh = await fetchAcademyState(dashboardOnly, options);
       if (!dashboardOnly) {
         saveCache(fresh);
       }
@@ -224,7 +249,7 @@ export const loadState = async (dashboardOnly = false): Promise<AppState> => {
     }
   }
 
-  return cached || EMPTY_STATE;
+  return readCache() || EMPTY_STATE;
 };
 
 export const saveState = async (state: AppState): Promise<void> => {

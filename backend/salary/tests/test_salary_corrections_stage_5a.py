@@ -849,7 +849,7 @@ class SalaryCorrectionsStage5ATests(TestCase):
 
         prev = calculate_teacher_salary_preview(self.quran_dept, self.teacher_profile, 2026, 11)
         self.assertFalse(prev["is_calculation_complete"])
-        self.assertTrue(any("Basic salary amount is not configured" in r for r in prev["incompleteness_reasons"]))
+        self.assertTrue(any("Basic monthly salary matrix cell is missing" in r for r in prev["incompleteness_reasons"]))
         self.assertEqual(prev["earnings"]["basic_salary_earnings"], "0.00")
 
     def test_14_published_basic_compensation_configuration_remains_immutable(self):

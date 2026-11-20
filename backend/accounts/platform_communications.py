@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
 from .models import (
@@ -27,7 +27,7 @@ class UserScope:
     department_ids: set[int]
 
 
-def user_scope(user) -> UserScope:
+def _direct_user_scope(user) -> UserScope:
     institution_ids: set[int] = set()
     department_ids: set[int] = set()
 
@@ -41,16 +41,86 @@ def user_scope(user) -> UserScope:
         if department and getattr(department, "institution_id", None):
             institution_ids.add(int(department.institution_id))
 
+    return UserScope(institution_ids=institution_ids, department_ids=department_ids)
+
+
+def user_scope_from_links(user, role_links: Iterable[UserDepartmentRole]) -> UserScope:
+    """Build a UserScope from already-fetched active UserDepartmentRole rows."""
+    scope = _direct_user_scope(user)
+    for link in role_links:
+        if not getattr(link, "is_active", True):
+            continue
+        link_institution_id = getattr(link, "institution_id", None)
+        link_department_id = getattr(link, "department_id", None)
+        if link_institution_id:
+            scope.institution_ids.add(int(link_institution_id))
+        if link_department_id:
+            scope.department_ids.add(int(link_department_id))
+    return scope
+
+
+def user_scope(user) -> UserScope:
+    scope = _direct_user_scope(user)
+
     links = UserDepartmentRole.objects.filter(user=user, is_active=True).values_list(
         "institution_id", "department_id"
     )
     for link_institution_id, link_department_id in links:
         if link_institution_id:
-            institution_ids.add(int(link_institution_id))
+            scope.institution_ids.add(int(link_institution_id))
         if link_department_id:
-            department_ids.add(int(link_department_id))
+            scope.department_ids.add(int(link_department_id))
 
-    return UserScope(institution_ids=institution_ids, department_ids=department_ids)
+    return scope
+
+
+def _scope_query_for_user(user, model_cls, *, scope: UserScope | None = None) -> Q:
+    """Build a Q filter matching platform, institution, or department scope.
+
+    When a pre-computed UserScope is not supplied, active UserDepartmentRole
+    assignments are checked via SQL EXISTS subqueries so the caller executes a
+    single database query with fresh authorization data.
+    """
+    scope_query = Q(scope_type=model_cls.ScopeType.PLATFORM)
+
+    if scope is not None:
+        if scope.institution_ids:
+            scope_query |= Q(
+                scope_type=model_cls.ScopeType.INSTITUTION,
+                institution_id__in=scope.institution_ids,
+            )
+        if scope.department_ids:
+            scope_query |= Q(
+                scope_type=model_cls.ScopeType.DEPARTMENT,
+                department_id__in=scope.department_ids,
+            )
+        return scope_query
+
+    direct = _direct_user_scope(user)
+
+    inst_match = Exists(
+        UserDepartmentRole.objects.filter(
+            user=user,
+            is_active=True,
+            institution_id=OuterRef("institution_id"),
+        )
+    )
+    if direct.institution_ids:
+        inst_match = Q(institution_id__in=direct.institution_ids) | inst_match
+    scope_query |= Q(scope_type=model_cls.ScopeType.INSTITUTION, institution_id__isnull=False) & inst_match
+
+    dept_match = Exists(
+        UserDepartmentRole.objects.filter(
+            user=user,
+            is_active=True,
+            department_id=OuterRef("department_id"),
+        )
+    )
+    if direct.department_ids:
+        dept_match = Q(department_id__in=direct.department_ids) | dept_match
+    scope_query |= Q(scope_type=model_cls.ScopeType.DEPARTMENT, department_id__isnull=False) & dept_match
+
+    return scope_query
 
 
 def _currently_active_filter(now=None) -> Q:
@@ -85,24 +155,13 @@ def maintenance_payload(item: PlatformMaintenanceWindow | None) -> dict:
     }
 
 
-def active_maintenance_for_user(user) -> PlatformMaintenanceWindow | None:
+def active_maintenance_for_user(user, *, scope: UserScope | None = None) -> PlatformMaintenanceWindow | None:
     if not user or not getattr(user, "is_authenticated", False):
         return None
     if getattr(user, "is_superuser", False) or getattr(user, "role", "") == User.Role.PLATFORM_ADMIN:
         return None
 
-    scope = user_scope(user)
-    scope_query = Q(scope_type=PlatformMaintenanceWindow.ScopeType.PLATFORM)
-    if scope.institution_ids:
-        scope_query |= Q(
-            scope_type=PlatformMaintenanceWindow.ScopeType.INSTITUTION,
-            institution_id__in=scope.institution_ids,
-        )
-    if scope.department_ids:
-        scope_query |= Q(
-            scope_type=PlatformMaintenanceWindow.ScopeType.DEPARTMENT,
-            department_id__in=scope.department_ids,
-        )
+    scope_query = _scope_query_for_user(user, PlatformMaintenanceWindow, scope=scope)
 
     items = list(
         PlatformMaintenanceWindow.objects.filter(_currently_active_filter())
@@ -158,25 +217,14 @@ def notice_payload(item: PlatformNotice) -> dict:
     }
 
 
-def active_notices_for_user(user) -> list[PlatformNotice]:
+def active_notices_for_user(user, *, scope: UserScope | None = None) -> list[PlatformNotice]:
     if not user or not getattr(user, "is_authenticated", False):
         return []
     if getattr(user, "is_superuser", False) or getattr(user, "role", "") == User.Role.PLATFORM_ADMIN:
         return []
 
     role = str(getattr(user, "role", "") or "")
-    scope = user_scope(user)
-    scope_query = Q(scope_type=PlatformNotice.ScopeType.PLATFORM)
-    if scope.institution_ids:
-        scope_query |= Q(
-            scope_type=PlatformNotice.ScopeType.INSTITUTION,
-            institution_id__in=scope.institution_ids,
-        )
-    if scope.department_ids:
-        scope_query |= Q(
-            scope_type=PlatformNotice.ScopeType.DEPARTMENT,
-            department_id__in=scope.department_ids,
-        )
+    scope_query = _scope_query_for_user(user, PlatformNotice, scope=scope)
 
     queryset = (
         PlatformNotice.objects.filter(_currently_active_filter())

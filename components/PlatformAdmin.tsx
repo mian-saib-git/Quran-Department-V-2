@@ -36,7 +36,6 @@ import {
   X,
 } from "lucide-react";
 
-import DepartmentSettings from "./DepartmentSettings";
 import {
   ApplicationSettingsPanel,
   AuditLogsPanel,
@@ -44,9 +43,6 @@ import {
   PortalAdministratorsPanel,
   SystemHealthPanel,
 } from "./platform/PlatformAdminTools";
-import PlatformCommunicationsPanel from "./platform/PlatformCommunicationsPanel";
-import PlatformAnalyticsOverview from "./platform/PlatformAnalyticsOverview";
-import PlatformSalaryApprovals from "./platform/PlatformSalaryApprovals";
 import {
   createPlatformDepartment,
   createPlatformInstitution,
@@ -60,6 +56,12 @@ import {
 } from "../services/djangoApiService";
 
 import { PageSkeleton } from "./ui/SkeletonLoaders";
+import { LazyChunkErrorBoundary } from "./ui/LazyChunkErrorBoundary";
+
+const DepartmentSettings = React.lazy(() => import("./DepartmentSettings"));
+const PlatformCommunicationsPanel = React.lazy(() => import("./platform/PlatformCommunicationsPanel"));
+const PlatformAnalyticsOverview = React.lazy(() => import("./platform/PlatformAnalyticsOverview"));
+const PlatformSalaryApprovals = React.lazy(() => import("./platform/PlatformSalaryApprovals"));
 type PlatformSection =
   | "overview"
   | "institutions"
@@ -973,10 +975,20 @@ export default function PlatformAdmin({
               </div>
             )}
 
-            {activeSection === "overview" && <PlatformAnalyticsOverview />}
+            {activeSection === "overview" && (
+              <LazyChunkErrorBoundary>
+                <React.Suspense fallback={<PageSkeleton />}>
+                  <PlatformAnalyticsOverview />
+                </React.Suspense>
+              </LazyChunkErrorBoundary>
+            )}
 
             {activeSection === "salary_approvals" && (
-              <PlatformSalaryApprovals departments={departments} />
+              <LazyChunkErrorBoundary>
+                <React.Suspense fallback={<PageSkeleton />}>
+                  <PlatformSalaryApprovals departments={departments} />
+                </React.Suspense>
+              </LazyChunkErrorBoundary>
             )}
 
             {activeSection === "institutions" && (
@@ -1024,7 +1036,13 @@ export default function PlatformAdmin({
 
             {activeSection === "portal_admins" && <PortalAdministratorsPanel />}
 
-            {activeSection === "communications" && <PlatformCommunicationsPanel />}
+            {activeSection === "communications" && (
+              <LazyChunkErrorBoundary>
+                <React.Suspense fallback={<PageSkeleton />}>
+                  <PlatformCommunicationsPanel />
+                </React.Suspense>
+              </LazyChunkErrorBoundary>
+            )}
 
             {activeSection === "backups" && <BackupRestorePanel />}
 
@@ -1634,12 +1652,16 @@ function InstitutionWorkspace({
         </div>
 
         <div className="overflow-visible p-3 sm:p-4 md:p-6">
-          <DepartmentSettings
-            departmentId={selectedDepartment.id}
-            embedded
-            searchQuery={permissionSearch}
-            onSearchQueryChange={onPermissionSearch}
-          />
+          <LazyChunkErrorBoundary>
+            <React.Suspense fallback={<PageSkeleton />}>
+              <DepartmentSettings
+                departmentId={selectedDepartment.id}
+                embedded
+                searchQuery={permissionSearch}
+                onSearchQueryChange={onPermissionSearch}
+              />
+            </React.Suspense>
+          </LazyChunkErrorBoundary>
         </div>
       </section>
     );

@@ -253,6 +253,9 @@ export default function Lanyard({
   const [viewportWidth, setViewportWidth] = useState(
     () => (typeof window !== "undefined" ? window.innerWidth : 1440),
   );
+  const [isPageVisible, setIsPageVisible] = useState(
+    () => (typeof document === "undefined" ? true : document.visibilityState !== "hidden"),
+  );
 
   useEffect(() => {
     const handleResize = () => setViewportWidth(window.innerWidth);
@@ -260,8 +263,17 @@ export default function Lanyard({
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  useEffect(() => {
+    const handleVisibility = () => {
+      setIsPageVisible(document.visibilityState !== "hidden");
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
+
   const profile = useMemo(() => resolveProfile(viewportWidth), [viewportWidth]);
   const isMobile = profile.name === "mobile";
+  const simulationActive = interactive && isPageVisible;
   const cameraPosition = useMemo<Vector3Tuple>(
     () => [position[0], position[1], position[2] + profile.cameraZOffset],
     [position, profile.cameraZOffset],
@@ -277,7 +289,7 @@ export default function Lanyard({
       return {
         ...manager,
         compute: (event: any, currentState: any) => {
-          const source = eventSource?.current || currentState.gl.domElement;
+          const source = currentState.gl.domElement || eventSource?.current;
           const bounds = source.getBoundingClientRect();
           const width = Math.max(bounds.width, 1);
           const height = Math.max(bounds.height, 1);
@@ -295,8 +307,9 @@ export default function Lanyard({
   return (
     <div className={`lanyard-wrapper lanyard-${profile.name} ${interactive ? "" : "is-noninteractive"} ${className}`.trim()}>
       <Canvas
+        frameloop={simulationActive ? "always" : "never"}
         camera={{ position: cameraPosition, fov }}
-        dpr={[1, isMobile ? 1.15 : profile.name === "tablet" ? 1.4 : 1.8]}
+        dpr={[1, isMobile ? 1.15 : profile.name === "tablet" ? 1.35 : 1.5]}
         gl={{ alpha: transparent, antialias: !isMobile }}
         eventSource={eventSource}
         events={pointerEventFactory}
@@ -307,7 +320,11 @@ export default function Lanyard({
       >
         <ambientLight intensity={Math.PI * 0.72} />
         <Suspense fallback={null}>
-          <Physics gravity={effectiveGravity} timeStep={isMobile ? 1 / 30 : 1 / 60}>
+          <Physics
+            paused={!simulationActive}
+            gravity={effectiveGravity}
+            timeStep={isMobile ? 1 / 30 : 1 / 60}
+          >
             <Band
               isMobile={isMobile}
               profile={profile}
@@ -320,7 +337,7 @@ export default function Lanyard({
               safeReveal={safeReveal}
             />
           </Physics>
-          <Environment blur={0.72}>
+          <Environment frames={1} resolution={isMobile ? 64 : 128} blur={0.72}>
             <Lightformer intensity={2.5} color="white" position={[0, -1, 5]} rotation={[0, 0, Math.PI / 3]} scale={[100, 0.1, 1]} />
             <Lightformer intensity={3} color="#dbeafe" position={[-2, 1, 2]} rotation={[0, 0, Math.PI / 3]} scale={[80, 0.2, 1]} />
             <Lightformer intensity={4} color="#c7d2fe" position={[3, 2, 2]} rotation={[0, 0, Math.PI / 3]} scale={[80, 0.2, 1]} />
@@ -386,6 +403,15 @@ function Band({
   const frontTexture = useTexture(frontImage || BLANK_PIXEL);
   const backTexture = useTexture(backImage || BLANK_PIXEL);
   const processedBandTexture = useMemo(() => buildRibbonTexture(), []);
+  const lastRibbonHook = useRef(new THREE.Vector3(Infinity, Infinity, Infinity)).current;
+  const lastRibbonJ3 = useRef(new THREE.Vector3(Infinity, Infinity, Infinity)).current;
+  const ribbonSettledFramesRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      processedBandTexture.dispose();
+    };
+  }, [processedBandTexture]);
 
   useEffect(() => fitTexture(frontTexture, imageFit), [frontTexture, imageFit]);
   useEffect(() => fitTexture(backTexture, imageFit), [backTexture, imageFit]);
@@ -437,6 +463,7 @@ function Band({
     previousInteractive.current = interactive;
     if (!interactive || wasInteractive) return undefined;
 
+    ribbonSettledFramesRef.current = 0;
     let revealFrame = 0;
     let readyFrame = 0;
     if (safeReveal) setRibbonReady(false);
@@ -576,9 +603,13 @@ function Band({
     let stableDragActive = false;
 
     if (dragged && card.current) {
+      ribbonSettledFramesRef.current = 0;
       const intersection = state.raycaster.ray.intersectPlane(dragged.plane, dragPoint);
       if (intersection) {
-        [card, j1, j2, j3].forEach((ref) => ref.current?.wakeUp());
+        card.current?.wakeUp();
+        j1.current?.wakeUp();
+        j2.current?.wakeUp();
+        j3.current?.wakeUp();
         tempOffset.copy(intersection).sub(dragged.offset);
 
         if (profile.name === "mobile") {
@@ -660,17 +691,21 @@ function Band({
     }
 
     if (!stableDragActive) {
-      [j1, j2, j3].forEach((ref) => {
-        if (!ref.current.lerped) {
-          ref.current.lerped = new THREE.Vector3().copy(ref.current.translation());
+      const stepJoint = (body: any) => {
+        if (!body) return;
+        if (!body.lerped) {
+          body.lerped = new THREE.Vector3().copy(body.translation());
         }
-        const distance = ref.current.lerped.distanceTo(ref.current.translation());
+        const distance = body.lerped.distanceTo(body.translation());
         const clampedDistance = Math.max(0.1, Math.min(1, distance));
-        ref.current.lerped.lerp(
-          ref.current.translation(),
+        body.lerped.lerp(
+          body.translation(),
           delta * (minSpeed + clampedDistance * (maxSpeed - minSpeed)),
         );
-      });
+      };
+      stepJoint(j1.current);
+      stepJoint(j2.current);
+      stepJoint(j3.current);
     }
 
     const translation = card.current.translation();
@@ -754,13 +789,31 @@ function Band({
       curve.points[6].copy(stableFixed);
     }
 
-    band.current.geometry.setPoints(
-      curve.getPoints(safeReveal ? Math.min(profile.curvePoints, 48) : profile.curvePoints),
-    );
+    const hookDeltaSq = hookWorld.distanceToSquared(lastRibbonHook);
+    const j3DeltaSq = j3.current.lerped.distanceToSquared(lastRibbonJ3);
+    const isRibbonSettled =
+      !dragged &&
+      ribbonReady &&
+      hookDeltaSq < 1e-7 &&
+      j3DeltaSq < 1e-7 &&
+      ribbonSettledFramesRef.current >= 5;
+
+    if (!isRibbonSettled) {
+      if (!dragged && ribbonReady && hookDeltaSq < 1e-7 && j3DeltaSq < 1e-7) {
+        ribbonSettledFramesRef.current += 1;
+      } else {
+        ribbonSettledFramesRef.current = 0;
+      }
+      lastRibbonHook.copy(hookWorld);
+      lastRibbonJ3.copy(j3.current.lerped);
+      band.current.geometry.setPoints(
+        curve.getPoints(safeReveal ? Math.min(profile.curvePoints, 48) : profile.curvePoints),
+      );
+    }
 
     ang.copy(card.current.angvel());
     rot.copy(card.current.rotation());
-    if (!dragged) {
+    if (!dragged && Math.abs(rot.y) > 0.015) {
       card.current.setAngvel({ x: ang.x, y: ang.y - rot.y * 0.25, z: ang.z });
     }
   });

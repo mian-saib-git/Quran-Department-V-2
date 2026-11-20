@@ -96,10 +96,16 @@ function latestOperationalAttendanceDate(
   return localDateInputValue(localToday);
 }
 
+const sharedCollator = new Intl.Collator();
+const compareText = (a: string, b: string) => (a === b ? 0 : sharedCollator.compare(a, b));
+const compareTimeSlot = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
 function attendanceDateOnly(value: unknown): string {
   const text = String(value ?? "").trim();
-  const match = text.match(/^\d{4}-\d{2}-\d{2}/);
-  return match?.[0] ?? "";
+  if (text.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(text)) {
+    return text.slice(0, 10);
+  }
+  return "";
 }
 
 function studentExpectedOnAttendanceDate(
@@ -107,20 +113,23 @@ function studentExpectedOnAttendanceDate(
   attendanceDate: string,
 ): boolean {
   const row = (student ?? {}) as Record<string, unknown>;
-  const startCandidates = [
+  // The strict lower bound is the latest known enrollment start/creation date.
+  let effectiveStart = "";
+  const startFields = [
     row.attendanceStartDate,
     row.enrollmentStartDate,
     row.enrollment_start_date,
     row.attendanceCreatedDate,
     row.enrollmentCreatedAt,
     row.enrollment_created_at,
-  ]
-    .map(attendanceDateOnly)
-    .filter(Boolean)
-    .sort();
+  ];
+  for (let i = 0; i < startFields.length; i += 1) {
+    const parsed = attendanceDateOnly(startFields[i]);
+    if (parsed && parsed > effectiveStart) {
+      effectiveStart = parsed;
+    }
+  }
 
-  // The strict lower bound is the latest known enrollment start/creation date.
-  const effectiveStart = startCandidates.at(-1) ?? "";
   const effectiveEnd = attendanceDateOnly(
     row.attendanceEndDate ??
       row.enrollmentEndDate ??
@@ -133,6 +142,162 @@ function studentExpectedOnAttendanceDate(
 }
 const defaultTeacherClassKeyForStudent = (student: Student) =>
   String(student.timeSlot || "");
+
+export function normalizeEditorClassKey(
+  entityType: EntityType,
+  classKey?: string,
+): string {
+  return entityType === EntityType.TEACHER
+    ? String(classKey || "").trim().slice(0, 5)
+    : "";
+}
+
+export function attendanceRecordTargetKey(target: {
+  entityId: string;
+  entityType: EntityType;
+  date: string;
+  classKey?: string;
+}): string {
+  return `${target.entityType}:${String(target.entityId)}:${target.date}:${normalizeEditorClassKey(
+    target.entityType,
+    target.classKey,
+  )}`;
+}
+
+export function attendanceRecordMatchesTarget(
+  record: AttendanceRecord,
+  target: {
+    entityId: string;
+    entityType: EntityType;
+    date: string;
+    classKey?: string;
+  },
+): boolean {
+  return (
+    record.entityType === target.entityType &&
+    String(record.entityId) === String(target.entityId) &&
+    record.date === target.date &&
+    normalizeEditorClassKey(record.entityType, record.classKey) ===
+      normalizeEditorClassKey(target.entityType, target.classKey)
+  );
+}
+
+export function applyUpsertedAttendanceRecord(
+  rows: AttendanceRecord[],
+  args: {
+    entityId: string;
+    entityType: EntityType;
+    date: string;
+    status: AttendanceStatus;
+    classKey?: string;
+  },
+): AttendanceRecord[] {
+  const normalizedClassKey = normalizeEditorClassKey(args.entityType, args.classKey);
+  const existing = rows.find((record) => attendanceRecordMatchesTarget(record, args));
+  const nextRecord: AttendanceRecord = existing
+    ? {
+        ...existing,
+        classKey: normalizedClassKey,
+        status: args.status,
+        timestamp: Date.now(),
+      }
+    : {
+        id: `local-${args.entityType}-${args.entityId}-${args.date}-${normalizedClassKey}-${Date.now()}`,
+        entityId: String(args.entityId),
+        entityType: args.entityType,
+        date: args.date,
+        classKey: normalizedClassKey,
+        teacherId: args.entityType === EntityType.TEACHER ? String(args.entityId) : undefined,
+        studentId: args.entityType === EntityType.STUDENT ? String(args.entityId) : undefined,
+        status: args.status,
+        timestamp: Date.now(),
+      };
+
+  return [
+    ...rows.filter((record) => !attendanceRecordMatchesTarget(record, args)),
+    nextRecord,
+  ];
+}
+
+export function removeDeletedAttendanceRecord(
+  rows: AttendanceRecord[],
+  args: {
+    entityId: string;
+    entityType: EntityType;
+    date: string;
+    classKey?: string;
+  },
+): AttendanceRecord[] {
+  return rows.filter((record) => !attendanceRecordMatchesTarget(record, args));
+}
+
+export function reconcileCoverageAssignments(
+  payload: QuranTeacherSessionPayload,
+  previousAssignments?: Record<number, string>,
+): Record<number, string> {
+  const availableIds = new Set(
+    (payload.available_substitutes || []).map((teacher) => String(teacher.id)),
+  );
+  const next: Record<number, string> = {};
+
+  for (const student of payload.students || []) {
+    if (!student.requires_substitute) continue;
+
+    const preserved = previousAssignments
+      ? String(previousAssignments[student.student_id] || "")
+      : "";
+    if (preserved && availableIds.has(preserved)) {
+      next[student.student_id] = preserved;
+      continue;
+    }
+
+    if (
+      student.coverage?.coverage_status === "assigned" &&
+      student.coverage.substitute_teacher_id
+    ) {
+      const serverSub = String(student.coverage.substitute_teacher_id);
+      if (availableIds.has(serverSub)) {
+        next[student.student_id] = serverSub;
+      }
+    }
+  }
+
+  return next;
+}
+
+export function getCoverageValidationState(
+  payload: QuranTeacherSessionPayload,
+  assignments: Record<number, string>,
+  busy: { loading: boolean; saving: boolean },
+) {
+  const students = payload.students || [];
+  const availableIds = new Set(
+    (payload.available_substitutes || []).map((teacher) => String(teacher.id)),
+  );
+
+  const notMarked = students.filter(
+    (student) => student.student_status === "not_marked",
+  );
+  const required = students.filter((student) => student.requires_substitute);
+  const missingSubstitutes = required.filter((student) => {
+    const selected = String(assignments[student.student_id] || "");
+    return !selected || !availableIds.has(selected);
+  });
+
+  const canConfirm =
+    notMarked.length === 0 &&
+    missingSubstitutes.length === 0 &&
+    !busy.loading &&
+    !busy.saving;
+
+  return {
+    notMarked,
+    required,
+    missingSubstitutes,
+    availableIds,
+    canConfirm,
+  };
+}
 
 const PAGE_SIZE = 20;
 
@@ -290,17 +455,19 @@ function Segmented({
 /**
  * Light by default. Only the selected status becomes dark.
  */
-function StatusButtonsLight({
+const StatusButtonsLight = React.memo(function StatusButtonsLight({
   current,
   onSet,
   onClear,
+  disabled = false,
 }: {
   current: StatusOrUnmarked;
   onSet: (s: AttendanceStatus) => void;
   onClear: () => void;
+  disabled?: boolean;
 }) {
   const btnBase =
-    "h-10 rounded-2xl px-3 text-xs font-extrabold transition-all active:scale-[0.98] inline-flex items-center gap-2 border";
+    "h-10 rounded-2xl px-3 text-xs font-extrabold transition-all active:scale-[0.98] inline-flex items-center gap-2 border disabled:opacity-60 disabled:cursor-not-allowed";
 
   const presentActive = "bg-emerald-600 border-emerald-600 text-white shadow-[0_18px_36px_-18px_rgba(16,185,129,0.55)]";
   const presentIdle = "bg-emerald-50 border-emerald-100 text-emerald-700 hover:bg-emerald-100";
@@ -318,6 +485,7 @@ function StatusButtonsLight({
     <div className="flex flex-wrap gap-2">
       <button
         type="button"
+        disabled={disabled}
         onClick={() => onSet(AttendanceStatus.PRESENT)}
         className={`${btnBase} ${current === AttendanceStatus.PRESENT ? presentActive : presentIdle}`}
         title="Mark Present"
@@ -327,6 +495,7 @@ function StatusButtonsLight({
 
       <button
         type="button"
+        disabled={disabled}
         onClick={() => onSet(AttendanceStatus.ABSENT)}
         className={`${btnBase} ${current === AttendanceStatus.ABSENT ? absentActive : absentIdle}`}
         title="Mark Absent"
@@ -336,6 +505,7 @@ function StatusButtonsLight({
 
       <button
         type="button"
+        disabled={disabled}
         onClick={() => onSet(AttendanceStatus.LEAVE)}
         className={`${btnBase} ${current === AttendanceStatus.LEAVE ? leaveActive : leaveIdle}`}
         title="Mark Leave"
@@ -345,6 +515,7 @@ function StatusButtonsLight({
 
       <button
         type="button"
+        disabled={disabled}
         onClick={onClear}
         className={`${btnBase} ${current === "Unmarked" ? unmarkActive : unmarkIdle}`}
         title="Unmark"
@@ -353,7 +524,7 @@ function StatusButtonsLight({
       </button>
     </div>
   );
-}
+});
 
 function TeacherAttendanceModal({
   open,
@@ -365,6 +536,7 @@ function TeacherAttendanceModal({
   sessions,
   onSetStatus,
   onClearStatus,
+  onMarkStudentAttendance,
 }: {
   open: boolean;
   onClose: () => void;
@@ -388,6 +560,7 @@ function TeacherAttendanceModal({
   onClearStatus: (
     timeSlot: string,
   ) => boolean | Promise<boolean>;
+  onMarkStudentAttendance?: (timeSlot: string) => void;
 }) {
   const [error, setError] = useState("");
 
@@ -464,7 +637,9 @@ function TeacherAttendanceModal({
   const openCoverage = async (
     timeSlot: string,
     status: AttendanceStatus,
+    preserveAssignments?: Record<number, string>,
   ) => {
+    if (loadingTimeSlot === timeSlot || savingTimeSlot === timeSlot) return;
     setError("");
     setLoadingTimeSlot(timeSlot);
 
@@ -476,23 +651,10 @@ function TeacherAttendanceModal({
           class_key: timeSlot,
         });
 
-      const assignments:
-        Record<number, string> = {};
-
-      for (const student of payload.students) {
-        if (
-          student.coverage?.coverage_status ===
-            "assigned" &&
-          student.coverage
-            .substitute_teacher_id
-        ) {
-          assignments[student.student_id] =
-            String(
-              student.coverage
-                .substitute_teacher_id,
-            );
-        }
-      }
+      const assignments = reconcileCoverageAssignments(
+        payload,
+        preserveAssignments,
+      );
 
       setCoverageEditor({
         timeSlot,
@@ -508,6 +670,15 @@ function TeacherAttendanceModal({
     } finally {
       setLoadingTimeSlot(null);
     }
+  };
+
+  const refreshCoverage = async () => {
+    if (!coverageEditor) return;
+    await openCoverage(
+      coverageEditor.timeSlot,
+      coverageEditor.status,
+      coverageEditor.assignments,
+    );
   };
 
   const savePresent = async (
@@ -543,38 +714,28 @@ function TeacherAttendanceModal({
   const saveAbsence = async () => {
     if (!coverageEditor) return;
 
-    const notMarked =
-      coverageEditor.payload.students.filter(
-        (student) =>
-          student.student_status === "not_marked",
-      );
+    const validation = getCoverageValidationState(
+      coverageEditor.payload,
+      coverageEditor.assignments,
+      {
+        loading: loadingTimeSlot === coverageEditor.timeSlot,
+        saving: savingTimeSlot === coverageEditor.timeSlot,
+      },
+    );
 
-    if (notMarked.length > 0) {
+    if (validation.notMarked.length > 0) {
       setError(
-        `Mark student attendance first for ${notMarked.length} student${
-          notMarked.length === 1 ? "" : "s"
+        `Mark student attendance first for ${validation.notMarked.length} student${
+          validation.notMarked.length === 1 ? "" : "s"
         }.`,
       );
       return;
     }
 
-    const required =
-      coverageEditor.payload.students.filter(
-        (student) =>
-          student.requires_substitute,
-      );
-
-    const missing = required.filter(
-      (student) =>
-        !coverageEditor.assignments[
-          student.student_id
-        ],
-    );
-
-    if (missing.length > 0) {
+    if (validation.missingSubstitutes.length > 0) {
       setError(
-        `Select a substitute for ${missing.length} student${
-          missing.length === 1 ? "" : "s"
+        `Select a substitute for ${validation.missingSubstitutes.length} student${
+          validation.missingSubstitutes.length === 1 ? "" : "s"
         }.`,
       );
 
@@ -582,7 +743,7 @@ function TeacherAttendanceModal({
     }
 
     const assignments =
-      required.map((student) => ({
+      validation.required.map((student) => ({
         student_id: student.student_id,
         substitute_teacher_id: Number(
           coverageEditor.assignments[
@@ -676,18 +837,44 @@ function TeacherAttendanceModal({
               </div>
             )}
 
-            {coverageEditor ? (
+            {coverageEditor ? (() => {
+              const isCoverageLoading =
+                loadingTimeSlot === coverageEditor.timeSlot;
+              const isCoverageSaving =
+                savingTimeSlot === coverageEditor.timeSlot;
+              const validation = getCoverageValidationState(
+                coverageEditor.payload,
+                coverageEditor.assignments,
+                { loading: isCoverageLoading, saving: isCoverageSaving },
+              );
+
+              return (
               <div className="space-y-4">
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                  <div className="font-extrabold text-amber-900">
-                    {coverageEditor.status ===
-                    AttendanceStatus.LEAVE
-                      ? "Teacher Leave"
-                      : "Teacher Absent"}
-                    {" ? "}
-                    {formatTime12(
-                      coverageEditor.timeSlot,
-                    )}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="font-extrabold text-amber-900">
+                      {coverageEditor.status ===
+                      AttendanceStatus.LEAVE
+                        ? "Teacher Leave"
+                        : "Teacher Absent"}
+                      {" · "}
+                      {formatTime12(
+                        coverageEditor.timeSlot,
+                      )}
+                    </div>
+
+                    {validation.notMarked.length > 0 &&
+                      onMarkStudentAttendance && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onMarkStudentAttendance(coverageEditor.timeSlot)
+                          }
+                          className="rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-xs font-extrabold text-amber-900 hover:bg-amber-100"
+                        >
+                          Mark student attendance
+                        </button>
+                      )}
                   </div>
 
                   <div className="mt-2 text-sm text-amber-900/80">
@@ -790,7 +977,20 @@ function TeacherAttendanceModal({
                     </div>
                   )}
 
-                <div className="flex justify-end gap-2">
+                {validation.notMarked.length > 0 ? (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
+                    Mark student attendance first for {validation.notMarked.length} student
+                    {validation.notMarked.length === 1 ? "" : "s"} before confirming.
+                  </div>
+                ) : validation.missingSubstitutes.length > 0 ? (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
+                    Select an available substitute teacher for{" "}
+                    {validation.missingSubstitutes.length} Present student
+                    {validation.missingSubstitutes.length === 1 ? "" : "s"} before confirming.
+                  </div>
+                ) : null}
+
+                <div className="flex flex-wrap justify-end gap-2">
                   <button
                     type="button"
                     onClick={() => {
@@ -804,21 +1004,27 @@ function TeacherAttendanceModal({
 
                   <button
                     type="button"
-                    onClick={saveAbsence}
-                    disabled={
-                      savingTimeSlot ===
-                      coverageEditor.timeSlot
-                    }
-                    className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
+                    onClick={() => void refreshCoverage()}
+                    disabled={isCoverageLoading || isCoverageSaving}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-extrabold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {savingTimeSlot ===
-                    coverageEditor.timeSlot
+                    {isCoverageLoading ? "Refreshing..." : "Refresh session"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={saveAbsence}
+                    disabled={!validation.canConfirm}
+                    className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isCoverageSaving
                       ? "Saving..."
                       : "Confirm attendance & coverage"}
                   </button>
                 </div>
               </div>
-            ) : (
+              );
+            })() : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {sessions.map((session) => {
                   const meta =
@@ -865,6 +1071,7 @@ function TeacherAttendanceModal({
                       <div className="mt-4">
                         <StatusButtonsLight
                           current={session.status}
+                          disabled={busy}
                           onSet={(nextStatus) => {
                             if (busy) return;
 
@@ -948,19 +1155,60 @@ export function AttendanceEditor({
   );
   const dateLoader = React.useCallback(() => loadAttendanceForDate(date), [loadAttendanceForDate, date]);
   const complete = useCompleteAttendance(date, dateLoader);
-  const appState = { ...sourceState, attendance: complete.rows };
+  const appState = useMemo(
+    () => ({ ...sourceState, attendance: complete.rows }),
+    [sourceState, complete.rows],
+  );
+  const [pendingKeys, setPendingKeys] = useState<Set<string>>(() => new Set());
+  const pendingKeysRef = React.useRef<Set<string>>(new Set());
+
+  const setPendingKey = (key: string, pending: boolean) => {
+    const next = new Set(pendingKeysRef.current);
+    if (pending) next.add(key);
+    else next.delete(key);
+    pendingKeysRef.current = next;
+    setPendingKeys(next);
+  };
+
   const onUpsert: UpsertFn = async args => {
     // Never submit attendance while the selected date is still loading.
     if (complete.loading || complete.error) return false;
-    const saved = await saveUpsert(args);
-    if (saved) complete.reload();
-    return saved;
+    const targetKey = attendanceRecordTargetKey(args);
+    if (pendingKeysRef.current.has(targetKey)) return false;
+
+    const targetRequestKey = complete.requestKey;
+    setPendingKey(targetKey, true);
+    try {
+      const saved = await saveUpsert(args);
+      if (saved) {
+        complete.updateRows(targetRequestKey, (rows) =>
+          applyUpsertedAttendanceRecord(rows, args),
+        );
+      }
+      return saved;
+    } finally {
+      setPendingKey(targetKey, false);
+    }
   };
+
   const onDelete: DeleteFn = async args => {
     if (complete.loading || complete.error) return false;
-    const saved = await saveDelete(args);
-    if (saved) complete.reload();
-    return saved;
+    const targetKey = attendanceRecordTargetKey(args);
+    if (pendingKeysRef.current.has(targetKey)) return false;
+
+    const targetRequestKey = complete.requestKey;
+    setPendingKey(targetKey, true);
+    try {
+      const saved = await saveDelete(args);
+      if (saved) {
+        complete.updateRows(targetRequestKey, (rows) =>
+          removeDeletedAttendanceRecord(rows, args),
+        );
+      }
+      return saved;
+    } finally {
+      setPendingKey(targetKey, false);
+    }
   };
   const [teacherId, setTeacherId] = useState<string>("all");
   const [entityFilter, setEntityFilter] = useState<"teachers" | "students">("teachers");
@@ -1023,24 +1271,27 @@ React.useEffect(() => {
   }, [appState.students, day, date]);
 
   const studentsBase = useMemo(() => {
+    if (entityFilter !== "students") return [];
     const base = onlyScheduled ? scheduledStudentsForDate : appState.students;
     const q = debouncedSearch.trim().toLowerCase();
 
     return base
-      .filter((s) => (teacherId === "all" ? true : s.teacherId === teacherId))
-      .filter((s) => timeMatchesWindow(String(s.timeSlot || ""), timeFrom, timeTo))
-      .filter((s) => (q ? (s.name || "").toLowerCase().includes(q) : true))
-      .slice()
+      .filter((s) => {
+        if (teacherId !== "all" && s.teacherId !== teacherId) return false;
+        if (!timeMatchesWindow(String(s.timeSlot || ""), timeFrom, timeTo)) return false;
+        if (q && !(s.name || "").toLowerCase().includes(q)) return false;
+        return true;
+      })
       .sort((a, b) => {
         const tA = teacherNameById.get(a.teacherId) || "";
         const tB = teacherNameById.get(b.teacherId) || "";
         return (
-          tA.localeCompare(tB) ||
-          String(a.timeSlot || "").localeCompare(String(b.timeSlot || "")) ||
-          (a.name || "").localeCompare(b.name || "")
+          compareText(tA, tB) ||
+          compareTimeSlot(String(a.timeSlot || ""), String(b.timeSlot || "")) ||
+          compareText(a.name || "", b.name || "")
         );
       });
-  }, [onlyScheduled, scheduledStudentsForDate, appState.students, teacherId, debouncedSearch, teacherNameById, timeFrom, timeTo]);
+  }, [entityFilter, onlyScheduled, scheduledStudentsForDate, appState.students, teacherId, debouncedSearch, teacherNameById, timeFrom, timeTo]);
 
   const getCurrentStatus = (entityType: EntityType, entityId: string, classKey?: string): StatusOrUnmarked => {
     const key = `${entityType}:${entityId}:${classKey || ""}`;
@@ -1052,9 +1303,10 @@ React.useEffect(() => {
     return s === statusFilter;
   };
 
-  // Build one card per teacher (not per time slot)
-  const teacherCards = useMemo(() => {
-    const q = search.trim().toLowerCase();
+  // Build structural teacher buckets without attendance-record dependencies so
+  // marking a status or switching status filters never re-groups or re-sorts 970+ students.
+  const teacherBucketsBase = useMemo(() => {
+    const q = debouncedSearch.trim().toLowerCase();
 
     // source of sessions is scheduled list (feels best for "teacher sessions")
     const base = onlyScheduled ? scheduledStudentsForDate : appState.students;
@@ -1068,8 +1320,15 @@ React.useEffect(() => {
           classKey: string;
           timeSlot: string;
           students: { id: string; name: string }[];
-          status: StatusOrUnmarked;
         }>;
+        sessionsByKey: Map<
+          string,
+          {
+            classKey: string;
+            timeSlot: string;
+            students: { id: string; name: string }[];
+          }
+        >;
       }
     >();
 
@@ -1084,110 +1343,145 @@ React.useEffect(() => {
         if (!sn.includes(q)) continue;
       }
 
-      if (!byTeacher.has(s.teacherId)) {
-        byTeacher.set(s.teacherId, { teacherId: s.teacherId, teacherName, sessions: [] });
-      }
-
-      const bucket = byTeacher.get(s.teacherId)!;
       const timeSlot = String(s.timeSlot || "00:00").slice(0, 5);
       if (!timeMatchesWindow(timeSlot, timeFrom, timeTo)) continue;
 
+      let bucket = byTeacher.get(s.teacherId);
+      if (!bucket) {
+        bucket = {
+          teacherId: s.teacherId,
+          teacherName,
+          sessions: [],
+          sessionsByKey: new Map(),
+        };
+        byTeacher.set(s.teacherId, bucket);
+      }
+
       const computedClassKey = String(teacherClassKeyForStudent(s) || timeSlot).trim();
       const classKey = computedClassKey || timeSlot;
-      let session = bucket.sessions.find((item) => item.classKey === classKey);
+      let session = bucket.sessionsByKey.get(classKey);
       if (!session) {
-        const exactStatus = getCurrentStatus(
-          EntityType.TEACHER,
-          s.teacherId,
-          classKey,
-        );
-        const legacyStatus = teacherIdsWithSpecificAttendance.has(String(s.teacherId))
-          ? "Unmarked"
-          : getCurrentStatus(EntityType.TEACHER, s.teacherId, "");
-
         session = {
           classKey,
           timeSlot,
           students: [],
-          status: exactStatus === "Unmarked" ? legacyStatus : exactStatus,
         };
+        bucket.sessionsByKey.set(classKey, session);
         bucket.sessions.push(session);
       }
 
       session.students.push({
-  id: s.id,
-  name: s.name,
-});
-
-// Teacher attendance is independent from student attendance.
-session.status = getCurrentStatus(
-  EntityType.TEACHER,
-  s.teacherId,
-  timeSlot,
-);
-
+        id: s.id,
+        name: s.name,
+      });
     }
 
-    const cards = Array.from(byTeacher.values())
+    return Array.from(byTeacher.values())
       .filter((teacher) => teacher.sessions.length > 0)
       .map((t) => ({
-        ...t,
+        teacherId: t.teacherId,
+        teacherName: t.teacherName,
         sessions: t.sessions
           .slice()
-          .sort((a, b) => String(a.timeSlot).localeCompare(String(b.timeSlot))),
+          .sort((a, b) => compareTimeSlot(String(a.timeSlot), String(b.timeSlot))),
       }))
-      .sort((a, b) => a.teacherName.localeCompare(b.teacherName));
-
-    // apply status filter: if user chose Present/Absent/Leave/Unmarked,
-    // show teachers that have at least one session matching that status.
-    return cards.filter((c) => {
-      if (statusFilter === "all") return true;
-      return c.sessions.some((ses) => passesStatusFilter(ses.status));
-    });
+      .sort((a, b) => compareText(a.teacherName, b.teacherName));
   }, [
-    search,
+    debouncedSearch,
     onlyScheduled,
     scheduledStudentsForDate,
     appState.students,
     teacherId,
     teacherNameById,
-    statusFilter,
-    recordsForDate,
     timeFrom,
     timeTo,
     teacherClassKeyForStudent,
-    teacherIdsWithSpecificAttendance,
   ]);
 
+  // Attach live attendance statuses from recordsForDate and apply statusFilter in O(teachers + sessions).
+  const teacherCards = useMemo(() => {
+    const cards = teacherBucketsBase.map((t) => {
+      const hasSpecific = teacherIdsWithSpecificAttendance.has(String(t.teacherId));
+      const legacyStatus = hasSpecific
+        ? ("Unmarked" as StatusOrUnmarked)
+        : (recordsForDate.get(`${EntityType.TEACHER}:${t.teacherId}:`)?.status ?? "Unmarked");
+
+      const sessions = t.sessions.map((ses) => {
+        const exact = recordsForDate.get(`${EntityType.TEACHER}:${t.teacherId}:${ses.timeSlot}`)?.status;
+        const fallback = ses.classKey !== ses.timeSlot
+          ? recordsForDate.get(`${EntityType.TEACHER}:${t.teacherId}:${ses.classKey}`)?.status
+          : undefined;
+        const resolved = exact ?? fallback ?? legacyStatus;
+        return {
+          ...ses,
+          status: resolved as StatusOrUnmarked,
+        };
+      });
+
+      return {
+        ...t,
+        sessions,
+      };
+    });
+
+    if (statusFilter === "all") return cards;
+    return cards.filter((c) => c.sessions.some((ses) => ses.status === statusFilter));
+  }, [teacherBucketsBase, recordsForDate, teacherIdsWithSpecificAttendance, statusFilter]);
+
   const filteredStudents = useMemo(() => {
+    if (entityFilter !== "students") return [];
     return studentsBase.filter((s) => passesStatusFilter(getCurrentStatus(EntityType.STUDENT, s.id)));
-  }, [studentsBase, statusFilter, recordsForDate]);
+  }, [entityFilter, studentsBase, statusFilter, recordsForDate]);
 const pagedTeacherCards = getPagedItems(teacherCards, page, PAGE_SIZE);
 const pagedStudents = getPagedItems(filteredStudents, page, PAGE_SIZE);
   const summary = useMemo(() => {
-    const all: StatusOrUnmarked[] = [];
+    let total = 0;
+    let present = 0;
+    let absent = 0;
+    let leave = 0;
+    let unmarked = 0;
+
+    const tally = (s: StatusOrUnmarked) => {
+      total += 1;
+      if (s === AttendanceStatus.PRESENT) present += 1;
+      else if (s === AttendanceStatus.ABSENT) absent += 1;
+      else if (s === AttendanceStatus.LEAVE) leave += 1;
+      else unmarked += 1;
+    };
 
     if (entityFilter === "teachers") {
-      for (const t of teacherCards) for (const ses of t.sessions) all.push(ses.status);
+      for (const t of teacherCards) for (const ses of t.sessions) tally(ses.status);
     } else {
-      for (const s of studentsBase) all.push(getCurrentStatus(EntityType.STUDENT, s.id));
+      for (const s of studentsBase) tally(getCurrentStatus(EntityType.STUDENT, s.id));
     }
 
-    const count = (v: StatusOrUnmarked) => all.filter((x) => x === v).length;
-
-    return {
-      total: all.length,
-      present: count(AttendanceStatus.PRESENT),
-      absent: count(AttendanceStatus.ABSENT),
-      leave: count(AttendanceStatus.LEAVE),
-      unmarked: count("Unmarked"),
-    };
+    return { total, present, absent, leave, unmarked };
   }, [entityFilter, teacherCards, studentsBase, recordsForDate]);
+
+  const sortedTeachers = useMemo(
+    () => appState.teachers.slice().sort((a, b) => compareText(a.name, b.name)),
+    [appState.teachers]
+  );
 
   const openTeacher = useMemo(() => {
     if (!openTeacherId) return null;
     return teacherCards.find((t) => t.teacherId === openTeacherId) || null;
   }, [openTeacherId, teacherCards]);
+
+  const modalSessions = useMemo(() => {
+    if (!openTeacher) return [];
+    return openTeacher.sessions.map((session) => ({
+      timeSlot: session.timeSlot,
+      status: session.status,
+      students: (
+        dedupeStudentLabels
+          ? uniqueAttendanceStudentLabels(session.students)
+          : session.students
+      )
+        .slice()
+        .sort((a, b) => compareText(a.name || "", b.name || "")),
+    }));
+  }, [openTeacher, dedupeStudentLabels]);
 
 // Keep all Attendance filters and the workspace mounted while data reloads.
 // The hook already hides previous-date records, so show placeholders instead
@@ -1238,7 +1532,7 @@ return (
             className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 shadow-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100/80"
           >
             <option value="all">All Teachers</option>
-            {appState.teachers.slice().sort((a, b) => a.name.localeCompare(b.name)).map((t) => (
+            {sortedTeachers.map((t) => (
               <option key={t.id} value={t.id}>{t.name}</option>
             ))}
           </select>
@@ -1588,6 +1882,13 @@ return (
                       <div className="mt-4">
                         <StatusButtonsLight
                           current={current}
+                          disabled={pendingKeys.has(
+                            attendanceRecordTargetKey({
+                              entityId: s.id,
+                              entityType: EntityType.STUDENT,
+                              date,
+                            }),
+                          )}
                           onSet={(st) =>
                             onUpsert({ entityId: s.id, entityType: EntityType.STUDENT, date, status: st })
                           }
@@ -1631,33 +1932,19 @@ return (
         title={
           openTeacher?.teacherName || ""
         }
-        subtitle={`${day || "?"} ? ${date}`}
+        subtitle={`${day || "—"} · ${date}`}
         date={date}
-        sessions={
-          openTeacher
-            ? openTeacher.sessions.map(
-                (session) => ({
-                  timeSlot:
-                    session.timeSlot,
-                  status:
-                    session.status,
-                  students: (
-                    dedupeStudentLabels
-                      ? uniqueAttendanceStudentLabels(
-                          session.students,
-                        )
-                      : session.students
-                  )
-                    .slice()
-                    .sort((a, b) =>
-                      (a.name || "").localeCompare(
-                        b.name || "",
-                      ),
-                    ),
-                }),
-              )
-            : []
-        }
+        sessions={modalSessions}
+        onMarkStudentAttendance={(timeSlot) => {
+          if (!openTeacher) return;
+          setOpenTeacherId(null);
+          setEntityFilter("students");
+          setTeacherId(openTeacher.teacherId);
+          setTimeFrom(timeSlot);
+          setTimeTo(timeSlot);
+          setStatusFilter("Unmarked");
+          setSearch("");
+        }}
         onSetStatus={(
           timeSlot,
           status,
