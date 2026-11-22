@@ -1127,7 +1127,14 @@ export default function TeacherSalaryAssignments({
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                       <div>
                         <div className="text-base font-black text-slate-900">
-                          {selectedTeacher.current_policy.policy_name}
+                          <div className="flex flex-wrap items-center gap-2">
+                          <span>{selectedTeacher.current_policy.policy_name}</span>
+                          {selectedTeacher.current_policy.is_special_case && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-black bg-purple-100 text-purple-800 border border-purple-200">
+                              Special Case · Coordinator Special
+                            </span>
+                          )}
+                        </div>
                         </div>
                         <div className="text-xs font-semibold text-slate-500 flex items-center gap-2 mt-0.5">
                           <span className="font-mono text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">

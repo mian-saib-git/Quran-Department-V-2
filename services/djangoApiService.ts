@@ -112,6 +112,8 @@ export type DashboardAttendance = {
   status: "present" | "absent" | "leave";
   classKey?: string;
   class_key?: string;
+  substitute_teacher_id?: number | null;
+  substitute_teacher_name?: string | null;
 
   marked_by: string;
   marked_by_id?: number;
@@ -135,6 +137,8 @@ export type CreateAttendanceInput = {
   status: "present" | "absent" | "leave";
   classKey?: string;
   class_key?: string;
+  substitute_teacher_id?: number | null;
+  substitute_teacher_name?: string | null;
 };
 
 
@@ -1539,6 +1543,8 @@ export function toAttendanceRecord(row: AttendanceApiResponse): AttendanceRecord
     timestamp: Date.parse(row.updated_at || row.created_at || "") || 0,
     markedById: String(row.marked_by_id || ""), markedByName: row.marked_by_name || "",
     markedByUsername: row.marked_by_username || row.marked_by || "", markedByRole: row.marked_by_role || "",
+    substituteTeacherId: row.substitute_teacher_id != null ? String(row.substitute_teacher_id) : "",
+    substituteTeacherName: row.substitute_teacher_name || "",
   };
 }
 export async function loadQuranAttendanceDate(date: string): Promise<AttendanceRecord[]> {
@@ -1676,6 +1682,16 @@ export type CoordinatorTeacherAccount = {
     joining_date: string;
     notes: string;
     zoom_link: string;
+    special_case?: boolean;
+    special_case_assignment?: {
+      assignment_id: number;
+      policy_id: number | null;
+      policy_code: string;
+      policy_name: string;
+      effective_from: string;
+      effective_to: string | null;
+      is_special_case: boolean;
+    } | null;
   } | null;
 };
 
@@ -1750,6 +1766,9 @@ export type CreateAccountInput = {
   joining_date?: string | null;
   notes?: string;
   zoom_link?: string;
+  special_case?: boolean;
+  special_case_effective_from?: string | null;
+  replacement_policy_id?: number | null;
 
   teacher_id?: number | null;
   time_slot?: string | null;
@@ -1770,6 +1789,47 @@ export type CreateAccountInput = {
 export type UpdateAccountInput = Partial<CreateAccountInput> & {
   is_active?: boolean;
 };
+
+export type SpecialCaseContextResponse = {
+  coordinator_special_configured: boolean;
+  coordinator_special_package: {
+    policy_id: number;
+    policy_code: string;
+    policy_name: string;
+    version_id: number;
+    version_number: number;
+    plan_id: number;
+    plan_code: string;
+    plan_name: string;
+    qualifying_weekdays: string[];
+    effective_from: string;
+    effective_to: string | null;
+  } | null;
+  configuration_error: string | null;
+  proposed_effective_from: string;
+  payroll_period_locked: boolean;
+  payroll_period_warning: string | null;
+  available_normal_policies: { id: number; code: string; name: string }[];
+  current_special_case?: boolean;
+  current_assignment?: {
+    id: number;
+    policy_id: number | null;
+    policy_code: string;
+    policy_name: string;
+    effective_from: string;
+    effective_to: string | null;
+    is_special_case: boolean;
+  } | null;
+  previous_normal_policy?: { id: number; code: string; name: string } | null;
+  requires_replacement_selection?: boolean;
+};
+
+export async function getTeacherSpecialCaseContext(
+  teacherId?: number | null
+): Promise<SpecialCaseContextResponse> {
+  const qs = teacherId ? `?teacher_id=${teacherId}` : "";
+  return request<SpecialCaseContextResponse>(`/api/salary/special-case-context/${qs}`);
+}
 
 export async function getCoordinatorAccounts(): Promise<CoordinatorAccountsResponse> {
   return request<CoordinatorAccountsResponse>("/api/auth/accounts/");
@@ -2106,6 +2166,12 @@ export type QuranDroppedLeaveItem = {
   student_type_label: string;
   class_status: string;
   class_status_label: string;
+  status_effective_date?: string;
+  is_confirmed_dropped?: boolean;
+  is_confirmed_leave?: boolean;
+  can_confirm_drop?: boolean;
+  can_confirm_leave?: boolean;
+  can_confirm_return?: boolean;
   class_days: string[];
   time_slots: string[];
   class_days_count: number;
@@ -2123,6 +2189,126 @@ export type QuranDroppedLeaveResponse = {
 
 export async function getQuranDroppedLeave(): Promise<QuranDroppedLeaveResponse> {
   return request<QuranDroppedLeaveResponse>("/api/academy/dropped-leave/");
+}
+
+export type ConfirmStudentDropLeaveAction =
+  | "confirm_drop"
+  | "confirm_leave"
+  | "confirm_return";
+
+export type ConfirmStudentDropLeaveResponse = {
+  student_id: number;
+  action: ConfirmStudentDropLeaveAction;
+  class_status: string;
+  class_status_label: string;
+  status_effective_date: string;
+  requires_reassignment: boolean;
+  reassignment_reason: string;
+  detail: string;
+  rejoin?: QuranStudentRejoinResponse["rejoin"] | null;
+};
+
+export async function confirmQuranStudentDropLeaveReturn(input: {
+  student_id: number;
+  action: ConfirmStudentDropLeaveAction;
+  effective_date?: string;
+  reason?: string;
+}): Promise<ConfirmStudentDropLeaveResponse> {
+  return request<ConfirmStudentDropLeaveResponse>("/api/academy/dropped-leave/", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export type QuranTeacherDetailsResponse = {
+  teacher: {
+    id: number;
+    user_id: number;
+    full_name: string;
+    display_number: string;
+    username: string;
+    department_id: number;
+    department_name: string;
+    is_active: boolean;
+    account_status_label: string;
+  };
+  summary: {
+    active_students_count: number;
+    dropped_students_count: number;
+    on_leave_students_count: number;
+    active_schedules_count: number;
+    historical_dropped_count: number;
+  };
+  active_students: Array<{
+    student_id: number;
+    full_name: string;
+    username: string;
+    class_status: string;
+    class_status_label: string;
+    student_type: string;
+    student_type_label: string;
+    salary_class_mode: string;
+    salary_class_mode_label: string;
+    account_is_active: boolean;
+    schedules: Array<{
+      id: number;
+      weekday: string;
+      time_slot: string;
+      end_time: string;
+      duration_minutes: number;
+    }>;
+    scheduled_classes_count: number;
+  }>;
+  dropped_leave_students: Array<{
+    student_id: number;
+    full_name: string;
+    username: string;
+    class_status: string;
+    class_status_label: string;
+    is_on_leave: boolean;
+    is_dropped: boolean;
+    effective_date: string;
+    account_is_active: boolean;
+    original_teacher_name: string;
+    previous_class_days: string[];
+    previous_time_slots: string[];
+    reason: string;
+    rejoined_date: string;
+  }>;
+  class_schedules: Array<{
+    id: number;
+    student_id: number;
+    student_name: string;
+    student_username: string;
+    weekday: string;
+    time_slot: string;
+    end_time: string;
+    duration_minutes: number;
+    class_status: string;
+    class_status_label: string;
+    salary_class_mode: string;
+    salary_class_mode_label: string;
+  }>;
+  historical_dropped_classes: Array<{
+    history_id: number;
+    student_id: number | null;
+    student_name: string;
+    student_username: string;
+    new_class_status: string;
+    new_class_status_label: string;
+    effective_date: string;
+    teacher_name: string;
+    current_teacher_name: string;
+    notes: string;
+  }>;
+};
+
+export async function getQuranTeacherDetails(
+  teacherId: number,
+): Promise<QuranTeacherDetailsResponse> {
+  return request<QuranTeacherDetailsResponse>(
+    `/api/academy/teachers/${teacherId}/details/`,
+  );
 }
 
 export type QuranStudentRejoinResponse = {
@@ -2902,5 +3088,86 @@ export async function deleteClassSlotInDjango(input: {
       teacher_id: Number(input.teacher_id),
       time_slot: input.time_slot,
     }),
+  });
+}
+
+export type ScheduleTierSummary = {
+  frequency: number;
+  salary_class_mode: string;
+  plan_name: string | null;
+  policy_label: string | null;
+  display_label: string;
+};
+
+export type ScheduleChangePreviewResponse = {
+  student_id: number;
+  student_name: string;
+  student_username: string;
+  teacher_id: number | null;
+  teacher_name: string;
+  effective_date: string;
+  payroll_year: number;
+  payroll_month: number;
+  payroll_month_label: string;
+  payroll_editable: boolean;
+  recalculate_allowed: boolean;
+  lock_reason: string;
+  current_class_days: string[];
+  proposed_class_days: string[];
+  previous_frequency: number;
+  new_frequency: number;
+  before_tier: ScheduleTierSummary;
+  after_tier: ScheduleTierSummary;
+  before_amount: string;
+  after_amount: string;
+  monetary_difference: string;
+  student_before_amount: string;
+  student_after_amount: string;
+  student_monetary_difference: string;
+  affected_classes_count: number;
+};
+
+export type ScheduleChangeConfirmInput = {
+  student_id?: number;
+  user_id?: number;
+  teacher_id?: number;
+  time_slot?: string | null;
+  duration_minutes?: number;
+  class_days: string[];
+  effective_date?: string;
+  salary_mode: "preserve" | "recalculate_current_month";
+};
+
+export type ScheduleChangeConfirmResponse = {
+  student_id: number;
+  teacher_id: number;
+  class_days: string[];
+  salary_mode: "preserve" | "recalculate_current_month";
+  effective_date: string;
+  before_teacher_total: string;
+  after_teacher_total: string;
+};
+
+export async function previewQuranScheduleChange(input: {
+  student_id?: number;
+  user_id?: number;
+  teacher_id?: number | null;
+  time_slot?: string | null;
+  duration_minutes?: number;
+  class_days: string[];
+  effective_date?: string;
+}): Promise<ScheduleChangePreviewResponse> {
+  return request<ScheduleChangePreviewResponse>("/api/academy/schedule-change-preview/", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function confirmQuranScheduleChange(
+  input: ScheduleChangeConfirmInput
+): Promise<ScheduleChangeConfirmResponse> {
+  return request<ScheduleChangeConfirmResponse>("/api/academy/schedule-change-confirm/", {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }

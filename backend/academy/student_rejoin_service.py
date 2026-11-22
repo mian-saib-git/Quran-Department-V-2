@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from django.db import transaction
 from django.utils import timezone
@@ -518,7 +519,7 @@ def rejoin_student_drop(
             ),
         )
 
-    if rejoin_date > timezone.localdate():
+    if rejoin_date > timezone.localdate(timezone=ZoneInfo("Asia/Karachi")):
         raise StudentRejoinError(
             code="future_rejoin_date",
             detail=(

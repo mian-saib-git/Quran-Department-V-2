@@ -11,12 +11,14 @@ import {
 } from "lucide-react";
 
 import {
+  confirmQuranStudentDropLeaveReturn,
   getQuranDroppedLeave,
-  rejoinQuranStudent,
+  type ConfirmStudentDropLeaveAction,
   type QuranDroppedLeaveItem,
   type QuranDroppedLeaveResponse,
 } from "../services/djangoApiService";
 import { useAcademyWS } from "../hooks/useAcademyWS";
+import { getQuranBusinessTime } from "../services/quranBusinessTime";
 
 function formatDate(value: string) {
   if (!value) return "—";
@@ -25,17 +27,20 @@ function formatDate(value: string) {
   return date.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function todayIsoDate() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 function StatusPill({ item }: { item: QuranDroppedLeaveItem }) {
+  const confirmedDrop = Boolean(item.is_confirmed_dropped);
+  const confirmedLeave = Boolean(item.is_confirmed_leave);
   const controlledDrop = Boolean(item.active_drop_event);
-  const leave = item.flag_type === "leave" && !controlledDrop;
+  const leave = confirmedLeave || (item.flag_type === "leave" && !controlledDrop && !confirmedDrop);
+  const label = confirmedDrop
+    ? "Confirmed Drop"
+    : confirmedLeave
+      ? "Confirmed Leave"
+      : controlledDrop
+        ? "Controlled Drop"
+        : leave
+          ? "Leave Warning"
+          : "Drop Warning";
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-black ${
@@ -45,7 +50,7 @@ function StatusPill({ item }: { item: QuranDroppedLeaveItem }) {
       }`}
     >
       {leave ? <Clock3 size={14} /> : <AlertTriangle size={14} />}
-      {controlledDrop ? "Controlled Drop" : leave ? "On Leave" : "Dropped Flag"}
+      {label}
     </span>
   );
 }
@@ -54,7 +59,8 @@ export default function QuranDroppedLeave() {
   const [data, setData] = useState<QuranDroppedLeaveResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
-  const [rejoiningId, setRejoiningId] = useState<number | null>(null);
+  const [warningMessage, setWarningMessage] = useState("");
+  const [actingKey, setActingKey] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "leave" | "dropped">("all");
 
@@ -70,39 +76,59 @@ export default function QuranDroppedLeave() {
     }
   }, []);
 
-  const rejoinStudent = useCallback(
-    async (item: QuranDroppedLeaveItem) => {
-      if (!item.can_rejoin) return;
+  const handleConfirmAction = useCallback(
+    async (item: QuranDroppedLeaveItem, action: ConfirmStudentDropLeaveAction) => {
+      const label =
+        action === "confirm_drop"
+          ? "Drop effective date"
+          : action === "confirm_leave"
+            ? "Leave effective date"
+            : "Return / Rejoin date";
 
-      const rejoinDate = window.prompt(
-        `Rejoin date for ${item.student_name} (YYYY-MM-DD)`,
-        todayIsoDate(),
+      const effectiveDate = window.prompt(
+        `${label} for ${item.student_name} (YYYY-MM-DD)`,
+        getQuranBusinessTime().date,
       );
+      if (!effectiveDate) return;
 
-      if (!rejoinDate) return;
+      const reason =
+        action === "confirm_return"
+          ? ""
+          : window.prompt(`Optional reason for ${item.student_name}`, "") || "";
 
+      const key = `${item.student_id}:${action}`;
       setMessage("");
-      setRejoiningId(item.student_id);
+      setWarningMessage("");
+      setActingKey(key);
 
       try {
-        const response = await rejoinQuranStudent(
-          item.student_id,
-          rejoinDate,
-        );
+        const response = await confirmQuranStudentDropLeaveReturn({
+          student_id: item.student_id,
+          action,
+          effective_date: effectiveDate.trim(),
+          reason: reason.trim(),
+        });
+
+        if (response.requires_reassignment) {
+          setWarningMessage(
+            `${item.student_name}: ${response.reassignment_reason || "Coordinator reassignment required."}`,
+          );
+        }
 
         window.dispatchEvent(
           new CustomEvent("ivs-toast", {
-            detail: response.detail || "Student rejoin recorded.",
+            detail: response.detail || "Student status updated.",
           }),
         );
+        window.dispatchEvent(new CustomEvent("ivs-refresh-state"));
 
         await load();
       } catch (error: any) {
         setMessage(
-          error?.message || "Could not record the student rejoin.",
+          error?.message || "Could not update the student Drop/Leave status.",
         );
       } finally {
-        setRejoiningId(null);
+        setActingKey(null);
       }
     },
     [load],
@@ -219,6 +245,7 @@ export default function QuranDroppedLeave() {
         </div>
 
         {message && <div className="m-5 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">{message}</div>}
+        {warningMessage && <div className="m-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-800">{warningMessage}</div>}
 
         {loading && !data ? (
           <div className="flex min-h-[300px] items-center justify-center text-sm font-bold text-slate-500">
@@ -259,21 +286,50 @@ export default function QuranDroppedLeave() {
                 <div>
                   <StatusPill item={item} />
                   <div className="mt-2 text-sm font-black text-slate-950">
-                    {item.active_drop_event
-                      ? `Drop effective ${formatDate(item.drop_effective_date)}`
-                      : `${item.days_count} consecutive day${item.days_count === 1 ? "" : "s"}`}
+                    {item.is_confirmed_dropped || item.is_confirmed_leave
+                      ? `Effective ${formatDate(item.status_effective_date || item.drop_effective_date)}`
+                      : item.active_drop_event
+                        ? `Drop effective ${formatDate(item.drop_effective_date)}`
+                        : `${item.days_count} consecutive day${item.days_count === 1 ? "" : "s"}`}
                   </div>
-                  {item.can_rejoin && (
-                    <button
-                      type="button"
-                      onClick={() => void rejoinStudent(item)}
-                      disabled={rejoiningId === item.student_id}
-                      className="mt-3 inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <CheckCircle2 size={15} />
-                      {rejoiningId === item.student_id ? "Rejoining..." : "Rejoin"}
-                    </button>
-                  )}
+                  <div className="mt-2 text-[11px] font-bold text-slate-500">
+                    Status: {item.class_status_label || item.class_status}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {item.can_confirm_drop && (
+                      <button
+                        type="button"
+                        onClick={() => void handleConfirmAction(item, "confirm_drop")}
+                        disabled={actingKey !== null}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-black text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <AlertTriangle size={14} />
+                        {actingKey === `${item.student_id}:confirm_drop` ? "Confirming..." : "Confirm Drop"}
+                      </button>
+                    )}
+                    {item.can_confirm_leave && (
+                      <button
+                        type="button"
+                        onClick={() => void handleConfirmAction(item, "confirm_leave")}
+                        disabled={actingKey !== null}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-black text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Clock3 size={14} />
+                        {actingKey === `${item.student_id}:confirm_leave` ? "Confirming..." : "Confirm Leave"}
+                      </button>
+                    )}
+                    {(item.can_confirm_return || item.can_rejoin) && (
+                      <button
+                        type="button"
+                        onClick={() => void handleConfirmAction(item, "confirm_return")}
+                        disabled={actingKey !== null}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-black text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <CheckCircle2 size={14} />
+                        {actingKey === `${item.student_id}:confirm_return` ? "Returning..." : "Confirm Return"}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-600">

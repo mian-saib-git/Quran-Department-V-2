@@ -41,6 +41,8 @@ from .models import (
     LessonAccessPermission,
     LessonAccessRequest,
 )
+from .salary_v2_models import QuranClassCoverage
+from .student_status_service import academy_localdate, is_student_teaching_active
 
 from .attendance_import import (
     AttendanceCsvFormatError,
@@ -318,8 +320,65 @@ def schedule_payload(schedule):
     }
 
 
-def attendance_payload(attendance):
+def _student_coverage_map(rows):
+    """Batch-load assigned substitute coverage for Present student attendance rows."""
+    student_ids = {
+        row.student_id
+        for row in rows
+        if (
+            row.entity_type == Attendance.EntityType.STUDENT
+            and row.student_id is not None
+            and row.status == Attendance.Status.PRESENT
+        )
+    }
+    if not student_ids:
+        return {}
+    dates = {row.date for row in rows if row.date is not None}
+    coverages = (
+        QuranClassCoverage.objects.select_related("substitute_teacher__user")
+        .filter(
+            student_id__in=student_ids,
+            date__in=dates,
+            coverage_status=QuranClassCoverage.CoverageStatus.ASSIGNED,
+            teacher_status__in=[
+                QuranClassCoverage.TeacherStatus.ABSENT,
+                QuranClassCoverage.TeacherStatus.LEAVE,
+            ],
+            substitute_teacher__isnull=False,
+        )
+        .order_by("id")
+    )
+    by_student_date = {}
+    for cov in coverages:
+        by_student_date.setdefault((cov.student_id, cov.date), []).append(cov)
+    return by_student_date
+
+
+def _match_student_coverage(attendance, coverage_map):
+    """Return the matching assigned QuranClassCoverage for a Present student row."""
+    if (
+        not coverage_map
+        or attendance.entity_type != Attendance.EntityType.STUDENT
+        or attendance.student_id is None
+        or attendance.status != Attendance.Status.PRESENT
+    ):
+        return None
+    candidates = coverage_map.get((attendance.student_id, attendance.date), [])
+    if not candidates:
+        return None
+    att_class_key = (attendance.class_key or "").strip()[:5]
+    for cov in candidates:
+        if att_class_key and (cov.class_key or "").strip()[:5] != att_class_key:
+            continue
+        if attendance.teacher_id and cov.original_teacher_id != attendance.teacher_id:
+            continue
+        return cov
+    return None
+
+
+def attendance_payload(attendance, coverage=None):
     marked_by = attendance.marked_by
+    sub_teacher = getattr(coverage, "substitute_teacher", None) if coverage else None
 
     return {
         "id": attendance.id,
@@ -332,6 +391,8 @@ def attendance_payload(attendance):
         "classKey": attendance.class_key or "",
         "class_key": attendance.class_key or "",
         "status": attendance.status,
+        "substitute_teacher_id": sub_teacher.id if sub_teacher else None,
+        "substitute_teacher_name": str(sub_teacher) if sub_teacher else "",
         "marked_by": marked_by.username if marked_by else attendance.actor_name_snapshot,
         "marked_by_id": attendance.marked_by_id,
         "marked_by_username": marked_by.username if marked_by else "",
@@ -997,6 +1058,19 @@ class DashboardView(APIView):
                             teacher=teacher,
                             is_active=True,
                         ).order_by("weekday", "time_slot", "student__user__first_name", "id")
+
+            today = academy_localdate()
+            students = [
+                item
+                for item in students
+                if is_student_teaching_active(item, today)
+            ]
+            active_student_ids = {item.id for item in students}
+            schedules = [
+                item
+                for item in schedules
+                if item.student_id in active_student_ids
+            ]
 
             attendance = Attendance.objects.select_related(
                 "teacher__user",
@@ -2870,7 +2944,14 @@ class AttendanceListCreateView(APIView):
             if scope == "dashboard" and is_student_role(user):
                 attendance = attendance.filter(entity_type="student")
         rows, metadata = attendance_page(attendance, request.query_params)
-        return Response({**metadata, "results": [attendance_payload(item) for item in rows]})
+        coverage_map = _student_coverage_map(rows)
+        return Response({
+            **metadata,
+            "results": [
+                attendance_payload(item, coverage=_match_student_coverage(item, coverage_map))
+                for item in rows
+            ],
+        })
 
 
     @transaction.atomic
@@ -3284,9 +3365,14 @@ class AttendanceListCreateView(APIView):
                 exc,
             )
 
+        from salary.attendance_reconciler import sync_salary_verification_for_date
+        sync_salary_verification_for_date(attendance.department, target_date, user=user)
+
+        coverage_map = _student_coverage_map([attendance])
         return Response(
             attendance_payload(
-                attendance
+                attendance,
+                coverage=_match_student_coverage(attendance, coverage_map),
             ),
             status=(
                 status
@@ -3454,6 +3540,7 @@ class AttendanceDeleteView(APIView):
                 ),
             )
 
+        dept_for_sync = attendance.department
         attendance.delete()
 
         if student is not None:
@@ -3465,6 +3552,10 @@ class AttendanceDeleteView(APIView):
                     "not_marked"
                 ),
             )
+
+        if dept_for_sync is not None and target_date is not None:
+            from salary.attendance_reconciler import sync_salary_verification_for_date
+            sync_salary_verification_for_date(dept_for_sync, target_date, user=user)
 
         return Response(
             {
@@ -4650,6 +4741,8 @@ class AcademyStateView(APIView):
                 "classType": class_type,
                 "classDays": class_days,
                 "loginId": student.user.username,
+                "classStatus": student.class_status,
+                "statusEffectiveDate": str(student.status_effective_date) if student.status_effective_date else "",
             }
 
             if not is_dashboard:
@@ -4673,9 +4766,11 @@ class AcademyStateView(APIView):
 
             student_rows.append(student_row)
 
+        attendance_items = list(attendance_qs)
+        coverage_map = _student_coverage_map(attendance_items)
         attendance_rows = []
 
-        for item in attendance_qs:
+        for item in attendance_items:
             if item.entity_type == Attendance.EntityType.TEACHER:
                 entity_id = item.teacher_id
                 entity_type = "Teacher"
@@ -4699,6 +4794,9 @@ class AcademyStateView(APIView):
                 "leave": "Leave",
             }
 
+            cov = _match_student_coverage(item, coverage_map)
+            sub_teacher = getattr(cov, "substitute_teacher", None) if cov else None
+
             attendance_rows.append({
                 "id": str(item.id),
                 "entityId": str(entity_id),
@@ -4710,6 +4808,8 @@ class AcademyStateView(APIView):
                 "studentId": str(item.student_id) if item.student_id else "",
                 "studentName": str(item.student) if item.student else "",
                 "status": status_map.get(item.status, item.status),
+                "substituteTeacherId": str(sub_teacher.id) if sub_teacher else "",
+                "substituteTeacherName": str(sub_teacher) if sub_teacher else "",
                 "markedById": str(item.marked_by_id) if item.marked_by_id else "",
                 "markedByUsername": item.marked_by.username if item.marked_by else "",
                 "markedByName": user_display_name(item.marked_by) if item.marked_by else "",
@@ -5322,6 +5422,7 @@ class SchedulingMutationView(APIView):
                     effective_date=timezone.localdate(),
                 )
 
+            from academy.student_status_service import academy_localdate
             existing_schedule = student.schedules.filter(is_active=True).order_by("id").first()
             duration_minutes = getattr(existing_schedule, "duration_minutes", 30) or 30
             sync_student_schedules(
@@ -5330,6 +5431,8 @@ class SchedulingMutationView(APIView):
                 time_slot=parsed_time,
                 class_days=class_days,
                 duration_minutes=duration_minutes,
+                effective_date=academy_localdate(),
+                preserve_history=True,
             )
 
             days_count = len(class_days)

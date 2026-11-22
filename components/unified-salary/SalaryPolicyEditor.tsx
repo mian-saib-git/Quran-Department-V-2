@@ -4,6 +4,7 @@ import {
   type SalaryPolicyVersionDetail,
   updateDraftVersion,
 } from "../../services/salaryPolicyService";
+import { clearSalaryPreviewModuleCache } from "./salaryPreviewCache";
 
 interface Props {
   version: SalaryPolicyVersionDetail;
@@ -43,7 +44,9 @@ export default function SalaryPolicyEditor({
     version.basic_salary_partial_month_proration || "calendar_days"
   );
   const [coordinatorQualifyingWeekdays, setCoordinatorQualifyingWeekdays] = useState<string[]>(
-    version.coordinator_qualifying_weekdays || ["friday", "saturday", "sunday", "monday"]
+    Array.isArray(version.coordinator_qualifying_weekdays)
+      ? version.coordinator_qualifying_weekdays
+      : []
   );
   const [requiresCompletedLesson, setRequiresCompletedLesson] = useState(
     version.requires_completed_lesson_for_bonus ?? true
@@ -65,12 +68,16 @@ export default function SalaryPolicyEditor({
     setCancellationPaymentRule(version.cancellation_payment_rule || "paid_always");
     setBasicSalaryAmount(version.basic_salary_amount || "");
     setBasicSalaryProration(version.basic_salary_partial_month_proration || "calendar_days");
-    setCoordinatorQualifyingWeekdays(version.coordinator_qualifying_weekdays || ["friday", "saturday", "sunday", "monday"]);
+    setCoordinatorQualifyingWeekdays(
+      Array.isArray(version.coordinator_qualifying_weekdays)
+        ? version.coordinator_qualifying_weekdays
+        : []
+    );
     setRequiresCompletedLesson(version.requires_completed_lesson_for_bonus ?? true);
     setNotes(version.notes || "");
     setError(null);
     setSuccessMsg(null);
-  }, [version.id]);
+  }, [version.id, version.coordinator_qualifying_weekdays]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,6 +109,7 @@ export default function SalaryPolicyEditor({
         requires_completed_lesson_for_bonus: requiresCompletedLesson,
         notes: notes.trim(),
       });
+      clearSalaryPreviewModuleCache();
       setSuccessMsg("Policy version configuration saved successfully.");
       onVersionUpdated(updated);
     } catch (err: any) {

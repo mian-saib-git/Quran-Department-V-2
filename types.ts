@@ -79,6 +79,8 @@ export interface AttendanceRecord {
   markedByUsername?: string;
   markedByName?: string;
   markedByRole?: string;
+  substituteTeacherId?: string;
+  substituteTeacherName?: string;
 }
 
 export interface AppState {

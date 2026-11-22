@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import re
 
 from django.core.paginator import EmptyPage, Paginator
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -19,6 +20,7 @@ from .models import (
     Attendance,
     ClassSchedule,
     SalaryConfiguration,
+    StudentClassHistory,
     StudentProfile,
     TeacherProfile,
     TeacherSalarySlip,
@@ -36,6 +38,14 @@ from .salary_service import (
 )
 from .ws_notify import notify_global
 from .salary_v2_models import QuranStudentDropEvent
+from .student_status_service import (
+    DROPPED_CLASS_STATUSES,
+    INACTIVE_TEACHING_STATUSES,
+    StudentStatusTransitionError,
+    academy_localdate,
+    confirm_student_drop_leave_return,
+    is_student_teaching_active,
+)
 
 
 def _user_department(user):
@@ -171,35 +181,52 @@ class DroppedLeaveStudentsView(APIView):
                 else ""
             )
 
+            is_confirmed_inactive = student.class_status in INACTIVE_TEACHING_STATUSES
             streak_rows = []
 
             if active_drop is None:
-                if not rows:
-                    continue
-
-                if latest_status not in {
+                if rows and latest_status in {
                     Attendance.Status.LEAVE,
                     Attendance.Status.ABSENT,
                 }:
+                    for row in rows:
+                        if row.status != latest_status:
+                            break
+                        streak_rows.append(row)
+
+                if len(streak_rows) < 2 and not is_confirmed_inactive:
                     continue
 
-                for row in rows:
-                    if row.status != latest_status:
-                        break
-                    streak_rows.append(row)
+                if is_confirmed_inactive:
+                    flag_type = (
+                        "leave"
+                        if student.class_status == StudentProfile.ClassStatus.ON_LEAVE
+                        else "dropped"
+                    )
+                    attendance_status = (
+                        latest_status
+                        if latest_status in {Attendance.Status.LEAVE, Attendance.Status.ABSENT}
+                        else (
+                            Attendance.Status.LEAVE
+                            if flag_type == "leave"
+                            else Attendance.Status.ABSENT
+                        )
+                    )
+                else:
+                    flag_type = (
+                        "leave"
+                        if latest_status == Attendance.Status.LEAVE
+                        else "dropped"
+                    )
+                    attendance_status = latest_status
 
-                if len(streak_rows) < 2:
-                    continue
-
-                flag_type = (
-                    "leave"
-                    if latest_status == Attendance.Status.LEAVE
-                    else "dropped"
-                )
-                attendance_status = latest_status
                 days_count = len(streak_rows)
-                streak_start = str(streak_rows[-1].date)
-                last_marked_date = str(streak_rows[0].date)
+                streak_start = (
+                    str(streak_rows[-1].date)
+                    if streak_rows
+                    else (str(student.status_effective_date) if student.status_effective_date else "")
+                )
+                last_marked_date = str(streak_rows[0].date) if streak_rows else ""
             else:
                 flag_type = "dropped"
                 attendance_status = (
@@ -219,6 +246,8 @@ class DroppedLeaveStudentsView(APIView):
                 )
 
             schedule = _student_schedule_summary(student)
+            is_confirmed_dropped = student.class_status in DROPPED_CLASS_STATUSES
+            is_confirmed_leave = student.class_status == StudentProfile.ClassStatus.ON_LEAVE
             results.append({
                 "student_id": student.id,
                 "student_name": str(student),
@@ -234,6 +263,16 @@ class DroppedLeaveStudentsView(APIView):
                 "student_type_label": student.get_student_type_display(),
                 "class_status": student.class_status,
                 "class_status_label": student.get_class_status_display(),
+                "status_effective_date": (
+                    str(student.status_effective_date)
+                    if student.status_effective_date
+                    else ""
+                ),
+                "is_confirmed_dropped": is_confirmed_dropped,
+                "is_confirmed_leave": is_confirmed_leave,
+                "can_confirm_drop": not is_confirmed_dropped,
+                "can_confirm_leave": not is_confirmed_leave,
+                "can_confirm_return": is_confirmed_inactive or (active_drop is not None),
                 "active_drop_event": active_drop is not None,
                 "drop_event_id": (
                     active_drop.id
@@ -259,6 +298,65 @@ class DroppedLeaveStudentsView(APIView):
             },
             "generated_at": timezone.now().isoformat(),
         })
+
+    def post(self, request):
+        if not is_department_manager(request.user):
+            return Response(
+                {"detail": "Only department admins and coordinators can update student Drop/Leave status."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        department = _user_department(request.user)
+        if not department:
+            return Response({"detail": "Quran department assignment is required."}, status=status.HTTP_403_FORBIDDEN)
+        if not _feature_enabled(department, "tab_dropped_leave"):
+            return Response({"detail": "Dropped & Leave is disabled for this department."}, status=status.HTTP_403_FORBIDDEN)
+
+        raw_student_id = request.data.get("student_id")
+        try:
+            student_id = int(raw_student_id)
+        except (TypeError, ValueError):
+            return Response({"detail": "Valid student_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        action = str(request.data.get("action") or "").strip()
+        raw_date = str(request.data.get("effective_date") or "").strip()
+        if raw_date:
+            try:
+                effective_date = date.fromisoformat(raw_date)
+            except ValueError:
+                return Response({"detail": "effective_date must be YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            effective_date = academy_localdate()
+
+        reason = str(request.data.get("reason") or "")
+
+        try:
+            result = confirm_student_drop_leave_return(
+                department=department,
+                student_id=student_id,
+                action=action,
+                effective_date=effective_date,
+                reason=reason,
+                actor=request.user,
+            )
+        except StudentStatusTransitionError as exc:
+            return Response(exc.payload, status=exc.status_code)
+
+        try:
+            transaction.on_commit(
+                lambda: notify_global(
+                    "academy_update",
+                    {
+                        "event": "account_status_updated",
+                        "department_id": department.id,
+                        "student_id": student_id,
+                        "action": action,
+                    },
+                )
+            )
+        except Exception:
+            pass
+
+        return Response(result, status=status.HTTP_200_OK)
 
 
 def _strict_money(value, label="Amount"):
@@ -757,4 +855,482 @@ class QuranSalaryPdfDownloadView(APIView):
             },
         )
         return _no_store(Response(salary_slip_payload(slip)))
+
+
+def _schedule_end_time(time_slot, duration_minutes: int) -> str:
+    if not time_slot:
+        return ""
+    start_dt = datetime.combine(date(2000, 1, 1), time_slot)
+    end_dt = start_dt + timedelta(minutes=int(duration_minutes or 30))
+    return end_dt.strftime("%H:%M")
+
+
+def _extract_display_number(full_name: str) -> str:
+    match = re.match(r"^\s*(\d+)\b", str(full_name or ""))
+    return match.group(1) if match else ""
+
+
+class QuranTeacherDetailsView(APIView):
+    """Read-only, department-scoped details for a single Quran TeacherProfile."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, teacher_id: int):
+        if not is_department_manager(request.user):
+            return Response(
+                {"detail": "Only department admins and coordinators can view teacher details."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        department = _user_department(request.user)
+        if not department:
+            return Response(
+                {"detail": "Quran department assignment is required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        teacher = (
+            TeacherProfile.objects.select_related("user", "department", "institution")
+            .filter(id=teacher_id, department=department)
+            .first()
+        )
+        if teacher is None:
+            return Response(
+                {"detail": "Teacher not found in this Quran department."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        today = academy_localdate()
+
+        active_schedules_prefetch = Prefetch(
+            "schedules",
+            queryset=(
+                ClassSchedule.objects.filter(department=department, teacher=teacher, is_active=True)
+                .order_by("weekday", "time_slot", "id")
+            ),
+            to_attr="teacher_active_schedules",
+        )
+        all_schedules_prefetch = Prefetch(
+            "schedules",
+            queryset=(
+                ClassSchedule.objects.filter(department=department)
+                .order_by("-is_active", "weekday", "time_slot", "id")
+            ),
+            to_attr="teacher_all_schedules",
+        )
+
+        assigned_students = list(
+            StudentProfile.objects.select_related("user", "teacher__user")
+            .prefetch_related(active_schedules_prefetch)
+            .filter(department=department, teacher=teacher)
+            .order_by("user__first_name", "user__username", "id")
+        )
+
+        inactive_student_ids = [
+            s.id for s in assigned_students if not is_student_teaching_active(s, today)
+        ]
+
+        latest_history_by_student = {}
+        active_drop_by_student = {}
+        previous_schedules_by_student = {}
+
+        if inactive_student_ids:
+            history_rows = (
+                StudentClassHistory.objects.select_related("previous_teacher__user")
+                .filter(
+                    student_id__in=inactive_student_ids,
+                    new_class_status__in=INACTIVE_TEACHING_STATUSES,
+                )
+                .order_by("student_id", "-effective_date", "-id")
+            )
+            for row in history_rows:
+                latest_history_by_student.setdefault(row.student_id, row)
+
+            drop_rows = (
+                QuranStudentDropEvent.objects.filter(
+                    department=department,
+                    student_id__in=inactive_student_ids,
+                    status=QuranStudentDropEvent.Status.DROPPED,
+                )
+                .order_by("student_id", "-drop_effective_date", "-id")
+            )
+            for drop in drop_rows:
+                active_drop_by_student.setdefault(drop.student_id, drop)
+
+            inactive_students_with_scheds = (
+                StudentProfile.objects.filter(id__in=inactive_student_ids)
+                .prefetch_related(all_schedules_prefetch)
+            )
+            for st in inactive_students_with_scheds:
+                previous_schedules_by_student[st.id] = list(
+                    getattr(st, "teacher_all_schedules", [])
+                )
+
+        active_students_payload = []
+        dropped_leave_payload = []
+        class_schedules_payload = []
+
+        for student in assigned_students:
+            full_name = student.user.get_full_name() or student.user.username
+            student_schedules = list(getattr(student, "teacher_active_schedules", []))
+
+            if is_student_teaching_active(student, today):
+                sched_items = []
+                for sched in student_schedules:
+                    start_str = sched.time_slot.strftime("%H:%M") if sched.time_slot else ""
+                    end_str = _schedule_end_time(sched.time_slot, sched.duration_minutes)
+                    sched_item = {
+                        "id": sched.id,
+                        "weekday": sched.weekday,
+                        "time_slot": start_str,
+                        "end_time": end_str,
+                        "duration_minutes": sched.duration_minutes,
+                    }
+                    sched_items.append(sched_item)
+                    class_schedules_payload.append({
+                        "id": sched.id,
+                        "student_id": student.id,
+                        "student_name": full_name,
+                        "student_username": student.user.username,
+                        "weekday": sched.weekday,
+                        "time_slot": start_str,
+                        "end_time": end_str,
+                        "duration_minutes": sched.duration_minutes,
+                        "class_status": student.class_status,
+                        "class_status_label": student.get_class_status_display(),
+                        "salary_class_mode": student.salary_class_mode,
+                        "salary_class_mode_label": student.get_salary_class_mode_display(),
+                    })
+
+                active_students_payload.append({
+                    "student_id": student.id,
+                    "full_name": full_name,
+                    "username": student.user.username,
+                    "class_status": student.class_status,
+                    "class_status_label": student.get_class_status_display(),
+                    "student_type": student.student_type,
+                    "student_type_label": student.get_student_type_display(),
+                    "salary_class_mode": student.salary_class_mode,
+                    "salary_class_mode_label": student.get_salary_class_mode_display(),
+                    "account_is_active": bool(
+                        student.user.is_active and student.user.archived_at is None
+                    ),
+                    "schedules": sched_items,
+                    "scheduled_classes_count": len(sched_items),
+                })
+            elif student.class_status in INACTIVE_TEACHING_STATUSES:
+                hist = latest_history_by_student.get(student.id)
+                drop_ev = active_drop_by_student.get(student.id)
+                prev_scheds = previous_schedules_by_student.get(student.id, [])
+                prev_days = []
+                prev_times = []
+                for sched in prev_scheds:
+                    if sched.weekday and sched.weekday not in prev_days:
+                        prev_days.append(sched.weekday)
+                    if sched.time_slot:
+                        t_str = sched.time_slot.strftime("%H:%M")
+                        if t_str not in prev_times:
+                            prev_times.append(t_str)
+
+                dropped_leave_payload.append({
+                    "student_id": student.id,
+                    "full_name": full_name,
+                    "username": student.user.username,
+                    "class_status": student.class_status,
+                    "class_status_label": student.get_class_status_display(),
+                    "is_on_leave": student.class_status == StudentProfile.ClassStatus.ON_LEAVE,
+                    "is_dropped": student.class_status in DROPPED_CLASS_STATUSES,
+                    "effective_date": (
+                        str(student.status_effective_date)
+                        if student.status_effective_date
+                        else ""
+                    ),
+                    "account_is_active": bool(
+                        student.user.is_active and student.user.archived_at is None
+                    ),
+                    "original_teacher_name": str(teacher),
+                    "previous_class_days": prev_days,
+                    "previous_time_slots": prev_times,
+                    "reason": hist.notes if hist else "",
+                    "rejoined_date": (
+                        str(drop_ev.rejoined_date)
+                        if drop_ev and drop_ev.rejoined_date
+                        else ""
+                    ),
+                })
+
+        # Section D: Historical dropped/leave assignments attributed to this teacher
+        historical_rows = list(
+            StudentClassHistory.objects.select_related(
+                "student__user",
+                "student__teacher__user",
+                "previous_teacher__user",
+            )
+            .filter(
+                department=department,
+                previous_teacher=teacher,
+                new_class_status__in=INACTIVE_TEACHING_STATUSES,
+            )
+            .order_by("-effective_date", "-id")[:50]
+        )
+        status_label_map = dict(StudentProfile.ClassStatus.choices)
+        historical_dropped_payload = [
+            {
+                "history_id": row.id,
+                "student_id": row.student_id,
+                "student_name": (
+                    row.student.user.get_full_name() or row.student.user.username
+                ) if row.student_id else "",
+                "student_username": row.student.user.username if row.student_id else "",
+                "new_class_status": row.new_class_status,
+                "new_class_status_label": status_label_map.get(
+                    row.new_class_status, row.new_class_status
+                ),
+                "effective_date": str(row.effective_date),
+                "teacher_name": str(row.previous_teacher) if row.previous_teacher else "",
+                "current_teacher_name": (
+                    str(row.student.teacher)
+                    if (row.student_id and row.student.teacher_id)
+                    else ""
+                ),
+                "notes": row.notes or "",
+            }
+            for row in historical_rows
+        ]
+
+        teacher_full_name = teacher.user.get_full_name() or teacher.user.username
+        is_archived = teacher.user.archived_at is not None
+        is_active = bool(
+            teacher.user.is_active and not is_archived and teacher.login_deleted_at is None
+        )
+        account_status_label = (
+            "Archived" if is_archived else ("Active" if is_active else "Disabled")
+        )
+
+        dropped_count = sum(1 for item in dropped_leave_payload if item["is_dropped"])
+        on_leave_count = sum(1 for item in dropped_leave_payload if item["is_on_leave"])
+
+        return _no_store(
+            Response(
+                {
+                    "teacher": {
+                        "id": teacher.id,
+                        "user_id": teacher.user_id,
+                        "full_name": teacher_full_name,
+                        "display_number": _extract_display_number(teacher_full_name),
+                        "username": teacher.user.username,
+                        "department_id": department.id,
+                        "department_name": department.name,
+                        "is_active": is_active,
+                        "account_status_label": account_status_label,
+                    },
+                    "summary": {
+                        "active_students_count": len(active_students_payload),
+                        "dropped_students_count": dropped_count,
+                        "on_leave_students_count": on_leave_count,
+                        "active_schedules_count": len(class_schedules_payload),
+                        "historical_dropped_count": len(historical_dropped_payload),
+                    },
+                    "active_students": active_students_payload,
+                    "dropped_leave_students": dropped_leave_payload,
+                    "class_schedules": class_schedules_payload,
+                    "historical_dropped_classes": historical_dropped_payload,
+                },
+                status=status.HTTP_200_OK,
+            )
+        )
+
+
+def _parse_date_value(raw_value):
+    if not raw_value:
+        return None
+    if isinstance(raw_value, date):
+        return raw_value
+    text = str(raw_value).strip()
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _parse_time_value(raw_value):
+    if not raw_value:
+        return None
+    text = str(raw_value).strip()
+    for fmt in ("%H:%M", "%H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt).time()
+        except ValueError:
+            continue
+    return None
+
+
+def _resolve_department_student(department, data):
+    student_id = data.get("student_id")
+    user_id = data.get("user_id")
+    qs = StudentProfile.objects.select_related("user", "teacher__user").filter(
+        Q(department=department) | Q(user__department=department)
+    )
+    if student_id not in (None, ""):
+        student = qs.filter(id=student_id).first()
+        if student:
+            return student
+    if user_id not in (None, ""):
+        return qs.filter(user_id=user_id).first()
+    return None
+
+
+def _resolve_department_teacher(department, teacher_id, fallback_teacher=None):
+    if teacher_id in (None, ""):
+        return fallback_teacher
+    return (
+        TeacherProfile.objects.select_related("user")
+        .filter(Q(department=department) | Q(user__department=department))
+        .filter(Q(id=teacher_id) | Q(user_id=teacher_id))
+        .first()
+    )
+
+
+def _require_quran_manager(request):
+    if not is_department_manager(request.user):
+        return None, Response(
+            {"detail": "Only department admins and coordinators can manage schedules."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    department = _user_department(request.user)
+    if not department:
+        return None, Response(
+            {"detail": "Quran department assignment is required."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return department, None
+
+
+class QuranScheduleChangePreviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        department, error_response = _require_quran_manager(request)
+        if error_response:
+            return error_response
+
+        from .schedule_change_service import preview_schedule_salary_change
+
+        student = _resolve_department_student(department, request.data)
+        if not student:
+            return Response(
+                {"detail": "Student not found in Quran department."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        teacher = _resolve_department_teacher(
+            department,
+            request.data.get("teacher_id"),
+            fallback_teacher=student.teacher,
+        )
+        new_class_days = request.data.get("class_days")
+        if not isinstance(new_class_days, list) or not new_class_days:
+            return Response(
+                {"detail": "class_days must be a non-empty list."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        eff_date = _parse_date_value(request.data.get("effective_date")) or academy_localdate()
+        time_slot = _parse_time_value(request.data.get("time_slot"))
+        duration_minutes = request.data.get("duration_minutes")
+
+        payload = preview_schedule_salary_change(
+            department=department,
+            student=student,
+            new_class_days=new_class_days,
+            effective_date=eff_date,
+            new_teacher=teacher,
+            new_time_slot=time_slot,
+            duration_minutes=duration_minutes,
+            actor=request.user,
+        )
+        return _no_store(Response(payload, status=status.HTTP_200_OK))
+
+
+class QuranScheduleChangeConfirmView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        department, error_response = _require_quran_manager(request)
+        if error_response:
+            return error_response
+
+        from .payroll_source_locks import PayrollSourceLockedError
+        from .schedule_change_service import apply_schedule_change_with_salary_mode
+
+        student = _resolve_department_student(department, request.data)
+        if not student:
+            return Response(
+                {"detail": "Student not found in Quran department."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        teacher = _resolve_department_teacher(
+            department,
+            request.data.get("teacher_id"),
+            fallback_teacher=student.teacher,
+        )
+        if not teacher:
+            return Response(
+                {"detail": "Teacher not found in Quran department."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        new_class_days = request.data.get("class_days")
+        if not isinstance(new_class_days, list) or not new_class_days:
+            return Response(
+                {"detail": "class_days must be a non-empty list."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        existing_schedule = student.schedules.filter(is_active=True).order_by("id").first()
+        time_slot = _parse_time_value(request.data.get("time_slot")) or (
+            existing_schedule.time_slot if existing_schedule else None
+        )
+        if not time_slot:
+            return Response(
+                {"detail": "time_slot is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        duration_minutes = request.data.get("duration_minutes")
+        if duration_minutes is None and existing_schedule:
+            duration_minutes = getattr(existing_schedule, "duration_minutes", 30) or 30
+
+        eff_date = _parse_date_value(request.data.get("effective_date")) or academy_localdate()
+        salary_mode = str(request.data.get("salary_mode") or "preserve").strip()
+
+        try:
+            result = apply_schedule_change_with_salary_mode(
+                department=department,
+                student=student,
+                teacher=teacher,
+                time_slot=time_slot,
+                class_days=new_class_days,
+                duration_minutes=duration_minutes or 30,
+                effective_date=eff_date,
+                salary_mode=salary_mode,
+                actor=request.user,
+            )
+        except PayrollSourceLockedError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        notify_global(
+            "academy_update",
+            {
+                "event": "schedule_updated",
+                "student_id": student.id,
+                "teacher_id": teacher.id,
+            },
+        )
+        return _no_store(Response(result, status=status.HTTP_200_OK))
+
+
 

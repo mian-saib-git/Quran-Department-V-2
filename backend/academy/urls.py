@@ -14,6 +14,9 @@ from .quran_management_api import (
     QuranSalaryDashboardView,
     QuranSalarySettingsView,
     QuranSalaryPdfDownloadView,
+    QuranTeacherDetailsView,
+    QuranScheduleChangePreviewView,
+    QuranScheduleChangeConfirmView,
 )
 
 from .views import (
@@ -48,6 +51,7 @@ urlpatterns = [
         name="academy_teacher_salary_v2_proof",
     ),
     path("dropped-leave/", DroppedLeaveStudentsView.as_view(), name="academy_dropped_leave"),
+    path("teachers/<int:teacher_id>/details/", QuranTeacherDetailsView.as_view(), name="academy_teacher_details"),
     path("teacher-salary/", QuranSalaryDashboardView.as_view(), name="academy_teacher_salary"),
     path("teacher-salary/settings/", QuranSalarySettingsView.as_view(), name="academy_teacher_salary_settings"),
     path("teacher-salary/audit/", QuranSalaryAuditView.as_view(), name="academy_teacher_salary_audit"),
@@ -109,5 +113,15 @@ path("lesson-access-requests/<int:pk>/", LessonAccessRequestDetailView.as_view()
         "monthly-lesson-summary/",
         MonthlyLessonSummaryView.as_view(),
         name="academy_monthly_lesson_summary",
+    ),
+    path(
+        "schedule-change-preview/",
+        QuranScheduleChangePreviewView.as_view(),
+        name="academy_schedule_change_preview",
+    ),
+    path(
+        "schedule-change-confirm/",
+        QuranScheduleChangeConfirmView.as_view(),
+        name="academy_schedule_change_confirm",
     ),
 ]

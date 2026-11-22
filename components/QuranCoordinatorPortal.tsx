@@ -82,6 +82,7 @@ const CoordinatorAccounts = lazy(() => import("./CoordinatorAccounts"));
 const CoordinatorLessons = lazy(() => import("./CoordinatorLessons"));
 const QuranDroppedLeave = lazy(() => import("./QuranDroppedLeave"));
 const TeacherSalaryManagement = lazy(() => import("./TeacherSalaryManagement"));
+const TeacherDetailsModal = lazy(() => import("./TeacherDetailsModal"));
 
 export type TabId =
   | "dashboard"
@@ -284,6 +285,7 @@ export default function QuranCoordinatorPortal({
   }, []);
 
   const [aiBotAnimation, setAiBotAnimation] = useState<any>(null);
+  const [selectedTeacherDetailsId, setSelectedTeacherDetailsId] = useState<number | null>(null);
   const [shouldLoadAiAssets, setShouldLoadAiAssets] = useState(false);
   const requestAiAssistantAssets = useCallback(() => {
     setShouldLoadAiAssets(true);
@@ -415,12 +417,28 @@ export default function QuranCoordinatorPortal({
   const todayStr = quranBusinessNow.date;
   const currentDayName = quranBusinessNow.weekday;
 
+  const activeViewStudents = useMemo(() => {
+    const inactiveStatuses = new Set([
+      "on_leave",
+      "old_dropped",
+      "trial_dropped",
+      "old_dropped_other",
+    ]);
+    return viewStudents.filter((s) => {
+      const status = String(s.classStatus || "").toLowerCase();
+      if (!inactiveStatuses.has(status)) return true;
+      const eff = String(s.statusEffectiveDate || "").trim();
+      if (eff && todayStr < eff) return true;
+      return false;
+    });
+  }, [viewStudents, todayStr]);
+
   const todayAttendanceSummary = useMemo(() => {
     const teacherRecs = viewAtt.filter((r) => r.date === todayStr && r.entityType === EntityType.TEACHER);
     const studentRecs = viewAtt.filter((r) => r.date === todayStr && r.entityType === EntityType.STUDENT);
     const count = (recs: AttendanceRecord[], status: AttendanceStatus) =>
       recs.filter((r) => r.status === status).length;
-    const studentsToday = viewStudents.filter((s) => (s.classDays || []).includes(currentDayName));
+    const studentsToday = activeViewStudents.filter((s) => (s.classDays || []).includes(currentDayName));
     const teacherTotal = (() => {
       const set = new Set<string>();
       for (const s of studentsToday) set.add(`${s.teacherId}__${s.timeSlot}`);
@@ -444,16 +462,16 @@ export default function QuranCoordinatorPortal({
         unmarked: Math.max(0, studentTotal - studentRecs.length),
       },
     };
-  }, [viewAtt, viewStudents, todayStr, currentDayName]);
+  }, [viewAtt, activeViewStudents, todayStr, currentDayName]);
 
   const currentClasses = useMemo(
-    () => viewStudents.filter((s) => (s.classDays || []).includes(currentDayName) && isStudentLiveNow(s, currentSlot)),
-    [viewStudents, currentSlot, currentDayName]
+    () => activeViewStudents.filter((s) => (s.classDays || []).includes(currentDayName) && isStudentLiveNow(s, currentSlot)),
+    [activeViewStudents, currentSlot, currentDayName]
   );
 
   const nextClasses = useMemo(
     () =>
-      viewStudents
+      activeViewStudents
         .filter((s) => {
           if (!(s.classDays || []).includes(currentDayName)) return false;
           if (isStudentLiveNow(s, currentSlot)) return false;
@@ -461,7 +479,7 @@ export default function QuranCoordinatorPortal({
           return diff > 0 && diff <= 60;
         })
         .sort((a, b) => timeSlotToMinutes(a.timeSlot) - timeSlotToMinutes(b.timeSlot)),
-    [viewStudents, currentSlot, currentDayName]
+    [activeViewStudents, currentSlot, currentDayName]
   );
 
   const teacherById = useMemo(() => {
@@ -1057,6 +1075,9 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
                     onMarkAttendance={markAttendance}
                     onUnmarkAttendance={unmarkAttendance}
                     onOpenAccountEditor={openDashboardAccountEditor}
+                    onOpenTeacherDetails={(teacherId) =>
+                      setSelectedTeacherDetailsId(Number(teacherId) || null)
+                    }
                   />
                 </div>
                 </Suspense>
@@ -2018,6 +2039,15 @@ ${sidebarEdgeHover ? "sidebar-content-ready" : ""}
 
 `}</style>
 
+      {selectedTeacherDetailsId !== null && (
+        <Suspense fallback={null}>
+          <TeacherDetailsModal
+            teacherId={selectedTeacherDetailsId}
+            isOpen={selectedTeacherDetailsId !== null}
+            onClose={() => setSelectedTeacherDetailsId(null)}
+          />
+        </Suspense>
+      )}
       </div>
     </>
   );

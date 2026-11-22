@@ -114,6 +114,8 @@ const normalizeState = (state: any): AppState => {
           ? s.class_days
           : [],
       loginId: String(s?.loginId ?? s?.login_id ?? ""),
+      classStatus: String(s?.classStatus ?? s?.class_status ?? ""),
+      statusEffectiveDate: String(s?.statusEffectiveDate ?? s?.status_effective_date ?? ""),
     }))
     : [];
 
@@ -136,6 +138,8 @@ const normalizeState = (state: any): AppState => {
       ),
       markedByName: String(a?.markedByName ?? a?.marked_by_name ?? ""),
       markedByRole: String(a?.markedByRole ?? a?.marked_by_role ?? ""),
+      substituteTeacherId: String(a?.substituteTeacherId ?? a?.substitute_teacher_id ?? ""),
+      substituteTeacherName: String(a?.substituteTeacherName ?? a?.substitute_teacher_name ?? ""),
     }))
     : [];
 

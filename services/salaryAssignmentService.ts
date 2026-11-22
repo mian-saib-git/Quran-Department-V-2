@@ -18,6 +18,7 @@ export interface TeacherPolicyAssignment {
   is_active: boolean;
   basic_salary_override?: string | null;
   basic_salary_eligibility?: "always_eligible" | "active_assignment" | "conditional_availability";
+  is_special_case?: boolean;
   notes: string;
   assigned_by?: number | null;
   assigned_by_name?: string | null;
@@ -68,6 +69,7 @@ export interface DepartmentTeacher {
     policy_id: number;
     policy_code: string;
     policy_name: string;
+    is_special_case?: boolean;
     effective_from: string;
     effective_to: string | null;
     version_number: number | null;
@@ -256,6 +258,7 @@ export interface BulkAssignResult {
     policy_id: number;
     policy_code: string;
     policy_name: string;
+    is_special_case?: boolean;
     effective_from: string;
     effective_to: string | null;
     replaced_previous?: boolean;

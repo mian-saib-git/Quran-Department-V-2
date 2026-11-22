@@ -1183,6 +1183,7 @@ class SalaryPolicyVersionViewSet(viewsets.ModelViewSet):
             locked_version.published_at = timezone.now()
             locked_version.published_by = user
             locked_version.save()
+            invalidate_department_salary_preview_cache(locked_version.policy.department_id)
 
         detail_serializer = SalaryPolicyVersionDetailSerializer(locked_version)
         return Response(detail_serializer.data, status=status.HTTP_200_OK)
@@ -1221,6 +1222,10 @@ class SalaryPolicyVersionViewSet(viewsets.ModelViewSet):
                 lesson_plan_bonus_per_class=source.lesson_plan_bonus_per_class,
                 substitute_rate_per_class=source.substitute_rate_per_class,
                 cancellation_rate_per_class=source.cancellation_rate_per_class,
+                cancellation_payment_rule=source.cancellation_payment_rule,
+                basic_salary_amount=source.basic_salary_amount,
+                basic_salary_partial_month_proration=source.basic_salary_partial_month_proration,
+                coordinator_qualifying_weekdays=list(source.coordinator_qualifying_weekdays or []),
                 requires_completed_lesson_for_bonus=source.requires_completed_lesson_for_bonus,
                 notes=f"Cloned from v{source.version_number}. {source.notes or ''}".strip(),
             )
@@ -1625,6 +1630,7 @@ class TeacherPolicyAssignmentViewSet(viewsets.ModelViewSet):
             department=department,
             assigned_by=user,
         )
+        invalidate_department_salary_preview_cache(department.id)
         try:
             teacher_name = getattr(assignment.teacher, "historical_name", None) or (
                 assignment.teacher.user.get_full_name() if assignment.teacher.user else f"Teacher #{assignment.teacher_id}"
@@ -1663,6 +1669,7 @@ class TeacherPolicyAssignmentViewSet(viewsets.ModelViewSet):
         inst_id = instance.id
         dept_id = instance.department_id
         instance.delete()
+        invalidate_department_salary_preview_cache(dept_id)
         try:
             PlatformAuditLog.objects.create(
                 actor=user,
@@ -1965,6 +1972,7 @@ class TeacherPolicyAssignmentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        invalidate_department_salary_preview_cache(department.id)
         return Response(
             {
                 "total_requested": len(teacher_ids),
@@ -2233,6 +2241,7 @@ class TeacherPolicyAssignmentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        invalidate_department_salary_preview_cache(department.id)
         return Response(
             {
                 "total_requested": len(seen_teacher_ids),
@@ -2504,6 +2513,7 @@ class DepartmentTeachersView(APIView):
                     "policy_id": policy.id,
                     "policy_code": policy.code,
                     "policy_name": policy.name,
+                    "is_special_case": bool(getattr(current_assignment, "is_special_case", False)),
                     "effective_from": current_assignment.effective_from.isoformat(),
                     "effective_to": current_assignment.effective_to.isoformat() if current_assignment.effective_to else None,
                     "version_number": pub_version.version_number if pub_version else None,
@@ -3197,7 +3207,9 @@ class SalaryCalculationPreviewView(APIView):
         summary_only = serializer.validated_data.get("summary_only", False)
         force_refresh = serializer.validated_data.get("force_refresh", False)
 
-        cache_key = f"salary_calc_preview_{department.id}_{year}_{month}_{teacher_id or 'all'}_{summary_only}"
+        dept_ver = cache.get(f"salary_calc_preview_dept_ver_{department.id}", 1)
+        preview_ver = cache.get(f"salary_calc_preview_ver_{department.id}_{year}_{month}", 1)
+        cache_key = f"salary_calc_preview_{department.id}_{year}_{month}_dv{dept_ver}_v{preview_ver}_{teacher_id or 'all'}_{summary_only}"
         if not force_refresh:
             cached_result = cache.get(cache_key)
             if cached_result is not None:
@@ -3290,8 +3302,26 @@ class SalaryAdjustmentCategoryViewSet(viewsets.ModelViewSet):
         serializer.save(department=department, institution=department.institution, is_system_default=False)
 
 
+def invalidate_department_salary_preview_cache(department_id):
+    """Bump department-wide preview cache version when policies, versions, assignments, or overrides mutate."""
+    if not department_id:
+        return
+    ver_key = f"salary_calc_preview_dept_ver_{int(department_id)}"
+    try:
+        current = cache.get(ver_key, 1)
+        cache.set(ver_key, int(current) + 1, timeout=None)
+    except Exception:
+        pass
+
+
 def invalidate_salary_preview_cache(department_id, year, month, teacher_id=None):
-    """Invalidate calculation preview cache entries when adjustments mutate."""
+    """Invalidate calculation preview cache entries when adjustments or attendance mutate."""
+    ver_key = f"salary_calc_preview_ver_{int(department_id)}_{int(year)}_{int(month)}"
+    try:
+        current = cache.get(ver_key, 1)
+        cache.set(ver_key, int(current) + 1, timeout=None)
+    except Exception:
+        pass
     cache.delete(f"salary_calc_preview_{department_id}_{year}_{month}_all_True")
     cache.delete(f"salary_calc_preview_{department_id}_{year}_{month}_all_False")
     if teacher_id:
@@ -4907,3 +4937,45 @@ class CrossEngineConflictAuditView(APIView):
                 {"detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+
+class SpecialCaseContextView(APIView):
+    """Returns Coordinator Special package metadata and replacement options for teacher Special Case UI."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from salary.special_case_service import get_teacher_special_case_context
+
+        req_dept_id = request.query_params.get("department_id")
+        teacher_id = request.query_params.get("teacher_id")
+        teacher = None
+
+        if teacher_id:
+            try:
+                teacher = TeacherProfile.objects.select_related("department", "user").get(pk=int(teacher_id))
+            except (TeacherProfile.DoesNotExist, ValueError, TypeError):
+                return Response({"detail": "Teacher not found."}, status=status.HTTP_404_NOT_FOUND)
+            if not req_dept_id:
+                req_dept_id = teacher.department_id
+
+        auth_dept_id = get_authorized_department_id_for_user(request.user, req_dept_id)
+        if not auth_dept_id:
+            return Response(
+                {"detail": "Only authorized administrators can manage Special Case salary assignments."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if teacher and teacher.department_id != auth_dept_id:
+            return Response(
+                {"detail": "Teacher belongs to a different department."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        department = Department.objects.filter(pk=auth_dept_id).first()
+        if not department:
+            return Response({"detail": "Department not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        data = get_teacher_special_case_context(department=department, teacher=teacher)
+        return Response(data, status=status.HTTP_200_OK)
+

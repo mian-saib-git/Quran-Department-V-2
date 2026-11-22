@@ -1131,6 +1131,11 @@ class TeacherPolicyAssignment(models.Model):
         default="active_assignment",
         help_text="Rule governing basic salary disbursement eligibility for this teacher.",
     )
+    is_special_case = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Assigns the policy's Coordinator Special teaching plan rate on qualifying weekdays for this individual teacher without changing their account role.",
+    )
     notes = models.TextField(blank=True)
 
     class Meta:

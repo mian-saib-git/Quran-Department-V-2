@@ -2,7 +2,8 @@ import { beginImport, isImportActive } from "../services/importActivity";
 import { runSequentialImport, importSummaryText } from "../services/importWorkflow";
 import { ApiRequestError } from "../services/authenticatedRequest";
 // IVS_LIVE_CLASS_ACCOUNT_LINKS_V15
-import React, { useEffect, useMemo, useState } from "react";
+import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
+const TeacherDetailsModal = lazy(() => import("./TeacherDetailsModal"));
 import {
   AlertTriangle,
   BookOpen,
@@ -30,10 +31,13 @@ import {
 } from "lucide-react";
 
 import {
+  confirmQuranScheduleChange,
   createCoordinatorAccount,
   disableCoordinatorAccount,
   getCoordinatorAccounts,
   getCoordinatorTabAccess,
+  getTeacherSpecialCaseContext,
+  previewQuranScheduleChange,
   updateCoordinatorAccount,
   updateCoordinatorTabAccess,
   type CoordinatorAccountsResponse,
@@ -41,6 +45,8 @@ import {
   type CoordinatorStudentAccount,
   type CoordinatorTeacherAccount,
   type CreateAccountInput,
+  type ScheduleChangePreviewResponse,
+  type SpecialCaseContextResponse,
 } from "../services/djangoApiService";
 
 import { loadSession } from "../services/sessionService";
@@ -49,6 +55,17 @@ import { useAcademyWS } from "../hooks/useAcademyWS";
 import { showFeatureLocked } from "../services/featureAccess";
 import { PageSkeleton } from "./ui/SkeletonLoaders";
 import TeacherRetirementDialog from "./TeacherRetirementDialog";
+import {
+  ScheduleSalaryConfirmModal,
+  type ScheduleSalaryMode,
+} from "./ScheduleSalaryConfirmModal";
+import { clearSalaryPreviewModuleCache } from "./unified-salary/salaryPreviewCache";
+import {
+  applySpecialCaseContextToState,
+  buildTeacherSpecialCaseSubmission,
+  extractSpecialCaseErrorMessage,
+  resolveInitialSpecialCaseState,
+} from "../services/specialCaseHelpers";
 const DEPARTMENT_ADMIN_ROLES = ["department_admin", "institution_admin"];
 
 const isDepartmentAdminRole = (role: unknown) =>
@@ -85,6 +102,11 @@ type FormState = {
   joining_date: string;
   notes: string;
   zoom_link: string;
+  special_case: boolean;
+  initial_special_case: boolean;
+  special_case_effective_from: string;
+  replacement_policy_id: string;
+  special_case_confirmed: boolean;
 
   teacher_id: string;
   time_slot: string;
@@ -134,6 +156,11 @@ const emptyForm = (role: Mode): FormState => ({
   joining_date: "",
   notes: "",
   zoom_link: "",
+  special_case: false,
+  initial_special_case: false,
+  special_case_effective_from: "",
+  replacement_policy_id: "",
+  special_case_confirmed: false,
 
   teacher_id: "",
   time_slot: "",
@@ -655,12 +682,58 @@ function getPagedItems<T>(items: T[], page: number, pageSize: number) {
 
 function statusBadge(active: boolean) {
   return active ? (
-    <span className="inline-flex items-center rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-extrabold text-emerald-700">
+    <span
+      title="Login account access"
+      className="inline-flex items-center rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-extrabold text-emerald-700"
+    >
       Active
     </span>
   ) : (
-    <span className="inline-flex items-center rounded-full border border-rose-100 bg-rose-50 px-3 py-1 text-xs font-extrabold text-rose-700">
+    <span
+      title="Login account access"
+      className="inline-flex items-center rounded-full border border-rose-100 bg-rose-50 px-3 py-1 text-xs font-extrabold text-rose-700"
+    >
       Disabled
+    </span>
+  );
+}
+
+const CONTROLLED_DROPPED_STATUSES = new Set([
+  "old_dropped",
+  "trial_dropped",
+  "old_dropped_other",
+]);
+
+function academicStatusBadge(classStatus?: string, classStatusLabel?: string) {
+  const code = String(classStatus || "running").toLowerCase();
+  const label =
+    classStatusLabel ||
+    (code === "trial_dropped"
+      ? "Trial Dropped"
+      : code === "old_dropped"
+        ? "Old Class Dropped"
+        : code === "old_dropped_other"
+          ? "Old Dropped (Other)"
+          : code === "on_leave"
+            ? "On Leave"
+            : code === "not_counted"
+              ? "Not Counted Class"
+              : "Running");
+
+  const tone = CONTROLLED_DROPPED_STATUSES.has(code)
+    ? "border-rose-200 bg-rose-50 text-rose-700"
+    : code === "on_leave"
+      ? "border-amber-200 bg-amber-50 text-amber-700"
+      : code === "not_counted"
+        ? "border-slate-200 bg-slate-100 text-slate-600"
+        : "border-indigo-100 bg-indigo-50 text-indigo-700";
+
+  return (
+    <span
+      title="Academic / class status"
+      className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-extrabold whitespace-nowrap ${tone}`}
+    >
+      {label}
     </span>
   );
 }
@@ -691,6 +764,7 @@ export default function CoordinatorAccounts({
     teachers: [],
     students: [],
   });
+  const [selectedTeacherDetailsId, setSelectedTeacherDetailsId] = useState<number | null>(null);
 
   const session = loadSession();
   const isSuperAdmin = Boolean(session?.user?.is_superuser);
@@ -709,9 +783,17 @@ export default function CoordinatorAccounts({
   const [accountsLoaded, setAccountsLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [tabAccessLoading, setTabAccessLoading] = useState(false);
+  const [specialCaseContext, setSpecialCaseContext] = useState<SpecialCaseContextResponse | null>(null);
+  const [specialCaseLoading, setSpecialCaseLoading] = useState(false);
 
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [teacherToRetire, setTeacherToRetire] = useState<CoordinatorTeacherAccount | null>(null);
+  const [scheduleConfirmState, setScheduleConfirmState] = useState<{
+    preview: ScheduleChangePreviewResponse;
+    userId: number;
+    pendingInput: any;
+  } | null>(null);
+  const [scheduleConfirmError, setScheduleConfirmError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm("teacher"));
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
@@ -760,8 +842,10 @@ export default function CoordinatorAccounts({
   };
   useEffect(() => {
     window.addEventListener("ivs-import-finished", scheduleAccountRefresh);
+    window.addEventListener("ivs-refresh-state", scheduleAccountRefresh);
     return () => {
       window.removeEventListener("ivs-import-finished", scheduleAccountRefresh);
+      window.removeEventListener("ivs-refresh-state", scheduleAccountRefresh);
       if (accountRefreshTimer.current) clearTimeout(accountRefreshTimer.current);
     };
   }, []);
@@ -1027,6 +1111,24 @@ export default function CoordinatorAccounts({
 
     if (role === "teacher") {
       setModalMode("create-teacher");
+      setSpecialCaseContext(null);
+      if (canManageCoordinators) {
+        setSpecialCaseLoading(true);
+        getTeacherSpecialCaseContext()
+          .then((ctx) => {
+            setSpecialCaseContext(ctx);
+            setForm((current) =>
+              current.role === "teacher" && !current.userId
+                ? {
+                    ...current,
+                    ...applySpecialCaseContextToState(current, ctx, false),
+                  }
+                : current
+            );
+          })
+          .catch(() => setSpecialCaseContext(null))
+          .finally(() => setSpecialCaseLoading(false));
+      }
     }
 
     if (role === "student") {
@@ -1084,8 +1186,27 @@ export default function CoordinatorAccounts({
       joining_date: teacher.teacher_profile?.joining_date || "",
       notes: teacher.teacher_profile?.notes || "",
       zoom_link: teacher.teacher_profile?.zoom_link || "",
+      ...resolveInitialSpecialCaseState(teacher),
     });
     setModalMode("edit-teacher");
+    setSpecialCaseContext(null);
+    if (canManageCoordinators && teacher.teacher_profile?.id) {
+      setSpecialCaseLoading(true);
+      getTeacherSpecialCaseContext(teacher.teacher_profile.id)
+        .then((ctx) => {
+          setSpecialCaseContext(ctx);
+          setForm((current) =>
+            current.userId === teacher.id
+              ? {
+                  ...current,
+                  ...applySpecialCaseContextToState(current, ctx, true),
+                }
+              : current
+          );
+        })
+        .catch(() => setSpecialCaseContext(null))
+        .finally(() => setSpecialCaseLoading(false));
+    }
   };
 
   const openEditStudent = (student: CoordinatorStudentAccount) => {
@@ -1340,6 +1461,19 @@ export default function CoordinatorAccounts({
         input.address = form.address.trim();
         input.joining_date = form.joining_date || null;
         input.zoom_link = form.zoom_link.trim();
+
+        const specialCaseResult = buildTeacherSpecialCaseSubmission({
+          form,
+          isEdit,
+          canManageSalarySpecialCase: canManageCoordinators,
+          specialCaseContext,
+        });
+        if ("errorMessage" in specialCaseResult) {
+          setMessage(specialCaseResult.errorMessage);
+          setSaving(false);
+          return;
+        }
+        Object.assign(input, specialCaseResult.payloadPatch);
       }
 
       if (form.role === "student") {
@@ -1348,7 +1482,9 @@ export default function CoordinatorAccounts({
         input.duration_minutes = Number(form.duration_minutes || 30);
         input.class_days = form.class_days;
         input.student_type = form.student_type;
-        if (isEdit) input.class_status = form.class_status;
+        if (isEdit && !CONTROLLED_DROPPED_STATUSES.has(String(form.class_status || "").toLowerCase())) {
+          input.class_status = form.class_status;
+        }
         input.speaking_language = form.speaking_language;
         input.first_fee_paid = form.first_fee_paid;
         if (!isEdit) {
@@ -1362,6 +1498,43 @@ export default function CoordinatorAccounts({
 
       let savedAccount: any;
       if (isEdit && form.userId) {
+        if (form.role === "student") {
+          const existingStudent = data.students.find((s) => s.id === form.userId);
+          const normalizeDayKey = (days: string[] | undefined) =>
+            Array.from(
+              new Set((days || []).map((d) => String(d || "").trim().toLowerCase()).filter(Boolean))
+            )
+              .sort()
+              .join(",");
+          const existingClassDays =
+            existingStudent?.student_profile?.class_days && existingStudent.student_profile.class_days.length > 0
+              ? existingStudent.student_profile.class_days
+              : existingStudent?.student_profile?.schedules
+                  ?.filter((s) => s.is_active)
+                  .map((s) => s.weekday);
+          const prevDaysKey = normalizeDayKey(existingClassDays);
+          const nextDaysKey = normalizeDayKey(form.class_days);
+          if (existingStudent && prevDaysKey !== nextDaysKey) {
+            const preview = await previewQuranScheduleChange({
+              user_id: form.userId,
+              teacher_id: Number(form.teacher_id),
+              time_slot: form.time_slot || null,
+              duration_minutes: Number(form.duration_minutes || 30),
+              class_days: form.class_days,
+            });
+            setScheduleConfirmError(null);
+            setScheduleConfirmState({
+              preview,
+              userId: form.userId,
+              pendingInput: {
+                ...input,
+                is_active: form.is_active,
+              },
+            });
+            return;
+          }
+        }
+
         savedAccount = await updateCoordinatorAccount(form.userId, {
           ...input,
           is_active: form.is_active,
@@ -1382,6 +1555,11 @@ export default function CoordinatorAccounts({
         );
       }
 
+      window.dispatchEvent(new CustomEvent("ivs-refresh-state"));
+      if (form.role === "teacher") {
+        clearSalaryPreviewModuleCache();
+      }
+
       if (form.role === "coordinator") {
         const coordinatorId = Number(form.userId || savedAccount?.id || 0);
         if (!coordinatorId) {
@@ -1393,7 +1571,51 @@ export default function CoordinatorAccounts({
       closeModal();
       void load();
     } catch (err: any) {
-      setMessage(err?.message || "Could not save account.");
+      setMessage(extractSpecialCaseErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleConfirmScheduleSalaryChange = async (salaryMode: ScheduleSalaryMode) => {
+    if (!scheduleConfirmState) return;
+    setSaving(true);
+    setScheduleConfirmError(null);
+    try {
+      const { userId, pendingInput } = scheduleConfirmState;
+      await confirmQuranScheduleChange({
+        user_id: userId,
+        teacher_id: pendingInput.teacher_id ? Number(pendingInput.teacher_id) : undefined,
+        time_slot: pendingInput.time_slot || null,
+        duration_minutes: Number(pendingInput.duration_minutes || 30),
+        class_days: pendingInput.class_days || [],
+        salary_mode: salaryMode,
+      });
+
+      const {
+        teacher_id: _omitTeacher,
+        time_slot: _omitTime,
+        duration_minutes: _omitDuration,
+        class_days: _omitDays,
+        ...profileOnlyInput
+      } = pendingInput;
+      await updateCoordinatorAccount(userId, profileOnlyInput);
+
+      clearSalaryPreviewModuleCache();
+      window.dispatchEvent(
+        new CustomEvent("ivs-toast", {
+          detail: "Account & schedule updated",
+        })
+      );
+      window.dispatchEvent(new CustomEvent("ivs-refresh-state"));
+      if (form.role === "teacher") {
+        clearSalaryPreviewModuleCache();
+      }
+      setScheduleConfirmState(null);
+      closeModal();
+      void load();
+    } catch (err: any) {
+      setScheduleConfirmError(err?.message || "Could not confirm schedule change.");
     } finally {
       setSaving(false);
     }
@@ -1421,6 +1643,10 @@ export default function CoordinatorAccounts({
     try {
       await disableCoordinatorAccount(userId);
       window.dispatchEvent(new CustomEvent("ivs-toast", { detail: "Account archived safely" }));
+      window.dispatchEvent(new CustomEvent("ivs-refresh-state"));
+      if (form.role === "teacher") {
+        clearSalaryPreviewModuleCache();
+      }
       await load();
     } catch (err: any) {
       setMessage(String(err?.message || "Could not archive account."));
@@ -1705,6 +1931,12 @@ export default function CoordinatorAccounts({
             items={pagedTeachers.items}
             copiedUsername={copiedUsername}
             onCopyUsername={handleCopyUsername}
+            onViewTeacher={(teacher) => {
+              const profileId = Number(teacher.teacher_profile?.id);
+              if (Number.isFinite(profileId) && profileId > 0) {
+                setSelectedTeacherDetailsId(profileId);
+              }
+            }}
             onEdit={openEditTeacher}
             onDisable={deleteAccount}
             canDeleteAccounts={canDeleteAccounts}
@@ -2262,6 +2494,194 @@ export default function CoordinatorAccounts({
                       />
                     </Field>
                   </div>
+
+                  {/* Special Case Salary Package Assignment */}
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-3">
+                    <label
+                      className={`flex items-start gap-3 ${
+                        canManageCoordinators ? "cursor-pointer" : "cursor-not-allowed opacity-75"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={form.special_case}
+                        disabled={!canManageCoordinators || specialCaseLoading}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            special_case: e.target.checked,
+                            special_case_confirmed: false,
+                          })
+                        }
+                        className="mt-1 h-4 w-4 shrink-0 accent-indigo-600"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-2 text-sm font-bold text-slate-900">
+                          Special Case
+                          {form.special_case && (
+                            <span className="inline-flex items-center rounded-full bg-purple-100 px-2.5 py-0.5 text-[11px] font-black text-purple-800 border border-purple-200">
+                              Coordinator Special Package
+                            </span>
+                          )}
+                        </span>
+                        <span className="mt-0.5 block text-xs text-slate-600">
+                          Assign the existing Coordinator Special salary package to this individual teacher without changing their teacher role or coordinator permissions.
+                        </span>
+                      </span>
+                    </label>
+
+                    {!canManageCoordinators && (
+                      <div className="text-xs font-medium text-slate-500">
+                        Only authorized administrators can change Special Case salary assignments.
+                      </div>
+                    )}
+
+                    {canManageCoordinators && specialCaseLoading && (
+                      <div className="flex items-center gap-2 text-xs font-semibold text-indigo-700">
+                        <Loader2 size={14} className="animate-spin" /> Loading salary package details...
+                      </div>
+                    )}
+
+                    {canManageCoordinators && !specialCaseLoading && specialCaseContext && (
+                      <>
+                        {form.special_case && !specialCaseContext.coordinator_special_configured && (
+                          <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700">
+                            {specialCaseContext.configuration_error ||
+                              "Coordinator Special salary package is not configured for this department."}
+                          </div>
+                        )}
+
+                        {form.special_case && specialCaseContext.coordinator_special_package && (
+                          <div className="rounded-xl border border-indigo-100 bg-white p-3 space-y-2 text-xs">
+                            <div className="font-bold text-slate-800">
+                              Assigned Package: {specialCaseContext.coordinator_special_package.policy_name} (
+                              {specialCaseContext.coordinator_special_package.policy_code}) ·{" "}
+                              {specialCaseContext.coordinator_special_package.plan_name}
+                            </div>
+                            {specialCaseContext.coordinator_special_package.qualifying_weekdays.length > 0 && (
+                              <div className="text-slate-600">
+                                Qualifying Days:{" "}
+                                <span className="font-semibold capitalize">
+                                  {specialCaseContext.coordinator_special_package.qualifying_weekdays.join(", ")}
+                                </span>
+                              </div>
+                            )}
+                            {(modalMode === "create-teacher" ||
+                              form.special_case !== form.initial_special_case) && (
+                              <div className="pt-1">
+                                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                  Effective Date
+                                </label>
+                                <input
+                                  type="date"
+                                  value={form.special_case_effective_from}
+                                  onChange={(e) =>
+                                    setForm({
+                                      ...form,
+                                      special_case_effective_from: e.target.value,
+                                    })
+                                  }
+                                  className="input-premium max-w-xs"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {modalMode === "edit-teacher" &&
+                          form.special_case !== form.initial_special_case && (
+                            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2.5 text-xs">
+                              {!form.special_case && (
+                                <div className="space-y-2">
+                                  <div className="font-bold text-amber-900">
+                                    Disabling Special Case — Restore Normal Salary Package
+                                  </div>
+                                  {specialCaseContext.requires_replacement_selection ? (
+                                    <div>
+                                      <label className="block text-[11px] font-bold uppercase tracking-wider text-amber-800 mb-1">
+                                        Select Normal Package to Restore
+                                      </label>
+                                      <select
+                                        value={form.replacement_policy_id}
+                                        onChange={(e) =>
+                                          setForm({
+                                            ...form,
+                                            replacement_policy_id: e.target.value,
+                                          })
+                                        }
+                                        className="input-premium"
+                                      >
+                                        <option value="">-- Select a normal salary package --</option>
+                                        {specialCaseContext.available_normal_policies.map((p) => (
+                                          <option key={p.id} value={p.id}>
+                                            {p.name} ({p.code})
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  ) : specialCaseContext.previous_normal_policy ? (
+                                    <div className="text-amber-900">
+                                      Proposed replacement assignment:{" "}
+                                      <span className="font-bold">
+                                        {specialCaseContext.previous_normal_policy.name} (
+                                        {specialCaseContext.previous_normal_policy.code})
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <div className="text-rose-700 font-semibold">
+                                      No valid normal salary package is available in this department.
+                                    </div>
+                                  )}
+
+                                  <div>
+                                    <label className="block text-[11px] font-bold uppercase tracking-wider text-amber-800 mb-1">
+                                      Effective Date
+                                    </label>
+                                    <input
+                                      type="date"
+                                      value={form.special_case_effective_from}
+                                      onChange={(e) =>
+                                        setForm({
+                                          ...form,
+                                          special_case_effective_from: e.target.value,
+                                        })
+                                      }
+                                      className="input-premium max-w-xs"
+                                    />
+                                  </div>
+                                </div>
+                              )}
+
+                              {specialCaseContext.payroll_period_warning && (
+                                <div className="text-amber-800 font-medium">
+                                  {specialCaseContext.payroll_period_warning}
+                                </div>
+                              )}
+
+                              <label className="flex items-start gap-2 cursor-pointer font-semibold text-amber-950">
+                                <input
+                                  type="checkbox"
+                                  checked={form.special_case_confirmed}
+                                  onChange={(e) =>
+                                    setForm({
+                                      ...form,
+                                      special_case_confirmed: e.target.checked,
+                                    })
+                                  }
+                                  className="mt-0.5 h-4 w-4 shrink-0 accent-amber-600"
+                                />
+                                <span>
+                                  Confirm salary package change effective{" "}
+                                  {form.special_case_effective_from ||
+                                    specialCaseContext.proposed_effective_from}
+                                  . Historical salary records and closed assignments remain preserved.
+                                </span>
+                              </label>
+                            </div>
+                          )}
+                      </>
+                    )}
+                  </div>
                 </section>
               )}
 
@@ -2437,9 +2857,16 @@ export default function CoordinatorAccounts({
 
                     {modalMode === "edit-student" && (
                       <Field label="Class Status">
-                        <select value={form.class_status} onChange={(e) => setForm({ ...form, class_status: e.target.value })} className="input-premium">
-                          {CLASS_STATUSES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                        </select>
+                        {CONTROLLED_DROPPED_STATUSES.has(String(form.class_status || "").toLowerCase()) ? (
+                          <div className="flex items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs font-bold text-rose-700">
+                            <span>{academicStatusBadge(form.class_status)}</span>
+                            <span className="text-[11px]">Managed via Dropped &amp; Leave</span>
+                          </div>
+                        ) : (
+                          <select value={form.class_status} onChange={(e) => setForm({ ...form, class_status: e.target.value })} className="input-premium">
+                            {CLASS_STATUSES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                          </select>
+                        )}
                       </Field>
                     )}
 
@@ -2533,6 +2960,28 @@ export default function CoordinatorAccounts({
           </form>
         </div>
       )}
+
+      {selectedTeacherDetailsId !== null && (
+        <Suspense fallback={null}>
+          <TeacherDetailsModal
+            teacherId={selectedTeacherDetailsId}
+            isOpen={selectedTeacherDetailsId !== null}
+            onClose={() => setSelectedTeacherDetailsId(null)}
+          />
+        </Suspense>
+      )}
+
+      <ScheduleSalaryConfirmModal
+        open={scheduleConfirmState !== null}
+        preview={scheduleConfirmState?.preview ?? null}
+        saving={saving}
+        error={scheduleConfirmError}
+        onCancel={() => {
+          setScheduleConfirmState(null);
+          setScheduleConfirmError(null);
+        }}
+        onConfirm={handleConfirmScheduleSalaryChange}
+      />
 <style>{`
 .account-modal-card {
   /* Create/Edit forms appear and disappear instantly; no entrance or exit motion. */
@@ -3268,6 +3717,7 @@ function TeacherTable({
   items,
   copiedUsername,
   onCopyUsername,
+  onViewTeacher,
   onEdit,
   onDisable,
 canDeleteAccounts = true,
@@ -3275,6 +3725,7 @@ canDeleteAccounts = true,
   items: CoordinatorTeacherAccount[];
   copiedUsername: string;
   onCopyUsername: (username: string) => void;
+  onViewTeacher: (item: CoordinatorTeacherAccount) => void;
   onEdit: (item: CoordinatorTeacherAccount) => void;
   onDisable: (userId: number) => void;
   canDeleteAccounts?: boolean;
@@ -3303,11 +3754,25 @@ canDeleteAccounts = true,
               {/* Teacher */}
               <td className="px-5 py-4">
                 <div className="flex items-center gap-3">
-                  <div className="h-11 w-11 rounded-2xl bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => onViewTeacher(item)}
+                    disabled={!item.teacher_profile?.id}
+                    title={`View ${item.full_name || item.username} details`}
+                    aria-label={`View ${item.full_name || item.username} details`}
+                    className="h-11 w-11 rounded-2xl bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0 transition hover:bg-indigo-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-default disabled:opacity-60"
+                  >
                     <BookOpen size={19} />
-                  </div>
+                  </button>
                   <div>
-                    <div className="font-extrabold text-slate-950">{item.full_name || item.username}</div>
+                    <button
+                      type="button"
+                      onClick={() => onViewTeacher(item)}
+                      disabled={!item.teacher_profile?.id}
+                      className="text-left font-extrabold text-slate-950 transition hover:text-indigo-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 rounded disabled:cursor-default disabled:hover:text-slate-950 disabled:hover:no-underline"
+                    >
+                      {item.full_name || item.username}
+                    </button>
                     <div className="text-xs text-slate-500">Teacher Profile #{item.teacher_profile?.id}</div>
                   </div>
                 </div>
@@ -3504,10 +3969,14 @@ canDeleteAccounts = true,
                   )}
                 </td>
 
-                {/* Status */}
+                {/* Status (Account Access + Academic Status) */}
                 <td className="px-5 py-3.5">
-                  <div className="inline-flex items-center justify-center min-w-[80px]">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     {statusBadge(item.is_active)}
+                    {academicStatusBadge(
+                      item.student_profile?.class_status,
+                      item.student_profile?.class_status_label,
+                    )}
                   </div>
                 </td>
 

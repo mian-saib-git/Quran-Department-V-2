@@ -1273,11 +1273,17 @@ export default function App() {
 
     void loadInitialState();
 
+    const handleRefreshState = () => {
+      scheduleAccountStateRefresh();
+    };
+
     window.addEventListener("ivs-state-updated", handleStateUpdated);
+    window.addEventListener("ivs-refresh-state", handleRefreshState);
 
     return () => {
       mounted = false;
       window.removeEventListener("ivs-state-updated", handleStateUpdated);
+      window.removeEventListener("ivs-refresh-state", handleRefreshState);
     };
   }, [session, featureContextLoaded, canLoadQuranAcademyState, activeDepartmentIdForRole]);
 
@@ -1656,6 +1662,53 @@ export default function App() {
                 previousRecord
                   ?.markedByRole || "",
             };
+
+            const studentCoverageById = new Map<
+              string,
+              { substituteTeacherId: string; substituteTeacherName: string }
+            >();
+            const isAbsence =
+              teacherAttendance.status === "absent" ||
+              teacherAttendance.status === "leave";
+            for (const row of saved.students || []) {
+              const cov = row.coverage;
+              if (
+                isAbsence &&
+                cov?.coverage_status === "assigned" &&
+                cov.substitute_teacher_id
+              ) {
+                studentCoverageById.set(String(row.student_id), {
+                  substituteTeacherId: String(cov.substitute_teacher_id),
+                  substituteTeacherName: cov.substitute_teacher_name || "",
+                });
+              } else {
+                studentCoverageById.set(String(row.student_id), {
+                  substituteTeacherId: "",
+                  substituteTeacherName: "",
+                });
+              }
+            }
+
+            const targetDate = saved.date || date;
+            const nextRecords = attendanceRef.current
+              .filter((record) => !attendanceRecordMatchesKey(record, key))
+              .map((record) => {
+                if (
+                  record.entityType === EntityType.STUDENT &&
+                  record.date === targetDate
+                ) {
+                  const covUpdate = studentCoverageById.get(
+                    String(record.entityId)
+                  );
+                  if (covUpdate) {
+                    return { ...record, ...covUpdate };
+                  }
+                }
+                return record;
+              });
+
+            replaceAttendanceRecords([...nextRecords, savedRecord]);
+            return true;
           } else {
             const saved =
               await markAttendanceInDjango({
@@ -1761,6 +1814,14 @@ export default function App() {
                   saved.marked_by_role ||
                   ""
                 ),
+              substituteTeacherId:
+                saved.status === "present" && saved.substitute_teacher_id != null
+                  ? String(saved.substitute_teacher_id)
+                  : "",
+              substituteTeacherName:
+                saved.status === "present"
+                  ? saved.substitute_teacher_name || ""
+                  : "",
             };
           }
 
@@ -1881,13 +1942,36 @@ export default function App() {
               Date.now(),
             );
 
-            await deleteQuranTeacherSessionAttendance({
+            const deletedSession = await deleteQuranTeacherSessionAttendance({
               teacher_id:
                 Number(entityId),
               date,
               class_key:
                 normalizedClassKey,
             });
+
+            const clearedStudentIds = new Set(
+              (deletedSession.students || []).map((row) =>
+                String(row.student_id)
+              )
+            );
+            if (clearedStudentIds.size > 0) {
+              const targetDate = deletedSession.date || date;
+              replaceAttendanceRecords(
+                attendanceRef.current.map((record) =>
+                  record.entityType === EntityType.STUDENT &&
+                  record.date === targetDate &&
+                  clearedStudentIds.has(String(record.entityId)) &&
+                  (record.substituteTeacherId || record.substituteTeacherName)
+                    ? {
+                        ...record,
+                        substituteTeacherId: "",
+                        substituteTeacherName: "",
+                      }
+                    : record
+                )
+              );
+            }
           } else {
             const serverId =
               attendanceServerIdRef

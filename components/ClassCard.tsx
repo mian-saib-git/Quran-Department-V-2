@@ -15,6 +15,7 @@ import {
   getQuranTeacherSessionAttendance,
   type QuranTeacherSessionPayload,
 } from "../services/djangoApiService";
+import { SubstituteTeacherSelect } from "./SubstituteTeacherSelect";
 import { getQuranBusinessTime } from "../services/quranBusinessTime";
 import {
   CheckCircle2,
@@ -549,6 +550,15 @@ export function ClassCard({
 
   const studentChoice = attendanceChoice(studentStatus);
   const teacherChoice = attendanceChoice(teacherStatus);
+  const savedSubstituteName =
+    (teacherStatus === AttendanceStatus.ABSENT ||
+      teacherStatus === AttendanceStatus.LEAVE) &&
+    studentStatus === AttendanceStatus.PRESENT &&
+    (!attendanceToday?.teacherId ||
+      !teacher?.id ||
+      attendanceToday.teacherId === teacher.id)
+      ? (attendanceToday?.substituteTeacherName || "").trim()
+      : "";
 
   return (
     <article
@@ -610,6 +620,12 @@ export function ClassCard({
                 <span className="font-black text-slate-950 dark:text-white">—</span>
               )}
             </p>
+            {savedSubstituteName && (
+              <p className="mt-0.5 text-[10px] font-bold leading-4 text-indigo-700 dark:text-indigo-300">
+                Substitute Teacher:{" "}
+                <span className="font-black">{savedSubstituteName}</span>
+              </p>
+            )}
           </div>
 
           <div
@@ -705,6 +721,14 @@ export function ClassCard({
                   <div className="truncate text-[11px] font-black text-slate-900 dark:text-white">
                     {teacher?.name || "—"}
                   </div>
+                  {savedSubstituteName && (
+                    <div
+                      className="mt-0.5 truncate text-[9px] font-bold text-indigo-700 dark:text-indigo-300"
+                      title={`Substitute Teacher: ${savedSubstituteName}`}
+                    >
+                      Sub: <span className="font-black">{savedSubstituteName}</span>
+                    </div>
+                  )}
                 </div>
 
                 <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[8px] font-black capitalize text-slate-600 dark:bg-slate-800 dark:text-slate-300">
@@ -805,70 +829,60 @@ export function ClassCard({
                               </div>
                             </div>
 
-                            {row.requires_substitute && (
-                              <select
-                                value={currentValue}
-                                onChange={(event) =>
-                                  setCoverageEditor((current) => {
-                                    if (!current) return current;
-                                    return {
-                                      ...current,
-                                      assignments: {
-                                        ...current.assignments,
-                                        [row.student_id]: event.target.value,
-                                      },
-                                    };
-                                  })
-                                }
-                                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[10px] font-bold text-slate-800 outline-none focus:border-indigo-300 sm:w-64"
-                              >
-                                <option value="">Select substitute teacher</option>
+                            {row.requires_substitute && (() => {
+                              const usedByAnotherStudent = new Set(
+                                Object.entries(coverageEditor.assignments)
+                                  .filter(
+                                    ([studentId, selectedId]) =>
+                                      Number(studentId) !== row.student_id &&
+                                      Boolean(selectedId),
+                                  )
+                                  .map(([, selectedId]) => selectedId),
+                              );
 
-                                {currentCoverageId &&
-                                  !currentStillAvailable && (
-                                    <option
-                                      value={String(currentCoverageId)}
-                                      disabled
-                                    >
-                                      {currentCoverageName || "Current substitute"} - choose another
-                                    </option>
-                                  )}
-
-                                {coverageEditor.payload.available_substitutes.map(
-                                  (candidate) => {
-                                    const candidateId = String(candidate.id);
-                                    const usedByAnotherStudent = Object.entries(
-                                      coverageEditor.assignments,
-                                    ).some(
-                                      ([studentId, selectedId]) =>
-                                        Number(studentId) !== row.student_id &&
-                                        selectedId === candidateId,
-                                    );
-
-                                    return (
-                                      <option
-                                        key={candidate.id}
-                                        value={candidateId}
-                                        disabled={usedByAnotherStudent}
-                                      >
-                                        {candidate.name}
-                                      </option>
-                                    );
-                                  },
-                                )}
-                              </select>
-                            )}
+                              return (
+                                <SubstituteTeacherSelect
+                                  compact
+                                  substitutes={
+                                    coverageEditor.payload.available_substitutes
+                                  }
+                                  value={currentValue}
+                                  onChange={(selectedTeacherId) =>
+                                    setCoverageEditor((current) => {
+                                      if (!current) return current;
+                                      return {
+                                        ...current,
+                                        assignments: {
+                                          ...current.assignments,
+                                          [row.student_id]: selectedTeacherId,
+                                        },
+                                      };
+                                    })
+                                  }
+                                  disabledIds={usedByAnotherStudent}
+                                  loading={coverageLoading}
+                                  disabled={coverageSaving}
+                                  fallbackSelectedLabel={
+                                    currentCoverageId && !currentStillAvailable
+                                      ? `${currentCoverageName || "Current substitute"} - choose another`
+                                      : ""
+                                  }
+                                  ariaLabel={`Substitute teacher for ${row.student_name}`}
+                                />
+                              );
+                            })()}
                           </div>
                         </div>
                       );
                     })}
 
-                  {coverageEditor.payload.available_substitutes.length === 0 &&
+                  {!coverageLoading &&
+                    coverageEditor.payload.available_substitutes.length === 0 &&
                     coverageEditor.payload.students.some(
                       (row) => row.requires_substitute,
                     ) && (
                       <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] font-bold text-rose-700">
-                        No substitute teacher is currently available for this session.
+                        No active substitute teachers found in this department.
                       </div>
                     )}
 

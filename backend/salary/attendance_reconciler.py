@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -558,6 +559,24 @@ class AttendanceDetector:
             }
 
 
+def invalidate_salary_preview_cache(department_id: int, year: int, month: int) -> None:
+    """Bump the per-department-month preview cache version so stale previews are never served."""
+    ver_key = f"salary_calc_preview_ver_{department_id}_{year}_{month}"
+    try:
+        current = cache.get(ver_key, 1)
+        cache.set(ver_key, int(current) + 1, timeout=None)
+    except Exception:
+        pass
+
+
+def sync_salary_verification_for_date(department: Department, target_date: date, user=None) -> None:
+    """Sync Unified Salary attendance verifications for a single date and invalidate preview cache."""
+    if not department or not target_date:
+        return
+    AttendanceReconcilerService.reconcile_date(department=department, target_date=target_date, user=user)
+    invalidate_salary_preview_cache(department.id, target_date.year, target_date.month)
+
+
 class AttendanceReconcilerService:
     """Orchestrates source discovery, unmarked class detection, and idempotent database synchronization."""
 
@@ -642,46 +661,22 @@ class AttendanceReconcilerService:
         }
 
     @classmethod
-    @transaction.atomic
-    def reconcile_period(
+    def _upsert_occurrences(
         cls,
+        *,
         department: Department,
-        year: int,
-        month: int,
+        raw_occurrences: List[Dict[str, Any]],
+        existing_verifs: Dict[str, SalaryAttendanceVerification],
         user=None,
-    ) -> SalaryReconciliationBatch:
-        """
-        Idempotent reconciliation scan for department and payroll month.
-        Creates or updates SalaryAttendanceVerification records:
-        - NEVER resets or overwrites existing administrator resolutions ('resolved').
-        - Updates pending/verified records predictably with fresh source attendance.
-        - Preserves append-only audit trail.
-        """
-        start_date, end_date = get_month_date_range(year, month)
-        adapter = cls.get_adapter_for_department(department)
-        now_dt = get_current_local_datetime()
+        now_dt: Optional[datetime] = None,
+    ) -> Dict[str, int]:
+        if now_dt is None:
+            now_dt = get_current_local_datetime()
 
-        raw_occurrences = adapter.get_occurrences_for_date_range(
-            department=department,
-            start_date=start_date,
-            end_date=end_date,
-        )
-
-        total_count = len(raw_occurrences)
         verified_count = 0
         pending_count = 0
         resolved_count = 0
         conflicted_count = 0
-
-        # Pre-fetch existing verifications for the period with select_for_update
-        existing_verifs = {
-            v.occurrence_key: v
-            for v in SalaryAttendanceVerification.objects.select_for_update().filter(
-                department=department,
-                class_date__gte=start_date,
-                class_date__lte=end_date,
-            )
-        }
 
         verifs_to_create = []
         verifs_to_update = []
@@ -856,6 +851,89 @@ class AttendanceReconcilerService:
         if audits_to_create:
             SalaryAttendanceAudit.objects.bulk_create(audits_to_create, batch_size=2000)
 
+        return {
+            "total_count": len(raw_occurrences),
+            "verified_count": verified_count,
+            "pending_count": pending_count,
+            "resolved_count": resolved_count,
+            "conflicted_count": conflicted_count,
+        }
+
+    @classmethod
+    @transaction.atomic
+    def reconcile_date(
+        cls,
+        department: Department,
+        target_date: date,
+        user=None,
+    ) -> Dict[str, int]:
+        """Idempotently refresh SalaryAttendanceVerification rows for a single date."""
+        adapter = cls.get_adapter_for_department(department)
+        now_dt = get_current_local_datetime()
+        raw_occurrences = adapter.get_occurrences_for_date_range(
+            department=department,
+            start_date=target_date,
+            end_date=target_date,
+        )
+        existing_verifs = {
+            v.occurrence_key: v
+            for v in SalaryAttendanceVerification.objects.select_for_update().filter(
+                department=department,
+                class_date=target_date,
+            )
+        }
+        return cls._upsert_occurrences(
+            department=department,
+            raw_occurrences=raw_occurrences,
+            existing_verifs=existing_verifs,
+            user=user,
+            now_dt=now_dt,
+        )
+
+    @classmethod
+    @transaction.atomic
+    def reconcile_period(
+        cls,
+        department: Department,
+        year: int,
+        month: int,
+        user=None,
+    ) -> SalaryReconciliationBatch:
+        """
+        Idempotent reconciliation scan for department and payroll month.
+        Creates or updates SalaryAttendanceVerification records:
+        - NEVER resets or overwrites existing administrator resolutions ('resolved').
+        - Updates pending/verified records predictably with fresh source attendance.
+        - Preserves append-only audit trail.
+        """
+        start_date, end_date = get_month_date_range(year, month)
+        adapter = cls.get_adapter_for_department(department)
+        now_dt = get_current_local_datetime()
+
+        raw_occurrences = adapter.get_occurrences_for_date_range(
+            department=department,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        # Pre-fetch existing verifications for the period with select_for_update
+        existing_verifs = {
+            v.occurrence_key: v
+            for v in SalaryAttendanceVerification.objects.select_for_update().filter(
+                department=department,
+                class_date__gte=start_date,
+                class_date__lte=end_date,
+            )
+        }
+
+        counts = cls._upsert_occurrences(
+            department=department,
+            raw_occurrences=raw_occurrences,
+            existing_verifs=existing_verifs,
+            user=user,
+            now_dt=now_dt,
+        )
+
         # Record or update batch scan record
         batch, _ = SalaryReconciliationBatch.objects.update_or_create(
             department=department,
@@ -866,13 +944,14 @@ class AttendanceReconcilerService:
                 "start_date": start_date,
                 "end_date": end_date,
                 "is_complete": True,
-                "total_occurrences": total_count,
-                "verified_count": verified_count,
-                "pending_count": pending_count,
-                "resolved_count": resolved_count,
-                "conflicted_count": conflicted_count,
+                "total_occurrences": counts["total_count"],
+                "verified_count": counts["verified_count"],
+                "pending_count": counts["pending_count"],
+                "resolved_count": counts["resolved_count"],
+                "conflicted_count": counts["conflicted_count"],
                 "scanned_by": user,
             },
         )
 
+        invalidate_salary_preview_cache(department.id, year, month)
         return batch

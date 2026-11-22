@@ -815,9 +815,35 @@ class CoordinatorAccountListCreateView(APIView):
                 )
             ]
 
+        def attach_active_assignments(teacher_items):
+            items = list(teacher_items)
+            if not items:
+                return items
+            from django.utils import timezone
+            from salary.models import TeacherPolicyAssignment
+
+            today = timezone.localdate()
+            t_ids = [t.id for t in items]
+            assign_map = {}
+            for a in (
+                TeacherPolicyAssignment.objects.filter(
+                    teacher_id__in=t_ids,
+                    is_active=True,
+                    effective_from__lte=today,
+                )
+                .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=today))
+                .select_related("policy")
+                .order_by("-effective_from", "-id")
+            ):
+                if a.teacher_id not in assign_map:
+                    assign_map[a.teacher_id] = a
+            for t in items:
+                setattr(t, "_prefetched_active_assignment", assign_map.get(t.id))
+            return items
+
         teachers = [
             account_payload_for_user(item.user)
-            for item in build_teachers()
+            for item in attach_active_assignments(build_teachers())
         ]
 
         students = [

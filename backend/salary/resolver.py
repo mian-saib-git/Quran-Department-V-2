@@ -77,12 +77,37 @@ class RateResolutionContext:
     teacher_name: str
     student_map: Dict[int, StudentProfile] = field(default_factory=dict)
     assignment: Optional[TeacherPolicyAssignment] = None
+    assignments: List[TeacherPolicyAssignment] = field(default_factory=list)
     versions: List[SalaryPolicyVersion] = field(default_factory=list)
     matrix_rates: Dict[Tuple[int, int, int], Decimal] = field(default_factory=dict)
     matrix_basic_salaries: Dict[Tuple[int, int, int], Decimal] = field(default_factory=dict)
     matrix_basic_salary_cell_ids: Dict[Tuple[int, int, int], int] = field(default_factory=dict)
     overrides: List[TeacherSalaryOverride] = field(default_factory=list)
     is_coordinator: bool = False
+
+    def assignment_on(self, target_date: date) -> Optional[TeacherPolicyAssignment]:
+        for a in self.assignments:
+            if (
+                getattr(a, "is_active", True)
+                and a.effective_from <= target_date
+                and (a.effective_to is None or a.effective_to >= target_date)
+            ):
+                return a
+        for a in self.assignments:
+            if (
+                not getattr(a, "policy_id", None)
+                and getattr(a, "archived_policy_snapshot", None)
+                and a.effective_from <= target_date
+                and (a.effective_to is None or a.effective_to >= target_date)
+            ):
+                return a
+        if (
+            self.assignment
+            and self.assignment.effective_from <= target_date
+            and (self.assignment.effective_to is None or self.assignment.effective_to >= target_date)
+        ):
+            return self.assignment
+        return self.assignment
 
 
 def _resolve_rate_from_snapshot(
@@ -93,6 +118,7 @@ def _resolve_rate_from_snapshot(
     teaching_plan_code: Optional[str],
     student_count: Optional[int],
     evaluated_inputs: Dict[str, Any],
+    is_coordinator: bool = False,
 ) -> ResolvedRateResult:
     """Deterministically resolves rate from an immutable preserved archived policy snapshot."""
     snap_pol = snap.get("policy", {})
@@ -106,17 +132,21 @@ def _resolve_rate_from_snapshot(
 
     class_date_str = class_date.isoformat()
     snap_versions = snap.get("versions", [])
+    published_versions = [sv for sv in snap_versions if sv.get("status") == "published"]
+    candidate_versions = published_versions if published_versions else [sv for sv in snap_versions if sv.get("status") != "draft"]
     matched_ver = None
-    for sv in snap_versions:
+    for sv in sorted(
+        candidate_versions,
+        key=lambda x: (str(x.get("effective_from") or ""), int(x.get("version_number") or 0)),
+        reverse=True,
+    ):
         eff_from = sv.get("effective_from")
         eff_to = sv.get("effective_to")
         if eff_from and eff_from <= class_date_str and (eff_to is None or eff_to >= class_date_str):
-            if sv.get("status") == "published" or not matched_ver:
-                matched_ver = sv
-                if sv.get("status") == "published":
-                    break
-    if not matched_ver and snap_versions:
-        matched_ver = snap_versions[0]
+            matched_ver = sv
+            break
+    if not matched_ver and candidate_versions:
+        matched_ver = candidate_versions[-1]
 
     if not matched_ver:
         return ResolvedRateResult(
@@ -202,20 +232,60 @@ def _resolve_rate_from_snapshot(
         if val is not None:
             base_plan_rate = Decimal(str(val))
 
-    if base_plan_rate is not None:
-        eff_from_val = None
-        if version_dict.get("effective_from"):
-            try:
-                eff_from_val = date.fromisoformat(version_dict["effective_from"])
-            except Exception:
-                eff_from_val = None
-        eff_to_val = None
-        if version_dict.get("effective_to"):
-            try:
-                eff_to_val = date.fromisoformat(version_dict["effective_to"])
-            except Exception:
-                eff_to_val = None
+    special_coord_rate = None
+    coord_plan = next((p for p in plans if p.get("is_coordinator_special") or p.get("plan_code") == "coordinator_special"), None)
+    if coord_plan and matched_tier:
+        cp_code = coord_plan.get("plan_code", "")
+        cp_id = coord_plan.get("id")
+        t_id = matched_tier.get("id")
+        t_name = matched_tier.get("tier_name", "")
+        c_val = (
+            rate_map.get(f"{cp_code}_{t_id}")
+            or rate_map.get(f"{cp_code}_{t_name}")
+            or rate_map.get(f"{cp_id}_{t_id}")
+        )
+        if c_val is not None:
+            special_coord_rate = Decimal(str(c_val))
 
+    eff_from_val = None
+    if version_dict.get("effective_from"):
+        try:
+            eff_from_val = date.fromisoformat(version_dict["effective_from"])
+        except Exception:
+            eff_from_val = None
+    eff_to_val = None
+    if version_dict.get("effective_to"):
+        try:
+            eff_to_val = date.fromisoformat(version_dict["effective_to"])
+        except Exception:
+            eff_to_val = None
+
+    weekday_name = class_date.strftime("%A").lower()
+    policy_qualifying_weekdays = [str(w).lower() for w in (matched_ver.get("coordinator_qualifying_weekdays") or [])]
+    is_special_case = bool(assignment and getattr(assignment, "is_special_case", False))
+    if (is_coordinator or is_special_case) and (weekday_name in policy_qualifying_weekdays) and special_coord_rate is not None:
+        plan_label = coord_plan.get("plan_name") if coord_plan else "Coordinator Special"
+        return ResolvedRateResult(
+            is_resolved=True,
+            winning_rate=special_coord_rate,
+            precedence_level=4,
+            precedence_name="Level 4: Special Coordinator-Day Rate",
+            selection_reason=(
+                f"Selected special coordinator-day rate for {weekday_name.capitalize()} from preserved policy "
+                f"'{policy_dict['name']}' (v{version_dict['version_number']}) for plan '{plan_label}' and tier '{tier_dict['tier_name']}'."
+            ),
+            salary_policy=policy_dict,
+            policy_version=version_dict,
+            rate_tier=tier_dict,
+            teaching_plan=plan_dict,
+            base_plan_rate=base_plan_rate,
+            special_coordinator_rate=special_coord_rate,
+            effective_from=eff_from_val,
+            effective_to=eff_to_val,
+            evaluated_inputs=evaluated_inputs,
+        )
+
+    if base_plan_rate is not None:
         return ResolvedRateResult(
             is_resolved=True,
             winning_rate=base_plan_rate,
@@ -230,6 +300,7 @@ def _resolve_rate_from_snapshot(
             rate_tier=tier_dict,
             teaching_plan=plan_dict,
             base_plan_rate=base_plan_rate,
+            special_coordinator_rate=special_coord_rate,
             effective_from=eff_from_val,
             effective_to=eff_to_val,
             evaluated_inputs=evaluated_inputs,
@@ -266,7 +337,9 @@ def resolve_teacher_class_rate(
     Supports in-memory high-performance resolution when RateResolutionContext is provided.
     """
     if class_date is None:
-        class_date = date.today()
+        from zoneinfo import ZoneInfo
+        from django.utils import timezone as dj_tz
+        class_date = dj_tz.localdate(timezone=ZoneInfo("Asia/Karachi"))
 
     evaluated_inputs = {
         "department_id": department_id,
@@ -299,7 +372,7 @@ def resolve_teacher_class_rate(
             student_name = student.user.get_full_name() if student.user else f"Student #{student.pk}"
             evaluated_inputs["student_name"] = student_name
 
-        assignment = context.assignment
+        assignment = context.assignment_on(class_date)
         if not assignment or assignment.effective_from > class_date or (assignment.effective_to and assignment.effective_to < class_date):
             return ResolvedRateResult(
                 is_resolved=False, winning_rate=None, precedence_level=None, precedence_name=None,
@@ -318,6 +391,7 @@ def resolve_teacher_class_rate(
                 teaching_plan_code,
                 student_count,
                 evaluated_inputs,
+                is_coordinator=context.is_coordinator,
             )
 
         policy = assignment.policy
@@ -472,6 +546,7 @@ def resolve_teacher_class_rate(
 
         # Priority 4: Coordinator special day
         is_coordinator = context.is_coordinator
+        is_special_case = bool(assignment and getattr(assignment, "is_special_case", False))
         coordinator_override = next(
             (o for o in active_overrides if o.override_level == TeacherSalaryOverride.OverrideLevel.COORDINATOR_DAY and o.qualifying_weekday == weekday_name),
             None
@@ -479,7 +554,7 @@ def resolve_teacher_class_rate(
         policy_qualifying_weekdays = [str(w).lower() for w in (getattr(version, "coordinator_qualifying_weekdays", None) or [])]
         is_qualifying_weekday = (weekday_name in policy_qualifying_weekdays) or (coordinator_override is not None)
 
-        if (is_coordinator or coordinator_override is not None) and is_qualifying_weekday:
+        if (is_coordinator or is_special_case or coordinator_override is not None) and is_qualifying_weekday:
             if coordinator_override:
                 return ResolvedRateResult(
                     is_resolved=True, winning_rate=coordinator_override.rate_per_class, precedence_level=4,
@@ -591,7 +666,7 @@ def resolve_teacher_class_rate(
         )
         .filter(models.Q(effective_to__isnull=True) | models.Q(effective_to__gte=class_date))
         .select_related("policy")
-        .order_by("-effective_from")
+        .order_by("-effective_from", "-id")
         .first()
     )
 
@@ -605,7 +680,7 @@ def resolve_teacher_class_rate(
             )
             .filter(models.Q(effective_to__isnull=True) | models.Q(effective_to__gte=class_date))
             .select_related("policy")
-            .order_by("-is_active", "-effective_from")
+            .order_by("-is_active", "-effective_from", "-id")
             .first()
         )
 
@@ -620,6 +695,21 @@ def resolve_teacher_class_rate(
             evaluated_inputs=evaluated_inputs,
         )
 
+    user = getattr(teacher, "user", None)
+    is_coordinator = False
+    if user:
+        role_val = getattr(user, "role", "")
+        if role_val == "coordinator":
+            is_coordinator = True
+        elif hasattr(user, "is_coordinator") and callable(user.is_coordinator) and user.is_coordinator():
+            is_coordinator = True
+        elif hasattr(user, "department_roles"):
+            is_coordinator = user.department_roles.filter(
+                department_id=department_id,
+                role="coordinator",
+                is_active=True,
+            ).exists()
+
     # If assignment's policy was permanently deleted and detached, resolve from preserved snapshot
     if not assignment.policy and assignment.archived_policy_snapshot:
         return _resolve_rate_from_snapshot(
@@ -630,6 +720,7 @@ def resolve_teacher_class_rate(
             teaching_plan_code,
             student_count,
             evaluated_inputs,
+            is_coordinator=is_coordinator,
         )
 
     policy = assignment.policy
@@ -858,31 +949,17 @@ def resolve_teacher_class_rate(
         )
 
     # PRIORITY 4: Special coordinator rate for qualifying days
-    # Eligible if teacher is a teaching coordinator or has an explicit coordinator-day override
-    user = getattr(teacher, "user", None)
-    is_coordinator = False
-    if user:
-        role_val = getattr(user, "role", "")
-        if role_val == "coordinator":
-            is_coordinator = True
-        elif hasattr(user, "is_coordinator") and callable(user.is_coordinator) and user.is_coordinator():
-            is_coordinator = True
-        elif hasattr(user, "department_roles"):
-            is_coordinator = user.department_roles.filter(
-                department_id=department_id,
-                role="coordinator",
-                is_active=True,
-            ).exists()
-
+    # Eligible if teacher is a teaching coordinator, has Special Case assignment, or has an explicit coordinator-day override
     coordinator_override = next(
         (o for o in active_overrides if o.override_level == TeacherSalaryOverride.OverrideLevel.COORDINATOR_DAY and o.qualifying_weekday == weekday_name),
         None,
     )
 
+    is_special_case = bool(assignment and getattr(assignment, "is_special_case", False))
     policy_qualifying_weekdays = [str(w).lower() for w in (getattr(version, "coordinator_qualifying_weekdays", None) or [])]
     is_qualifying_weekday = (weekday_name in policy_qualifying_weekdays) or (coordinator_override is not None)
 
-    if (is_coordinator or coordinator_override is not None) and is_qualifying_weekday:
+    if (is_coordinator or is_special_case or coordinator_override is not None) and is_qualifying_weekday:
         if coordinator_override:
             override_info = _serialize_override(coordinator_override)
             return ResolvedRateResult(

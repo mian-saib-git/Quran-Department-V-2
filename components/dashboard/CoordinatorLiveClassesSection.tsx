@@ -37,6 +37,7 @@ export type CoordinatorLiveClassesSectionProps = {
     classKey?: string,
   ) => Promise<boolean>;
   onOpenAccountEditor: (role: "teacher" | "student", profileId: string) => void;
+  onOpenTeacherDetails?: (teacherId: string) => void;
 };
 
 export const CoordinatorLiveClassesSection: React.FC<CoordinatorLiveClassesSectionProps> = ({
@@ -51,6 +52,7 @@ export const CoordinatorLiveClassesSection: React.FC<CoordinatorLiveClassesSecti
   onMarkAttendance,
   onUnmarkAttendance,
   onOpenAccountEditor,
+  onOpenTeacherDetails,
 }) => {
   const renderClassList = (students: Student[], isCurrentSession: boolean) => (
     <div className="space-y-2">
@@ -86,7 +88,11 @@ export const CoordinatorLiveClassesSection: React.FC<CoordinatorLiveClassesSecti
               }
               isCurrentSession={isCurrentSession}
               onOpenStudent={(item) => onOpenAccountEditor("student", item.id)}
-              onOpenTeacher={(item) => onOpenAccountEditor("teacher", item.id)}
+              onOpenTeacher={(item) =>
+                onOpenTeacherDetails
+                  ? onOpenTeacherDetails(item.id)
+                  : onOpenAccountEditor("teacher", item.id)
+              }
             />
           </React.Fragment>
         );

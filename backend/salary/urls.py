@@ -33,6 +33,7 @@ from salary.views import (
     PayrollCorrectionRequestViewSet,
     SalaryEngineCutoverViewSet,
     CrossEngineConflictAuditView,
+    SpecialCaseContextView,
 )
 
 router = DefaultRouter()
@@ -80,6 +81,9 @@ urlpatterns = [
 
     # Rate preview
     path("preview-rate/", RatePreviewView.as_view(), name="salary-rate-preview"),
+
+    # Special Case context for Teacher Create/Edit
+    path("special-case-context/", SpecialCaseContextView.as_view(), name="salary-special-case-context"),
 
     # Monthly salary calculation draft preview (Stage 5)
     path("calculations/preview/", SalaryCalculationPreviewView.as_view(), name="salary-calculation-preview"),

@@ -1,4 +1,5 @@
 import calendar
+from datetime import timedelta
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -10,8 +11,11 @@ from academy.models import (
     ClassSchedule,
     StudentClassHistory,
 )
+from django.core.exceptions import PermissionDenied as DjangoPermissionDenied, ValidationError as DjangoValidationError
 from django.db import transaction
+from rest_framework.exceptions import PermissionDenied as DRFPermissionDenied
 from academy.student_state_history_service import sync_student_state_history
+from academy.student_status_service import academy_localdate
 
 
 SUBJECT_CHOICES = [
@@ -90,6 +94,22 @@ def user_basic_payload(user):
 
 def teacher_account_payload(teacher):
     user = teacher.user
+    active_assign = getattr(teacher, "_prefetched_active_assignment", None)
+    if active_assign is None and not hasattr(teacher, "_prefetched_active_assignment"):
+        from salary.special_case_service import get_teacher_active_assignment
+        active_assign = get_teacher_active_assignment(teacher)
+
+    special_case_assignment = None
+    if active_assign:
+        special_case_assignment = {
+            "assignment_id": active_assign.id,
+            "policy_id": active_assign.policy_id,
+            "policy_code": active_assign.policy.code if active_assign.policy else active_assign.policy_snapshot_code,
+            "policy_name": active_assign.policy.name if active_assign.policy else active_assign.policy_snapshot_name,
+            "effective_from": active_assign.effective_from.isoformat(),
+            "effective_to": active_assign.effective_to.isoformat() if active_assign.effective_to else None,
+            "is_special_case": bool(getattr(active_assign, "is_special_case", False)),
+        }
 
     return {
         **user_basic_payload(user),
@@ -101,6 +121,8 @@ def teacher_account_payload(teacher):
             "joining_date": str(teacher.joining_date) if teacher.joining_date else "",
             "notes": teacher.notes,
             "zoom_link": teacher.zoom_link,
+            "special_case": bool(active_assign and getattr(active_assign, "is_special_case", False)),
+            "special_case_assignment": special_case_assignment,
         },
     }
 
@@ -172,7 +194,15 @@ def schedule_payload_for_student(student):
         "duration_minutes": duration_minutes,
     }
 
-def sync_student_schedules(student, teacher, time_slot, class_days, duration_minutes=30):
+def sync_student_schedules(
+    student,
+    teacher,
+    time_slot,
+    class_days,
+    duration_minutes=30,
+    effective_date=None,
+    preserve_history=True,
+):
     if not time_slot or not class_days:
         return
 
@@ -184,8 +214,6 @@ def sync_student_schedules(student, teacher, time_slot, class_days, duration_min
     if duration_minutes not in [30, 60]:
         duration_minutes = 30
 
-    ClassSchedule.objects.filter(student=student).delete()
-
     valid_days = {
         "monday": ClassSchedule.WeekDay.MONDAY,
         "tuesday": ClassSchedule.WeekDay.TUESDAY,
@@ -196,19 +224,59 @@ def sync_student_schedules(student, teacher, time_slot, class_days, duration_min
         "sunday": ClassSchedule.WeekDay.SUNDAY,
     }
 
+    normalized_days = []
+    seen_days = set()
     for day in class_days:
         key = str(day or "").strip().lower()
         weekday = valid_days.get(key)
-
-        if not weekday:
+        if not weekday or weekday in seen_days:
             continue
+        seen_days.add(weekday)
+        normalized_days.append(weekday)
 
+    if not normalized_days:
+        return
+
+    eff_date = effective_date or academy_localdate()
+    teacher_id = getattr(teacher, "id", None)
+    active_rows = list(student.schedules.filter(is_active=True))
+
+    # Idempotency: if active schedule already matches exact teacher, time_slot, duration, and weekdays, do nothing.
+    if active_rows and len(active_rows) == len(normalized_days):
+        active_signature = {
+            (row.teacher_id, row.weekday, row.time_slot, row.duration_minutes)
+            for row in active_rows
+        }
+        target_signature = {
+            (teacher_id, weekday, time_slot, duration_minutes)
+            for weekday in normalized_days
+        }
+        if active_signature == target_signature:
+            return
+
+    if not preserve_history:
+        student.schedules.all().delete()
+    else:
+        prior_day = eff_date - timedelta(days=1)
+        for row in active_rows:
+            # Avoid overlapping or same-day duplicate schedule rows when edited multiple times on the same day.
+            if row.effective_from is not None and row.effective_from >= eff_date:
+                row.delete()
+            else:
+                row.is_active = False
+                if row.effective_to is None or row.effective_to > prior_day:
+                    row.effective_to = prior_day
+                row.save(update_fields=["is_active", "effective_to"])
+
+    for weekday in normalized_days:
         ClassSchedule.objects.create(
             student=student,
             teacher=teacher,
             weekday=weekday,
             time_slot=time_slot,
             duration_minutes=duration_minutes,
+            effective_from=eff_date if preserve_history else None,
+            effective_to=None,
             is_active=True,
         )
 
@@ -261,7 +329,9 @@ def _sync_schedule_activity_for_status(student):
         StudentProfile.ClassStatus.TRIAL_DROPPED,
         StudentProfile.ClassStatus.OLD_DROPPED_OTHER,
     }
-    student.schedules.update(is_active=student.class_status not in dropped_statuses)
+    student.schedules.filter(effective_to__isnull=True).update(
+        is_active=student.class_status not in dropped_statuses
+    )
 
 
 def student_account_payload(student):
@@ -416,6 +486,8 @@ class CreateAccountSerializer(serializers.Serializer):
     joining_date = serializers.DateField(required=False, allow_null=True)
     notes = serializers.CharField(required=False, allow_blank=True)
     zoom_link = serializers.URLField(required=False, allow_blank=True)
+    special_case = serializers.BooleanField(required=False, default=False)
+    special_case_effective_from = serializers.DateField(required=False, allow_null=True)
 
     teacher_id = serializers.IntegerField(required=False, allow_null=True)
 
@@ -589,6 +661,19 @@ class CreateAccountSerializer(serializers.Serializer):
                 notes=validated_data.get("notes", "").strip(),
                 zoom_link=validated_data.get("zoom_link", "").strip(),
             )
+            if validated_data.get("special_case"):
+                from salary.special_case_service import apply_teacher_special_case
+                try:
+                    apply_teacher_special_case(
+                        actor=creator,
+                        teacher=teacher,
+                        enable=True,
+                        effective_from=validated_data.get("special_case_effective_from"),
+                    )
+                except DjangoPermissionDenied as exc:
+                    raise DRFPermissionDenied(str(exc))
+                except DjangoValidationError as exc:
+                    raise serializers.ValidationError(exc.message_dict if hasattr(exc, "message_dict") else {"special_case": str(exc)})
             return account_payload_for_user(teacher.user)
 
         teacher = TeacherProfile.objects.get(id=validated_data["teacher_id"])
@@ -684,6 +769,9 @@ class UpdateAccountSerializer(serializers.Serializer):
     joining_date = serializers.DateField(required=False, allow_null=True)
     notes = serializers.CharField(required=False, allow_blank=True)
     zoom_link = serializers.URLField(required=False, allow_blank=True)
+    special_case = serializers.BooleanField(required=False)
+    special_case_effective_from = serializers.DateField(required=False, allow_null=True)
+    replacement_policy_id = serializers.IntegerField(required=False, allow_null=True)
 
     teacher_id = serializers.IntegerField(required=False, allow_null=True)
     transfer_to_teacher_id = serializers.IntegerField(required=False, allow_null=True)
@@ -825,6 +913,30 @@ class UpdateAccountSerializer(serializers.Serializer):
 
             teacher.save()
 
+            if "special_case" in validated_data:
+                from salary.special_case_service import (
+                    apply_teacher_special_case,
+                    get_teacher_active_assignment,
+                )
+
+                requested_special = bool(validated_data["special_case"])
+                eff_date = validated_data.get("special_case_effective_from")
+                current_assign = get_teacher_active_assignment(teacher, eff_date)
+                current_special = bool(current_assign and current_assign.is_special_case)
+                if requested_special != current_special:
+                    try:
+                        apply_teacher_special_case(
+                            actor=self.context.get("request_user"),
+                            teacher=teacher,
+                            enable=requested_special,
+                            effective_from=eff_date,
+                            replacement_policy_id=validated_data.get("replacement_policy_id"),
+                        )
+                    except DjangoPermissionDenied as exc:
+                        raise DRFPermissionDenied(str(exc))
+                    except DjangoValidationError as exc:
+                        raise serializers.ValidationError(exc.message_dict if hasattr(exc, "message_dict") else {"special_case": str(exc)})
+
         if user.role == User.Role.STUDENT:
             student = user.student_profile
             actor = self.context.get("request_user")
@@ -954,8 +1066,15 @@ class UpdateAccountSerializer(serializers.Serializer):
             if "assigned_subjects" in validated_data:
                 sync_student_subjects(student, validated_data.get("assigned_subjects", []))
 
-            if "time_slot" in validated_data or "class_days" in validated_data or "duration_minutes" in validated_data:
-                existing_schedule = student.schedules.filter(is_active=True).order_by("time_slot", "id").first()
+            if (
+                "time_slot" in validated_data
+                or "class_days" in validated_data
+                or "duration_minutes" in validated_data
+                or (teacher and previous_teacher and teacher.id != previous_teacher.id)
+            ):
+                active_schedules = list(student.schedules.filter(is_active=True).order_by("time_slot", "id"))
+                existing_schedule = active_schedules[0] if active_schedules else None
+                previous_days = [item.weekday for item in student.schedules.filter(is_active=True).order_by("weekday", "id")]
 
                 time_slot = validated_data.get("time_slot")
                 if not time_slot and existing_schedule:
@@ -969,17 +1088,34 @@ class UpdateAccountSerializer(serializers.Serializer):
 
                 class_days = validated_data.get("class_days", None)
                 if class_days is None:
-                    class_days = [
-                        item.weekday
-                        for item in student.schedules.filter(is_active=True).order_by("weekday", "id")
-                    ]
+                    class_days = previous_days
 
+                eff_date = academy_localdate()
                 sync_student_schedules(
                     student=student,
                     teacher=teacher,
                     time_slot=time_slot,
                     class_days=class_days,
                     duration_minutes=duration_minutes,
+                    effective_date=eff_date,
+                    preserve_history=True,
                 )
+                normalized_new_days = [str(d or "").strip().lower() for d in (class_days or []) if str(d or "").strip()]
+                if set(normalized_new_days) != set(previous_days) or (
+                    existing_schedule and time_slot and existing_schedule.time_slot != time_slot
+                ):
+                    _student_history(
+                        student=student,
+                        event_type=StudentClassHistory.EventType.STATUS_CHANGED,
+                        actor=actor,
+                        previous_teacher=previous_teacher,
+                        new_teacher=teacher,
+                        previous_student_type=previous_student_type,
+                        new_student_type=student.student_type,
+                        previous_class_status=previous_class_status,
+                        new_class_status=student.class_status,
+                        notes=f"Schedule updated ({', '.join(previous_days)} -> {', '.join(normalized_new_days)}).",
+                        effective_date=eff_date,
+                    )
 
         return account_payload_for_user(user)

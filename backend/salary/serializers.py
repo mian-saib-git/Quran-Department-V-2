@@ -425,6 +425,7 @@ class TeacherPolicyAssignmentSerializer(serializers.ModelSerializer):
             "is_active",
             "basic_salary_override",
             "basic_salary_eligibility",
+            "is_special_case",
             "notes",
             "assigned_by",
             "assigned_by_name",

@@ -146,6 +146,9 @@ export default function TeacherSalaryManagement({
   }, [loadAuthorizedDepartments]);
 
   const handleStageChange = (stage: UnifiedSalaryStage) => {
+    if (stage === "monthly_salary_preview") {
+      clearSalaryPreviewModuleCache();
+    }
     setActiveWorkspaceMode(stage);
     try {
       localStorage.setItem(STORAGE_KEY, stage);

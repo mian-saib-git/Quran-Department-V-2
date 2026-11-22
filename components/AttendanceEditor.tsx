@@ -14,6 +14,7 @@ import {
   getQuranTeacherSessionAttendance,
   type QuranTeacherSessionPayload,
 } from "../services/djangoApiService";
+import { SubstituteTeacherSelect } from "./SubstituteTeacherSelect";
 import {
   CalendarDays,
   Search,
@@ -766,6 +767,10 @@ function TeacherAttendanceModal({
 
       if (result !== false) {
         setCoverageEditor(null);
+      } else {
+        setError(
+          "Could not save the teacher attendance and substitute assignment. Please review the selected substitute and try again.",
+        );
       }
     } finally {
       setSavingTimeSlot(null);
@@ -913,16 +918,28 @@ function TeacherAttendanceModal({
                           </div>
                         </div>
 
-                        {student.requires_substitute && (
-                          <select
-                            value={
-                              coverageEditor.assignments[
-                                student.student_id
-                              ] || ""
-                            }
-                            onChange={(event) =>
-                              setCoverageEditor(
-                                (current) => {
+                        {student.requires_substitute && (() => {
+                          const usedByAnotherStudent = new Set(
+                            Object.entries(coverageEditor.assignments)
+                              .filter(
+                                ([otherStudentId, selectedId]) =>
+                                  Number(otherStudentId) !== student.student_id &&
+                                  Boolean(selectedId),
+                              )
+                              .map(([, selectedId]) => selectedId),
+                          );
+                          return (
+                            <SubstituteTeacherSelect
+                              substitutes={
+                                coverageEditor.payload.available_substitutes
+                              }
+                              value={
+                                coverageEditor.assignments[
+                                  student.student_id
+                                ] || ""
+                              }
+                              onChange={(selectedTeacherId) =>
+                                setCoverageEditor((current) => {
                                   if (!current) {
                                     return current;
                                   }
@@ -931,49 +948,31 @@ function TeacherAttendanceModal({
                                     ...current,
                                     assignments: {
                                       ...current.assignments,
-                                      [student.student_id]:
-                                        event.target.value,
+                                      [student.student_id]: selectedTeacherId,
                                     },
                                   };
-                                },
-                              )
-                            }
-                            className="w-full md:w-72 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold"
-                          >
-                            <option value="">
-                              Select substitute teacher
-                            </option>
-
-                            {coverageEditor.payload
-                              .available_substitutes
-                              .map((teacher) => (
-                                <option
-                                  key={teacher.id}
-                                  value={String(
-                                    teacher.id,
-                                  )}
-                                >
-                                  {teacher.name}
-                                </option>
-                              ))}
-                          </select>
-                        )}
+                                })
+                              }
+                              disabledIds={usedByAnotherStudent}
+                              loading={isCoverageLoading}
+                              disabled={isCoverageSaving}
+                              ariaLabel={`Substitute teacher for ${student.student_name}`}
+                            />
+                          );
+                        })()}
                       </div>
                     </div>
                   ),
                 )}
 
-                {coverageEditor.payload
-                  .available_substitutes.length ===
-                  0 &&
+                {!isCoverageLoading &&
+                  coverageEditor.payload.available_substitutes.length === 0 &&
                   coverageEditor.payload.students.some(
                     (student) =>
                       student.requires_substitute,
                   ) && (
                     <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-700">
-                      No substitute teacher is
-                      currently available for this
-                      session.
+                      No active substitute teachers found in this department.
                     </div>
                   )}
 
@@ -984,7 +983,7 @@ function TeacherAttendanceModal({
                   </div>
                 ) : validation.missingSubstitutes.length > 0 ? (
                   <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
-                    Select an available substitute teacher for{" "}
+                    Select a substitute teacher for{" "}
                     {validation.missingSubstitutes.length} Present student
                     {validation.missingSubstitutes.length === 1 ? "" : "s"} before confirming.
                   </div>

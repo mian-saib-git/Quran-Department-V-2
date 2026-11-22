@@ -303,3 +303,346 @@ class TeacherSessionAttendanceV2Tests(TestCase):
                 class_key=self.class_key,
             ).exists()
         )
+
+    def _get_session(self, teacher_id=None):
+        tid = teacher_id or self.teacher.id
+        return self.client.get(
+            f"/api/academy/teacher-session-attendance-v2/?teacher_id={tid}&date={self.target_date}&class_key={self.class_key}",
+            HTTP_HOST="localhost",
+        )
+
+    def test_9_available_substitutes_include_scheduled_and_unscheduled_active_teachers(self):
+        # Teacher with overlapping scheduled class & Present student
+        busy_user = User.objects.create_user(
+            username="v2_busy_teacher",
+            first_name="Busy",
+            last_name="Teacher",
+            password="pw",
+            role=User.Role.TEACHER,
+            institution=self.institution,
+            department=self.department,
+        )
+        busy_teacher = TeacherProfile.objects.create(
+            user=busy_user,
+            institution=self.institution,
+            department=self.department,
+        )
+        other_student_user = User.objects.create_user(
+            username="v2_other_student",
+            password="pw",
+            role=User.Role.STUDENT,
+            institution=self.institution,
+            department=self.department,
+        )
+        other_student = StudentProfile.objects.create(
+            user=other_student_user,
+            teacher=busy_teacher,
+            institution=self.institution,
+            department=self.department,
+        )
+        ClassSchedule.objects.create(
+            institution=self.institution,
+            department=self.department,
+            student=other_student,
+            teacher=busy_teacher,
+            weekday=self.target_date.strftime("%A").lower(),
+            time_slot=self.session_time,
+            duration_minutes=30,
+            is_active=True,
+        )
+        Attendance.objects.create(
+            entity_type=Attendance.EntityType.STUDENT,
+            teacher=busy_teacher,
+            student=other_student,
+            date=self.target_date,
+            class_key=self.class_key,
+            status=Attendance.Status.PRESENT,
+            marked_by=self.manager,
+            department=self.department,
+            institution=self.institution,
+        )
+
+        # Inactive teacher
+        inactive_user = User.objects.create_user(
+            username="v2_inactive_teacher",
+            password="pw",
+            role=User.Role.TEACHER,
+            institution=self.institution,
+            department=self.department,
+            is_active=False,
+        )
+        inactive_teacher = TeacherProfile.objects.create(
+            user=inactive_user,
+            institution=self.institution,
+            department=self.department,
+        )
+
+        # Archived teacher
+        archived_user = User.objects.create_user(
+            username="v2_archived_teacher",
+            password="pw",
+            role=User.Role.TEACHER,
+            institution=self.institution,
+            department=self.department,
+            is_active=True,
+            archived_at=timezone.now(),
+        )
+        archived_teacher = TeacherProfile.objects.create(
+            user=archived_user,
+            institution=self.institution,
+            department=self.department,
+        )
+
+        # Deleted-login teacher
+        deleted_teacher = TeacherProfile.objects.create(
+            user=None,
+            historical_name="Deleted Login Teacher",
+            login_deleted_at=timezone.now(),
+            institution=self.institution,
+            department=self.department,
+        )
+
+        # Other department teacher
+        other_dept = Department.objects.create(
+            institution=self.institution,
+            name="Other Quran",
+            code="other-quran-v2",
+            department_type=Department.DepartmentType.QURAN,
+        )
+        other_dept_user = User.objects.create_user(
+            username="v2_other_dept_teacher",
+            password="pw",
+            role=User.Role.TEACHER,
+            institution=self.institution,
+            department=other_dept,
+        )
+        other_dept_teacher = TeacherProfile.objects.create(
+            user=other_dept_user,
+            institution=self.institution,
+            department=other_dept,
+        )
+
+        resp = self._get_session()
+        self.assertEqual(resp.status_code, 200)
+        sub_ids = {item["id"] for item in resp.data["available_substitutes"]}
+
+        # Included: unscheduled active teacher & active teacher with own scheduled class
+        self.assertIn(self.sub_teacher.id, sub_ids)
+        self.assertIn(busy_teacher.id, sub_ids)
+
+        # Excluded: original teacher, inactive, archived, deleted-login, other department
+        self.assertNotIn(self.teacher.id, sub_ids)
+        self.assertNotIn(inactive_teacher.id, sub_ids)
+        self.assertNotIn(archived_teacher.id, sub_ids)
+        self.assertNotIn(deleted_teacher.id, sub_ids)
+        self.assertNotIn(other_dept_teacher.id, sub_ids)
+
+    def test_10_assign_scheduled_teacher_as_substitute_persists_and_reloads(self):
+        busy_user = User.objects.create_user(
+            username="v2_scheduled_sub",
+            first_name="Scheduled",
+            last_name="Sub",
+            password="pw",
+            role=User.Role.TEACHER,
+            institution=self.institution,
+            department=self.department,
+        )
+        busy_teacher = TeacherProfile.objects.create(
+            user=busy_user,
+            institution=self.institution,
+            department=self.department,
+        )
+        other_student_user = User.objects.create_user(
+            username="v2_busy_student",
+            password="pw",
+            role=User.Role.STUDENT,
+            institution=self.institution,
+            department=self.department,
+        )
+        other_student = StudentProfile.objects.create(
+            user=other_student_user,
+            teacher=busy_teacher,
+            institution=self.institution,
+            department=self.department,
+        )
+        ClassSchedule.objects.create(
+            institution=self.institution,
+            department=self.department,
+            student=other_student,
+            teacher=busy_teacher,
+            weekday=self.target_date.strftime("%A").lower(),
+            time_slot=self.session_time,
+            duration_minutes=30,
+            is_active=True,
+        )
+
+        post_resp = self._post_session(
+            "absent",
+            [{"student_id": self.student.id, "substitute_teacher_id": busy_teacher.id}],
+        )
+        self.assertEqual(post_resp.status_code, 200)
+
+        get_resp = self._get_session()
+        self.assertEqual(get_resp.status_code, 200)
+        self.assertEqual(get_resp.data["teacher_attendance"]["status"], "absent")
+        self.assertEqual(
+            get_resp.data["students"][0]["coverage"]["substitute_teacher_id"],
+            busy_teacher.id,
+        )
+
+    def test_11_integrity_rules_reject_contradictory_assignments_with_clear_reason(self):
+        # 1. Inactive substitute rejected on POST
+        inactive_user = User.objects.create_user(
+            username="v2_sub_inactive",
+            password="pw",
+            role=User.Role.TEACHER,
+            institution=self.institution,
+            department=self.department,
+            is_active=False,
+        )
+        inactive_sub = TeacherProfile.objects.create(
+            user=inactive_user,
+            institution=self.institution,
+            department=self.department,
+        )
+        r_inactive = self._post_session(
+            "absent",
+            [{"student_id": self.student.id, "substitute_teacher_id": inactive_sub.id}],
+        )
+        self.assertEqual(r_inactive.status_code, 400)
+        self.assertIn("inactive", r_inactive.data["detail"].lower())
+
+        # 2. Substitute marked ABSENT at same class_key remains visible in GET, rejected on POST
+        Attendance.objects.create(
+            entity_type=Attendance.EntityType.TEACHER,
+            teacher=self.sub_teacher,
+            date=self.target_date,
+            class_key=self.class_key,
+            status=Attendance.Status.ABSENT,
+            marked_by=self.manager,
+            department=self.department,
+            institution=self.institution,
+        )
+        get_resp = self._get_session()
+        self.assertIn(
+            self.sub_teacher.id,
+            {item["id"] for item in get_resp.data["available_substitutes"]},
+        )
+        r_absent = self._post_session(
+            "absent",
+            [{"student_id": self.student.id, "substitute_teacher_id": self.sub_teacher.id}],
+        )
+        self.assertEqual(r_absent.status_code, 409)
+        self.assertEqual(r_absent.data["code"], "substitute_unavailable_attendance")
+
+        # 3. Overlapping substitute coverage remains visible in GET, rejected on POST
+        sub2_user = User.objects.create_user(
+            username="v2_sub2",
+            password="pw",
+            role=User.Role.TEACHER,
+            institution=self.institution,
+            department=self.department,
+        )
+        sub2 = TeacherProfile.objects.create(
+            user=sub2_user,
+            institution=self.institution,
+            department=self.department,
+        )
+        other_teacher_user = User.objects.create_user(
+            username="v2_other_t",
+            password="pw",
+            role=User.Role.TEACHER,
+            institution=self.institution,
+            department=self.department,
+        )
+        other_teacher = TeacherProfile.objects.create(
+            user=other_teacher_user,
+            institution=self.institution,
+            department=self.department,
+        )
+        other_student_user = User.objects.create_user(
+            username="v2_other_s2",
+            password="pw",
+            role=User.Role.STUDENT,
+            institution=self.institution,
+            department=self.department,
+        )
+        other_student = StudentProfile.objects.create(
+            user=other_student_user,
+            teacher=other_teacher,
+            institution=self.institution,
+            department=self.department,
+        )
+        other_schedule = ClassSchedule.objects.create(
+            institution=self.institution,
+            department=self.department,
+            student=other_student,
+            teacher=other_teacher,
+            weekday=self.target_date.strftime("%A").lower(),
+            time_slot=self.session_time,
+            duration_minutes=30,
+            is_active=True,
+        )
+        QuranClassCoverage.objects.create(
+            department=self.department,
+            date=self.target_date,
+            class_key=self.class_key,
+            schedule=other_schedule,
+            original_teacher=other_teacher,
+            substitute_teacher=sub2,
+            student=other_student,
+            teacher_status=Attendance.Status.ABSENT,
+            student_status=QuranClassCoverage.StudentStatus.PRESENT,
+            coverage_status=QuranClassCoverage.CoverageStatus.ASSIGNED,
+        )
+        get_resp_2 = self._get_session()
+        self.assertIn(
+            sub2.id,
+            {item["id"] for item in get_resp_2.data["available_substitutes"]},
+        )
+        r_conflict = self._post_session(
+            "absent",
+            [{"student_id": self.student.id, "substitute_teacher_id": sub2.id}],
+        )
+        self.assertEqual(r_conflict.status_code, 409)
+        self.assertEqual(r_conflict.data["code"], "substitute_booking_conflict")
+
+    def test_12_permissions_and_confirmation_validation(self):
+        # Teacher role cannot access GET or POST
+        teacher_client = APIClient()
+        teacher_client.force_authenticate(user=self.teacher_user)
+        r_get = teacher_client.get(
+            f"/api/academy/teacher-session-attendance-v2/?teacher_id={self.teacher.id}&date={self.target_date}&class_key={self.class_key}",
+            HTTP_HOST="localhost",
+        )
+        self.assertEqual(r_get.status_code, 403)
+        r_post = teacher_client.post(
+            "/api/academy/teacher-session-attendance-v2/",
+            {
+                "teacher_id": self.teacher.id,
+                "date": str(self.target_date),
+                "class_key": self.class_key,
+                "status": "present",
+            },
+            format="json",
+            HTTP_HOST="localhost",
+        )
+        self.assertEqual(r_post.status_code, 403)
+
+        # Missing substitute for Present student rejected
+        r_missing = self._post_session("absent", [])
+        self.assertEqual(r_missing.status_code, 400)
+        self.assertIn("missing_student_ids", r_missing.data)
+
+        # Unmarked student blocks Absent/Leave
+        Attendance.objects.filter(
+            entity_type=Attendance.EntityType.STUDENT,
+            student=self.student,
+            date=self.target_date,
+        ).delete()
+        r_unmarked = self._post_session(
+            "absent",
+            [{"student_id": self.student.id, "substitute_teacher_id": self.sub_teacher.id}],
+        )
+        self.assertEqual(r_unmarked.status_code, 400)
+        self.assertIn("not_marked_student_ids", r_unmarked.data)

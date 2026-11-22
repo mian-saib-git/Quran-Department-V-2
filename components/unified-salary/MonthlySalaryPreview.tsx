@@ -1238,6 +1238,10 @@ export default function MonthlySalaryPreview({
 
   // Accordion & View Filters
   const [expandedTeacherIds, setExpandedTeacherIds] = useState<Record<number, boolean>>({});
+  const expandedTeacherIdsRef = useRef<Record<number, boolean>>({});
+  useEffect(() => {
+    expandedTeacherIdsRef.current = expandedTeacherIds;
+  }, [expandedTeacherIds]);
   const [activeTeacherTab, setActiveTeacherTab] = useState<Record<number, "lines" | "eligibility" | "timeline">>({});
   const [teacherStatusFilters, setTeacherStatusFilters] = useState<Record<number, string>>({});
   const [searchFilter, setSearchFilter] = useState<string>("");
@@ -1305,6 +1309,15 @@ export default function MonthlySalaryPreview({
 
       departmentPreviewCache.set(cacheKey, res);
       setPreviewData(res);
+      if (forceRefresh) {
+        const activeExpanded = Object.entries(expandedTeacherIdsRef.current)
+          .filter(([, isExp]) => Boolean(isExp))
+          .map(([k]) => Number(k))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        for (const tId of activeExpanded) {
+          void fetchTeacherDetail(tId);
+        }
+      }
     } catch (err: any) {
       if (reqSeq !== requestSeqRef.current) return;
       setErrorMessage(err.message || "Failed to calculate draft salary preview.");
@@ -1326,8 +1339,10 @@ export default function MonthlySalaryPreview({
       loadCalculationPreview(true);
     };
     window.addEventListener("salary-adjustments-updated", handleAdjustmentsUpdated);
+    window.addEventListener("ivs-refresh-state", handleAdjustmentsUpdated);
     return () => {
       window.removeEventListener("salary-adjustments-updated", handleAdjustmentsUpdated);
+      window.removeEventListener("ivs-refresh-state", handleAdjustmentsUpdated);
     };
   }, [loadCalculationPreview]);
 

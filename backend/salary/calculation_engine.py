@@ -56,6 +56,7 @@ from salary.models import (
     TeacherPolicyAssignment,
     TeacherSalaryOverride,
 )
+from salary.attendance_reconciler import get_application_timezone
 from salary.resolver import resolve_teacher_class_rate, ResolvedRateResult, RateResolutionContext
 
 
@@ -203,6 +204,7 @@ def build_calculation_prefetch_context(
         "source_department_type", "verification_status", "resolution_type",
         "flag_reason", "teacher_available_determination",
         "original_teacher_attendance_status", "original_student_attendance_status",
+        "source_evidence_snapshot",
     )
     primary_vers = list(
         SalaryAttendanceVerification.objects.filter(
@@ -334,11 +336,13 @@ def build_calculation_prefetch_context(
             effective_from__lte=last_date,
         ).filter(Q(effective_to__isnull=True) | Q(effective_to__gte=first_date))
         .select_related("policy")
-        .order_by("-is_active", "-effective_from")
+        .order_by("-is_active", "-effective_from", "-id")
     )
     assign_by_teacher = {}
+    assignments_by_teacher = defaultdict(list)
     policy_ids = set()
     for a in assignments:
+        assignments_by_teacher[a.teacher_id].append(a)
         if a.teacher_id not in assign_by_teacher:
             assign_by_teacher[a.teacher_id] = a
         if a.policy_id:
@@ -388,8 +392,16 @@ def build_calculation_prefetch_context(
     # 8. Build RateResolutionContext per teacher (reuse students_cache to avoid O(teachers * verifications) redundant loops)
     for t in teachers:
         assign = assign_by_teacher.get(t.id)
-        pol_id = assign.policy_id if assign else None
-        v_list = versions_by_policy.get(pol_id, [])
+        t_assigns = assignments_by_teacher.get(t.id, [])
+        t_policy_ids = []
+        if assign and assign.policy_id:
+            t_policy_ids.append(assign.policy_id)
+        for ta in t_assigns:
+            if ta.policy_id and ta.policy_id not in t_policy_ids:
+                t_policy_ids.append(ta.policy_id)
+        v_list = []
+        for pid in t_policy_ids:
+            v_list.extend(versions_by_policy.get(pid, []))
         cand_students = ctx.candidate_students_by_teacher.get(t.id, set())
         student_map = {**students_cache, **{s.id: s for s in cand_students}}
         user = getattr(t, "user", None)
@@ -406,6 +418,7 @@ def build_calculation_prefetch_context(
             teacher_name=getattr(t, "historical_name", None) or (user.get_full_name() if user else f"Teacher #{t.id}"),
             student_map=student_map,
             assignment=assign,
+            assignments=assignments_by_teacher.get(t.id, []),
             versions=v_list,
             matrix_rates=matrix_rates,
             matrix_basic_salaries=matrix_basic_salaries,
@@ -791,7 +804,17 @@ def resolve_occurrence_teaching_plan(
     st_id = occurrence.get("student_id")
     c_date = occurrence.get("class_date")
 
-    if plan_cache is not None and t_id is not None and st_id is not None:
+    verif = occurrence.get("verification")
+    snap = getattr(verif, "source_evidence_snapshot", None) or {}
+    override_days_raw = snap.get("salary_tier_override_days_per_week") if isinstance(snap, dict) else None
+    override_days = None
+    if override_days_raw is not None:
+        try:
+            override_days = int(override_days_raw)
+        except (TypeError, ValueError):
+            override_days = None
+
+    if plan_cache is not None and t_id is not None and st_id is not None and override_days is None:
         month_key = (policy_version.id, t_id, st_id)
         if month_key in plan_cache:
             return plan_cache[month_key]
@@ -805,7 +828,10 @@ def resolve_occurrence_teaching_plan(
     days_per_week = None
     is_constant_month = True
 
-    if dept_type == "tuition" and sched_id:
+    if override_days is not None and override_days > 0:
+        days_per_week = override_days
+        is_constant_month = False
+    elif dept_type == "tuition" and sched_id:
         t_sched = TuitionSchedule.objects.filter(id=sched_id).first()
         if t_sched and t_sched.enrollment:
             days_per_week = getattr(t_sched.enrollment, "days_per_week", None)
@@ -819,11 +845,12 @@ def resolve_occurrence_teaching_plan(
         weekdays = set()
         month_start = c_date.replace(day=1)
         for s in st_schedules:
-            if s.is_active:
-                if (s.effective_from is None or s.effective_from <= c_date) and (s.effective_to is None or s.effective_to >= c_date):
-                    weekdays.add(s.weekday)
-                if (s.effective_from and s.effective_from > month_start) or s.effective_to:
-                    is_constant_month = False
+            if not (s.is_active or s.effective_to is not None):
+                continue
+            if (s.effective_from is None or s.effective_from <= c_date) and (s.effective_to is None or s.effective_to >= c_date):
+                weekdays.add(s.weekday)
+            if (s.effective_from and s.effective_from > month_start) or s.effective_to:
+                is_constant_month = False
         days_per_week = len(weekdays) or 1
     elif sched_id:
         is_constant_month = False
@@ -834,7 +861,8 @@ def resolve_occurrence_teaching_plan(
             days_per_week = ClassSchedule.objects.filter(
                 student=student,
                 teacher=teacher,
-                is_active=True,
+            ).filter(
+                Q(is_active=True) | Q(effective_to__isnull=False)
             ).filter(
                 Q(effective_from__isnull=True) | Q(effective_from__lte=occurrence["class_date"])
             ).filter(
@@ -1074,6 +1102,12 @@ def calculate_teacher_salary_preview(
         }
 
     def get_effective_version(d: date) -> SalaryPolicyVersion:
+        day_assign = rate_ctx.assignment_on(d) if rate_ctx else assignment
+        target_pol_id = day_assign.policy_id if day_assign and day_assign.policy_id else (policy.id if policy else None)
+        if target_pol_id:
+            for v in published_versions:
+                if v.policy_id == target_pol_id and v.effective_from <= d and (v.effective_to is None or v.effective_to >= d):
+                    return v
         for v in published_versions:
             if v.effective_from <= d and (v.effective_to is None or v.effective_to >= d):
                 return v
@@ -1085,7 +1119,7 @@ def calculate_teacher_salary_preview(
     primary_verifications = prefetch_context.primary_verifications_by_teacher.get(teacher.pk, [])
     substitute_verifications = prefetch_context.substitute_verifications_by_teacher.get(teacher.pk, [])
 
-    now_dt = timezone.now()
+    now_dt = timezone.localtime(timezone.now(), get_application_timezone())
     today_dt = now_dt.date()
 
     # Incompleteness tracking
@@ -1364,9 +1398,16 @@ def calculate_teacher_salary_preview(
         if matched_plan:
             teaching_plans_seen.add(matched_plan.plan_name)
 
-        # Rate resolution: fast matrix path if no overrides and not coordinator
+        # Rate resolution: fast matrix path if no overrides, not coordinator, and not special case
         m_tier = None
-        if rate_ctx and not rate_ctx.overrides and not rate_ctx.is_coordinator:
+        has_special_case = bool(
+            rate_ctx
+            and any(
+                getattr(a, "is_special_case", False)
+                for a in (rate_ctx.assignments or ([rate_ctx.assignment] if rate_ctx.assignment else []))
+            )
+        )
+        if rate_ctx and not rate_ctx.overrides and not rate_ctx.is_coordinator and not has_special_case:
             eff_tiers = getattr(eff_version, "_cached_sorted_tiers", None)
             if eff_tiers is None:
                 eff_tiers = sorted(eff_version.rate_tiers.all(), key=lambda x: (getattr(x, "sort_order", 0), x.min_students))
@@ -1517,6 +1558,19 @@ def calculate_teacher_salary_preview(
             precedence_level = resolved_rate_obj.precedence_level if resolved_rate_obj else 5
             precedence_name = resolved_rate_obj.precedence_name if resolved_rate_obj else "Level 5: Department Policy Rate"
             rate_override_reason = resolved_rate_obj.matching_override.get("reason") if (resolved_rate_obj and resolved_rate_obj.matching_override) else None
+            verif_obj = occ.get("verification")
+            verif_snap = getattr(verif_obj, "source_evidence_snapshot", None) or {}
+            tier_override_reason = (
+                verif_snap.get("salary_tier_override_reason")
+                if isinstance(verif_snap, dict)
+                else None
+            )
+            if tier_override_reason:
+                rate_override_reason = (
+                    f"{rate_override_reason} | {tier_override_reason}"
+                    if rate_override_reason
+                    else tier_override_reason
+                )
 
             class_earning_lines.append({
                 "class_date": class_date.isoformat(),
@@ -1700,9 +1754,10 @@ def calculate_teacher_salary_preview(
                     st_schedules = prefetch_context.schedules_by_teacher.get(teacher.id, []) if prefetch_context else []
                     act_weekdays = set()
                     for s in st_schedules:
-                        if s.is_active:
-                            if (s.effective_from is None or s.effective_from <= curr_d) and (s.effective_to is None or s.effective_to >= curr_d):
-                                act_weekdays.add(s.weekday)
+                        if not (s.is_active or s.effective_to is not None):
+                            continue
+                        if (s.effective_from is None or s.effective_from <= curr_d) and (s.effective_to is None or s.effective_to >= curr_d):
+                            act_weekdays.add(s.weekday)
                     if act_weekdays:
                         days_pw = len(act_weekdays)
                         for p in teacher_plans:
