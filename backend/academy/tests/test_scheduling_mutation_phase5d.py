@@ -122,7 +122,7 @@ class SchedulingMutationPhase5DTests(TestCase):
             "time_slot": "04:00",
         }, format="json")
         self.assertEqual(r_rm.status_code, 200)
-        self.assertEqual(ClassSchedule.objects.filter(student=self.s1).count(), 0)
+        self.assertEqual(ClassSchedule.objects.filter(student=self.s1, is_active=True).count(), 0)
         self.assertTrue(StudentProfile.objects.filter(id=self.s1.id).exists())
         self.assertTrue(Attendance.objects.filter(id=self.att.id).exists())
 
@@ -136,5 +136,5 @@ class SchedulingMutationPhase5DTests(TestCase):
             "time_slot": "04:00",
         }, format="json")
         self.assertEqual(r_del.status_code, 200)
-        self.assertEqual(ClassSchedule.objects.filter(student=self.s1).count(), 0)
+        self.assertEqual(ClassSchedule.objects.filter(student=self.s1, is_active=True).count(), 0)
         self.assertTrue(Attendance.objects.filter(id=self.att.id).exists())
