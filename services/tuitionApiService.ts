@@ -218,12 +218,18 @@ export async function getTuitionAccounts(params: {
   search?: string;
   page?: number;
   page_size?: number;
+  profile_id?: number | string;
+  signal?: AbortSignal;
 }) {
+  const { signal, ...queryParams } = params;
   return request<{
     results: TuitionAccount[];
     counts: Record<string, number>;
     pagination: Record<string, number>;
-  }>(`/api/tuition/accounts/${query(params)}`);
+  }>(
+    `/api/tuition/accounts/${query(queryParams)}`,
+    signal ? { signal } : {}
+  );
 }
 
 export async function createTuitionAccount(input: TuitionAccountInput) {

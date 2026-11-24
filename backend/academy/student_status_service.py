@@ -103,6 +103,21 @@ def validate_student_return_assignment(student: StudentProfile, department) -> t
     return True, ""
 
 
+def _invalidate_student_status_salary_cache(department_id: int, effective_date: date) -> None:
+    """Invalidate affected month(s) in Unified Salary preview cache after commit."""
+    if not department_id or not effective_date:
+        return
+    try:
+        from salary.views import invalidate_salary_preview_cache
+
+        invalidate_salary_preview_cache(department_id, effective_date.year, effective_date.month)
+        today = academy_localdate()
+        if (today.year, today.month) != (effective_date.year, effective_date.month):
+            invalidate_salary_preview_cache(department_id, today.year, today.month)
+    except Exception:
+        pass
+
+
 @transaction.atomic
 def confirm_student_drop_leave_return(
     *,
@@ -201,6 +216,7 @@ def confirm_student_drop_leave_return(
                 "reason": clean_reason,
             },
         )
+        _invalidate_student_status_salary_cache(department.id, effective_date)
         return {
             "student_id": student.id,
             "action": action,
@@ -251,6 +267,7 @@ def confirm_student_drop_leave_return(
                 "reason": clean_reason,
             },
         )
+        _invalidate_student_status_salary_cache(department.id, effective_date)
         return {
             "student_id": student.id,
             "action": action,
@@ -376,6 +393,7 @@ def confirm_student_drop_leave_return(
         else f"{student} returned to active teaching effective {effective_date}."
     )
 
+    _invalidate_student_status_salary_cache(department.id, effective_date)
     return {
         "student_id": student.id,
         "action": action,

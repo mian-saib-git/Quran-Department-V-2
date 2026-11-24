@@ -560,13 +560,23 @@ class AttendanceDetector:
 
 
 def invalidate_salary_preview_cache(department_id: int, year: int, month: int) -> None:
-    """Bump the per-department-month preview cache version so stale previews are never served."""
-    ver_key = f"salary_calc_preview_ver_{department_id}_{year}_{month}"
-    try:
-        current = cache.get(ver_key, 1)
-        cache.set(ver_key, int(current) + 1, timeout=None)
-    except Exception:
-        pass
+    """Bump the per-department-month preview cache version after commit so stale previews are never served."""
+    from django.db import transaction
+
+    ver_key = f"salary_calc_preview_ver_{int(department_id)}_{int(year)}_{int(month)}"
+
+    def _bump():
+        try:
+            cache.add(ver_key, 1, timeout=None)
+            cache.incr(ver_key)
+        except Exception:
+            try:
+                current = cache.get(ver_key, 1)
+                cache.set(ver_key, int(current) + 1, timeout=None)
+            except Exception:
+                pass
+
+    transaction.on_commit(_bump)
 
 
 def sync_salary_verification_for_date(department: Department, target_date: date, user=None) -> None:

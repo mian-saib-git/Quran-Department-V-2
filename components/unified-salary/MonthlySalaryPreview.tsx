@@ -1200,6 +1200,8 @@ interface Props {
 import {
   departmentPreviewCache,
   inFlightDepartmentPreviews,
+  teacherDetailPreviewCache,
+  inFlightTeacherDetailPreviews,
   clearSalaryPreviewModuleCache,
 } from "./salaryPreviewCache";
 export { clearSalaryPreviewModuleCache };
@@ -1253,8 +1255,9 @@ export default function MonthlySalaryPreview({
   const [isSubmittingReconciliation, setIsSubmittingReconciliation] = useState<boolean>(false);
   const [reconcileError, setReconcileError] = useState<string>("");
 
-  // Request sequence ref to prevent out-of-order state updates
+  // Request sequence ref & AbortController to prevent out-of-order/stale state updates
   const requestSeqRef = useRef<number>(0);
+  const previewAbortRef = useRef<AbortController | null>(null);
 
   // Load department teachers independently once when department/period changes
   useEffect(() => {
@@ -1275,93 +1278,51 @@ export default function MonthlySalaryPreview({
     };
   }, [departmentId, selectedYear, selectedMonth]);
 
-  // Load departmental preview calculation with caching and in-flight request deduplication
-  const loadCalculationPreview = useCallback(async (forceRefresh = false) => {
-    const cacheKey = `${departmentId}-${selectedYear}-${selectedMonth}`;
-    if (!forceRefresh && departmentPreviewCache.has(cacheKey)) {
-      setPreviewData(departmentPreviewCache.get(cacheKey)!);
-      setIsLoading(false);
-      setErrorMessage("");
+  // Fetch detailed class earning lines strictly for a single teacher on demand (with cache reuse)
+  const fetchTeacherDetail = useCallback(async (tId: number, forceRefresh = false) => {
+    const detailKey = `${departmentId}-${selectedYear}-${selectedMonth}-${tId}`;
+    if (!forceRefresh && teacherDetailPreviewCache.has(detailKey)) {
+      const cachedTeacher = teacherDetailPreviewCache.get(detailKey)!;
+      setPreviewData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          teacher_previews: prev.teacher_previews.map((t) =>
+            t.teacher_id === tId ? cachedTeacher : t
+          ),
+        };
+      });
       return;
     }
 
-    const reqSeq = ++requestSeqRef.current;
-    setIsLoading(true);
-    setErrorMessage("");
     try {
-      let pendingPromise = inFlightDepartmentPreviews.get(cacheKey);
-      if (forceRefresh || !pendingPromise) {
-        pendingPromise = fetchSalaryCalculationPreview({
+      setLoadingDetailTeacherId(tId);
+      let pendingDetail = !forceRefresh ? inFlightTeacherDetailPreviews.get(detailKey) : undefined;
+      if (!pendingDetail) {
+        pendingDetail = fetchSalaryCalculationPreview({
           department_id: departmentId,
           year: selectedYear,
           month: selectedMonth,
-          summary_only: true,
+          teacher_id: tId,
+          summary_only: false,
           force_refresh: forceRefresh,
-        }).finally(() => {
-          inFlightDepartmentPreviews.delete(cacheKey);
-        });
-        inFlightDepartmentPreviews.set(cacheKey, pendingPromise);
+        })
+          .then((singleRes) =>
+            singleRes.teacher_previews.length > 0 ? singleRes.teacher_previews[0] : null
+          )
+          .finally(() => {
+            inFlightTeacherDetailPreviews.delete(detailKey);
+          });
+        inFlightTeacherDetailPreviews.set(detailKey, pendingDetail);
       }
 
-      const res = await pendingPromise;
-
-      if (reqSeq !== requestSeqRef.current) return;
-
-      departmentPreviewCache.set(cacheKey, res);
-      setPreviewData(res);
-      if (forceRefresh) {
-        const activeExpanded = Object.entries(expandedTeacherIdsRef.current)
-          .filter(([, isExp]) => Boolean(isExp))
-          .map(([k]) => Number(k))
-          .filter((n) => Number.isFinite(n) && n > 0);
-        for (const tId of activeExpanded) {
-          void fetchTeacherDetail(tId);
-        }
-      }
-    } catch (err: any) {
-      if (reqSeq !== requestSeqRef.current) return;
-      setErrorMessage(err.message || "Failed to calculate draft salary preview.");
-    } finally {
-      if (reqSeq === requestSeqRef.current) {
-        setIsLoading(false);
-      }
-    }
-  }, [departmentId, selectedYear, selectedMonth]);
-
-  useEffect(() => {
-    loadCalculationPreview();
-  }, [loadCalculationPreview]);
-
-  // Automatically refresh calculation preview when Stage 6 adjustments mutate
-  useEffect(() => {
-    const handleAdjustmentsUpdated = () => {
-      departmentPreviewCache.clear();
-      loadCalculationPreview(true);
-    };
-    window.addEventListener("salary-adjustments-updated", handleAdjustmentsUpdated);
-    window.addEventListener("ivs-refresh-state", handleAdjustmentsUpdated);
-    return () => {
-      window.removeEventListener("salary-adjustments-updated", handleAdjustmentsUpdated);
-      window.removeEventListener("ivs-refresh-state", handleAdjustmentsUpdated);
-    };
-  }, [loadCalculationPreview]);
-
-  // Fetch detailed class earning lines strictly for a single teacher on demand
-  const fetchTeacherDetail = useCallback(async (tId: number) => {
-    try {
-      setLoadingDetailTeacherId(tId);
-      const singleRes = await fetchSalaryCalculationPreview({
-        department_id: departmentId,
-        year: selectedYear,
-        month: selectedMonth,
-        teacher_id: tId,
-        summary_only: false,
-        force_refresh: true,
-      });
-      if (singleRes.teacher_previews.length > 0) {
-        const detailedTeacher = singleRes.teacher_previews[0];
+      const detailedTeacher = await pendingDetail;
+      if (detailedTeacher) {
+        teacherDetailPreviewCache.set(detailKey, detailedTeacher);
         setPreviewData((prev) => {
-          if (!prev) return prev;
+          if (!prev || prev.department_id !== departmentId || prev.payroll_year !== selectedYear || prev.payroll_month !== selectedMonth) {
+            return prev;
+          }
           const updated = {
             ...prev,
             teacher_previews: prev.teacher_previews.map((t) =>
@@ -1376,9 +1337,105 @@ export default function MonthlySalaryPreview({
     } catch (e) {
       console.error("Failed to load teacher class details", e);
     } finally {
-      setLoadingDetailTeacherId(null);
+      setLoadingDetailTeacherId((curr) => (curr === tId ? null : curr));
     }
   }, [departmentId, selectedYear, selectedMonth]);
+
+  // Load departmental preview calculation with caching, cancellation, and in-flight request deduplication
+  const loadCalculationPreview = useCallback(async (forceRefresh = false) => {
+    const cacheKey = `${departmentId}-${selectedYear}-${selectedMonth}`;
+    if (!forceRefresh && departmentPreviewCache.has(cacheKey)) {
+      setPreviewData(departmentPreviewCache.get(cacheKey)!);
+      setIsLoading(false);
+      setErrorMessage("");
+      return;
+    }
+
+    if (previewAbortRef.current) {
+      previewAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
+
+    const reqSeq = ++requestSeqRef.current;
+    if (!forceRefresh) {
+      setPreviewData(null);
+    }
+    setIsLoading(true);
+    setErrorMessage("");
+    try {
+      if (forceRefresh) {
+        const prefix = `${departmentId}-${selectedYear}-${selectedMonth}-`;
+        for (const key of Array.from(teacherDetailPreviewCache.keys())) {
+          if (key.startsWith(prefix)) teacherDetailPreviewCache.delete(key);
+        }
+      }
+
+      let pendingPromise = inFlightDepartmentPreviews.get(cacheKey);
+      if (forceRefresh || !pendingPromise) {
+        pendingPromise = fetchSalaryCalculationPreview(
+          {
+            department_id: departmentId,
+            year: selectedYear,
+            month: selectedMonth,
+            summary_only: true,
+            force_refresh: forceRefresh,
+          },
+          { signal: controller.signal }
+        ).finally(() => {
+          inFlightDepartmentPreviews.delete(cacheKey);
+        });
+        inFlightDepartmentPreviews.set(cacheKey, pendingPromise);
+      }
+
+      const res = await pendingPromise;
+
+      if (reqSeq !== requestSeqRef.current || controller.signal.aborted) return;
+
+      departmentPreviewCache.set(cacheKey, res);
+      setPreviewData(res);
+      if (forceRefresh) {
+        const activeExpanded = Object.entries(expandedTeacherIdsRef.current)
+          .filter(([, isExp]) => Boolean(isExp))
+          .map(([k]) => Number(k))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        for (const tId of activeExpanded) {
+          void fetchTeacherDetail(tId, true);
+        }
+      }
+    } catch (err: any) {
+      if (err?.name === "AbortError" || controller.signal.aborted) return;
+      if (reqSeq !== requestSeqRef.current) return;
+      setErrorMessage(err.message || "Failed to calculate draft salary preview.");
+    } finally {
+      if (reqSeq === requestSeqRef.current && !controller.signal.aborted) {
+        setIsLoading(false);
+      }
+    }
+  }, [departmentId, selectedYear, selectedMonth, fetchTeacherDetail]);
+
+  useEffect(() => {
+    void loadCalculationPreview();
+    return () => {
+      if (previewAbortRef.current) {
+        previewAbortRef.current.abort();
+      }
+    };
+  }, [loadCalculationPreview]);
+
+  // Automatically refresh calculation preview when Stage 6 adjustments or state mutate
+  useEffect(() => {
+    const handleAdjustmentsUpdated = () => {
+      clearSalaryPreviewModuleCache();
+      void loadCalculationPreview(false);
+    };
+    window.addEventListener("salary-adjustments-updated", handleAdjustmentsUpdated);
+    window.addEventListener("ivs-refresh-state", handleAdjustmentsUpdated);
+    return () => {
+      window.removeEventListener("salary-adjustments-updated", handleAdjustmentsUpdated);
+      window.removeEventListener("ivs-refresh-state", handleAdjustmentsUpdated);
+    };
+  }, [loadCalculationPreview]);
 
   // Handle immediate recalculation and UI refresh after an individual or bulk resolution
   const handleResolutionComplete = useCallback(
@@ -1386,10 +1443,11 @@ export default function MonthlySalaryPreview({
       setSuccessMessage(successText);
       const cacheKey = `${departmentId}-${selectedYear}-${selectedMonth}`;
       departmentPreviewCache.delete(cacheKey);
+      teacherDetailPreviewCache.delete(`${departmentId}-${selectedYear}-${selectedMonth}-${tId}`);
 
       // Deterministic re-fetch from calculation engine
       await loadCalculationPreview(true);
-      await fetchTeacherDetail(tId);
+      await fetchTeacherDetail(tId, true);
 
       setTimeout(() => {
         setSuccessMessage("");

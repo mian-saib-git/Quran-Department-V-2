@@ -220,11 +220,13 @@ export interface SalaryCalculationPreviewParams {
  * Request a deterministic monthly salary calculation preview for a department or specific teacher.
  */
 export async function fetchSalaryCalculationPreview(
-  params: SalaryCalculationPreviewParams
+  params: SalaryCalculationPreviewParams,
+  opts?: { signal?: AbortSignal }
 ): Promise<DepartmentSalaryPreviewResponse> {
   return await authenticatedRequest("/api/salary/calculations/preview/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
+    ...(opts?.signal ? { signal: opts.signal } : {}),
   });
 }

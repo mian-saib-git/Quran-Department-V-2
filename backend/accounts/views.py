@@ -621,6 +621,11 @@ class CoordinatorAccountListCreateView(APIView):
 
         role_filter = str(request.query_params.get("role", "")).strip().lower()
         search = str(request.query_params.get("search", "")).strip()
+        time_from_raw = str(request.query_params.get("time_from", "")).strip()
+        time_to_raw = str(request.query_params.get("time_to", "")).strip()
+        profile_id_raw = str(request.query_params.get("profile_id", "")).strip()
+        export_all = str(request.query_params.get("export", "")).strip().lower() in {"1", "true", "yes"}
+        include_teachers = str(request.query_params.get("include_teachers", "1")).strip().lower() not in {"0", "false", "no"}
 
         def safe_int(value, default):
             try:
@@ -628,6 +633,19 @@ class CoordinatorAccountListCreateView(APIView):
                 return number if number > 0 else default
             except Exception:
                 return default
+
+        def parse_hhmm(value):
+            if not value or ":" not in value:
+                return None
+            try:
+                from datetime import time as dt_time
+                parts = value.split(":", 1)
+                return dt_time(int(parts[0]), int(parts[1][:2]))
+            except Exception:
+                return None
+
+        time_from = parse_hhmm(time_from_raw)
+        time_to = parse_hhmm(time_to_raw)
 
         page = safe_int(request.query_params.get("page", 1), 1)
         page_size = safe_int(request.query_params.get("page_size", 25), 25)
@@ -650,170 +668,6 @@ class CoordinatorAccountListCreateView(APIView):
             .order_by("time_slot", "weekday", "id"),
             to_attr="prefetched_active_schedules",
         )
-
-        def build_teachers():
-            department = resolve_department_for_account_scope(
-                request.user,
-                "quran",
-            )
-
-            if not department:
-                return TeacherProfile.objects.none()
-
-            qs = (
-                TeacherProfile.objects
-                .filter(department=department, user__isnull=False, user__archived_at__isnull=True)
-                .select_related("user")
-                .order_by(
-                    "user__first_name",
-                    "user__username",
-                    "id",
-                )
-            )
-
-            if search:
-                qs = qs.filter(
-                    Q(user__username__icontains=search)
-                    | Q(user__email__icontains=search)
-                    | Q(user__first_name__icontains=search)
-                    | Q(user__last_name__icontains=search)
-                    | Q(phone__icontains=search)
-                )
-
-            return qs
-
-        def build_students():
-            department = resolve_department_for_account_scope(
-                request.user,
-                "quran",
-            )
-
-            if not department:
-                return StudentProfile.objects.none()
-
-            qs = (
-                StudentProfile.objects
-                .filter(department=department, user__archived_at__isnull=True)
-                .select_related("user", "teacher__user")
-                .prefetch_related(
-                    active_subjects_prefetch,
-                    active_schedules_prefetch,
-                )
-                .order_by(
-                    "user__first_name",
-                    "user__username",
-                    "id",
-                )
-            )
-
-            if search:
-                qs = qs.filter(
-                    Q(user__username__icontains=search)
-                    | Q(user__email__icontains=search)
-                    | Q(user__first_name__icontains=search)
-                    | Q(user__last_name__icontains=search)
-                    | Q(phone__icontains=search)
-                    | Q(teacher__user__first_name__icontains=search)
-                    | Q(teacher__user__last_name__icontains=search)
-                    | Q(teacher__user__username__icontains=search)
-                    | Q(schedules__weekday__icontains=search)
-                    | Q(schedules__time_slot__icontains=search)
-                ).distinct()
-
-            return qs
-
-        def build_coordinators():
-            if not can_manage_coordinator_accounts(request.user):
-                return User.objects.none()
-
-            qs = scoped_coordinator_queryset(request.user).filter(archived_at__isnull=True)
-
-            if search:
-                qs = qs.filter(
-                    Q(username__icontains=search)
-                    | Q(email__icontains=search)
-                    | Q(first_name__icontains=search)
-                    | Q(last_name__icontains=search)
-                )
-
-            return qs.order_by("first_name", "username", "id")
-
-        def paginated_response(items_qs, payload_fn, role_name, extra=None):
-            paginator = Paginator(items_qs, page_size)
-            safe_page = min(max(page, 1), paginator.num_pages or 1)
-            page_obj = paginator.get_page(safe_page)
-
-            payload_items = [payload_fn(item) for item in page_obj.object_list]
-
-            response_data = {
-                "coordinators": [],
-                "teachers": [],
-                "students": [],
-                "pagination": {
-                    "role": role_name,
-                    "page": safe_page,
-                    "page_size": page_size,
-                    "total_items": paginator.count,
-                    "total_pages": paginator.num_pages or 1,
-                },
-            }
-
-            response_data[role_name + "s"] = payload_items
-
-            if extra:
-                response_data.update(extra)
-
-            return Response(response_data)
-
-        # New fast paginated API.
-        # Example: /api/auth/accounts/?role=student&page=1&page_size=25
-        if role_filter == "coordinator":
-            return paginated_response(
-                build_coordinators(),
-                lambda user: account_payload_for_user(user),
-                "coordinator",
-            )
-
-        if role_filter == "teacher":
-            return paginated_response(
-                build_teachers(),
-                lambda teacher: account_payload_for_user(teacher.user),
-                "teacher",
-            )
-
-        if role_filter == "student":
-            # Students page still needs the teacher list for the Add/Edit student dropdown.
-            all_teachers = [
-                account_payload_for_user(item.user)
-                for item in TeacherProfile.objects.select_related("user").filter(
-                    department=resolve_department_for_account_scope(request.user, "quran"),
-                    user__is_active=True, user__archived_at__isnull=True,
-                ).order_by(
-                    "user__first_name",
-                    "user__username",
-                    "id",
-                )
-            ]
-
-            return paginated_response(
-                build_students(),
-                lambda student: account_payload_for_user(student.user),
-                "student",
-                extra={"teachers": all_teachers},
-            )
-
-        # Old API shape. Keep this so nothing breaks before frontend update.
-        coordinators = []
-
-        if can_manage_coordinator_accounts(request.user):
-            coordinators = [
-                account_payload_for_user(item)
-                for item in scoped_coordinator_queryset(request.user).filter(archived_at__isnull=True).order_by(
-                    "first_name",
-                    "username",
-                    "id",
-                )
-            ]
 
         def attach_active_assignments(teacher_items):
             items = list(teacher_items)
@@ -840,6 +694,240 @@ class CoordinatorAccountListCreateView(APIView):
             for t in items:
                 setattr(t, "_prefetched_active_assignment", assign_map.get(t.id))
             return items
+
+        def base_teachers_qs():
+            if not department:
+                return TeacherProfile.objects.none()
+            return TeacherProfile.objects.filter(
+                department=department,
+                user__isnull=False,
+                user__archived_at__isnull=True,
+            )
+
+        def base_students_qs():
+            if not department:
+                return StudentProfile.objects.none()
+            return StudentProfile.objects.filter(
+                department=department,
+                user__archived_at__isnull=True,
+            )
+
+        def base_coordinators_qs():
+            if not can_manage_coordinator_accounts(request.user):
+                return User.objects.none()
+            return scoped_coordinator_queryset(request.user).filter(archived_at__isnull=True)
+
+        def build_teachers():
+            qs = (
+                base_teachers_qs()
+                .select_related("user")
+                .order_by(
+                    "user__first_name",
+                    "user__username",
+                    "id",
+                )
+            )
+
+            if profile_id_raw:
+                pid = safe_int(profile_id_raw, 0)
+                if pid:
+                    qs = qs.filter(Q(id=pid) | Q(user_id=pid))
+
+            if search:
+                qs = qs.filter(
+                    Q(user__username__icontains=search)
+                    | Q(user__email__icontains=search)
+                    | Q(user__first_name__icontains=search)
+                    | Q(user__last_name__icontains=search)
+                    | Q(phone__icontains=search)
+                )
+
+            return qs
+
+        def build_students():
+            qs = (
+                base_students_qs()
+                .select_related(
+                    "user",
+                    "teacher__user",
+                    "referral_teacher__user",
+                    "referral_student__user",
+                )
+                .prefetch_related(
+                    active_subjects_prefetch,
+                    active_schedules_prefetch,
+                )
+                .order_by(
+                    "user__first_name",
+                    "user__username",
+                    "id",
+                )
+            )
+
+            if profile_id_raw:
+                pid = safe_int(profile_id_raw, 0)
+                if pid:
+                    qs = qs.filter(Q(id=pid) | Q(user_id=pid))
+
+            if time_from and time_to and time_from > time_to:
+                qs = qs.filter(
+                    schedules__is_active=True
+                ).filter(
+                    Q(schedules__time_slot__gte=time_from)
+                    | Q(schedules__time_slot__lte=time_to)
+                ).distinct()
+            elif time_from or time_to:
+                qs = qs.filter(schedules__is_active=True)
+                if time_from:
+                    qs = qs.filter(schedules__time_slot__gte=time_from)
+                if time_to:
+                    qs = qs.filter(schedules__time_slot__lte=time_to)
+                qs = qs.distinct()
+
+            if search:
+                qs = qs.filter(
+                    Q(user__username__icontains=search)
+                    | Q(user__email__icontains=search)
+                    | Q(user__first_name__icontains=search)
+                    | Q(user__last_name__icontains=search)
+                    | Q(phone__icontains=search)
+                    | Q(teacher__user__first_name__icontains=search)
+                    | Q(teacher__user__last_name__icontains=search)
+                    | Q(teacher__user__username__icontains=search)
+                    | Q(schedules__weekday__icontains=search)
+                    | Q(schedules__time_slot__icontains=search)
+                ).distinct()
+
+            return qs
+
+        def build_coordinators():
+            qs = base_coordinators_qs()
+
+            if search:
+                qs = qs.filter(
+                    Q(username__icontains=search)
+                    | Q(email__icontains=search)
+                    | Q(first_name__icontains=search)
+                    | Q(last_name__icontains=search)
+                )
+
+            return qs.order_by("first_name", "username", "id")
+
+        def department_counts():
+            coord_qs = base_coordinators_qs()
+            teacher_qs = base_teachers_qs()
+            student_qs = base_students_qs()
+            coordinators_count = coord_qs.count() if can_manage_coordinator_accounts(request.user) else 0
+            teachers_count = teacher_qs.count()
+            students_count = student_qs.count()
+            active_coordinators = coord_qs.filter(is_active=True).count() if can_manage_coordinator_accounts(request.user) else 0
+            active_teachers = teacher_qs.filter(user__is_active=True).count()
+            active_students = student_qs.filter(user__is_active=True).count()
+            return {
+                "coordinators": coordinators_count,
+                "teachers": teachers_count,
+                "students": students_count,
+                "active_accounts": active_coordinators + active_teachers + active_students,
+            }
+
+        def paginated_response(items_qs, payload_fn, role_name, extra=None, preprocess_fn=None):
+            paginator = Paginator(items_qs, page_size)
+            safe_page = min(max(page, 1), paginator.num_pages or 1)
+            page_obj = paginator.get_page(safe_page)
+
+            page_items = preprocess_fn(page_obj.object_list) if preprocess_fn else page_obj.object_list
+            payload_items = [payload_fn(item) for item in page_items]
+
+            response_data = {
+                "coordinators": [],
+                "teachers": [],
+                "students": [],
+                "counts": department_counts(),
+                "pagination": {
+                    "role": role_name,
+                    "page": safe_page,
+                    "page_size": page_size,
+                    "total_items": paginator.count,
+                    "total_pages": paginator.num_pages or 1,
+                },
+            }
+
+            response_data[role_name + "s"] = payload_items
+
+            if extra:
+                response_data.update(extra)
+
+            return Response(response_data)
+
+        # Fast paginated API.
+        # Example: /api/auth/accounts/?role=student&page=1&page_size=25
+        if role_filter == "coordinator":
+            return paginated_response(
+                build_coordinators(),
+                lambda user: account_payload_for_user(user),
+                "coordinator",
+            )
+
+        if role_filter == "teacher":
+            return paginated_response(
+                build_teachers(),
+                lambda teacher: account_payload_for_user(teacher.user),
+                "teacher",
+                preprocess_fn=attach_active_assignments,
+            )
+
+        if role_filter == "student":
+            if export_all:
+                students_list = [
+                    account_payload_for_user(item.user)
+                    for item in build_students()
+                ]
+                return Response({
+                    "coordinators": [],
+                    "teachers": [],
+                    "students": students_list,
+                    "counts": department_counts(),
+                })
+
+            all_teachers = []
+            if include_teachers and department:
+                teacher_qs = (
+                    TeacherProfile.objects.select_related("user")
+                    .filter(
+                        department=department,
+                        user__is_active=True,
+                        user__archived_at__isnull=True,
+                    )
+                    .order_by(
+                        "user__first_name",
+                        "user__username",
+                        "id",
+                    )
+                )
+                all_teachers = [
+                    account_payload_for_user(item.user)
+                    for item in attach_active_assignments(teacher_qs)
+                ]
+
+            return paginated_response(
+                build_students(),
+                lambda student: account_payload_for_user(student.user),
+                "student",
+                extra={"teachers": all_teachers},
+            )
+
+        # Legacy full-roster API shape (kept for existing callers/tests that omit ?role=).
+        coordinators = []
+
+        if can_manage_coordinator_accounts(request.user):
+            coordinators = [
+                account_payload_for_user(item)
+                for item in base_coordinators_qs().order_by(
+                    "first_name",
+                    "username",
+                    "id",
+                )
+            ]
 
         teachers = [
             account_payload_for_user(item.user)

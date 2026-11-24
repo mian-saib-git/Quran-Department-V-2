@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -42,6 +42,7 @@ import {
   FinancialImpactDiff,
   getPayrollPeriods,
   getPayrollPeriod,
+  getTeacherPayrollEarningLines,
   createDraftPayroll,
   previewFinancialImpact,
   recalculateDraftPayroll,
@@ -135,33 +136,76 @@ export default function MonthlyPayrollManagement({
   const [auditLogs, setAuditLogs] = useState<PayrollLifecycleAudit[]>([]);
   const [snapshots, setSnapshots] = useState<PayrollCalculationSnapshot[]>([]);
 
-  // Load current payroll period for selected month/year
+  // On-demand teacher earning lines state
+  const [teacherLinesMap, setTeacherLinesMap] = useState<Record<number, PayrollEarningLine[]>>({});
+  const [teacherLinesMeta, setTeacherLinesMeta] = useState<
+    Record<number, { count: number; page: number; totalPages: number }>
+  >({});
+  const [loadingLinesTeacherPayrollId, setLoadingLinesTeacherPayrollId] = useState<number | null>(null);
+  const [teacherLinesError, setTeacherLinesError] = useState<Record<number, string>>({});
+  const loadSeqRef = useRef<number>(0);
+  const loadAbortRef = useRef<AbortController | null>(null);
+
+  const resetOnDemandLines = useCallback(() => {
+    setTeacherLinesMap({});
+    setTeacherLinesMeta({});
+    setTeacherLinesError({});
+    setExpandedTeacherIds({});
+  }, []);
+
+  // Load current payroll period for selected month/year (summary only, no eager earning lines)
   const loadPayrollPeriod = useCallback(async () => {
+    if (loadAbortRef.current) {
+      loadAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
+    const seq = ++loadSeqRef.current;
+
     setIsLoading(true);
     setErrorMessage("");
+    resetOnDemandLines();
     try {
-      const periods = await getPayrollPeriods({
-        department_id: departmentId,
-        payroll_year: selectedYear,
-        payroll_month: selectedMonth,
-      });
+      const periods = await getPayrollPeriods(
+        {
+          department_id: departmentId,
+          payroll_year: selectedYear,
+          payroll_month: selectedMonth,
+        },
+        { signal: controller.signal }
+      );
+
+      if (seq !== loadSeqRef.current || controller.signal.aborted) return;
 
       if (periods && periods.length > 0) {
-        // Fetch full detail
-        const fullPeriod = await getPayrollPeriod(periods[0].id);
+        const fullPeriod = await getPayrollPeriod(periods[0].id, {
+          summaryOnly: true,
+          signal: controller.signal,
+        });
+        if (seq !== loadSeqRef.current || controller.signal.aborted) return;
         setPayrollPeriod(fullPeriod);
       } else {
         setPayrollPeriod(null);
       }
     } catch (err: any) {
-      setErrorMessage(err?.message || "Could not load payroll records.");
+      if (err?.name === "AbortError" || controller.signal.aborted) return;
+      if (seq === loadSeqRef.current) {
+        setErrorMessage(err?.message || "Could not load payroll records.");
+      }
     } finally {
-      setIsLoading(false);
+      if (seq === loadSeqRef.current && !controller.signal.aborted) {
+        setIsLoading(false);
+      }
     }
-  }, [departmentId, selectedYear, selectedMonth]);
+  }, [departmentId, selectedYear, selectedMonth, resetOnDemandLines]);
 
   useEffect(() => {
     void loadPayrollPeriod();
+    return () => {
+      if (loadAbortRef.current) {
+        loadAbortRef.current.abort();
+      }
+    };
   }, [loadPayrollPeriod]);
 
   // Actions
@@ -176,7 +220,8 @@ export default function MonthlyPayrollManagement({
         payroll_year: selectedYear,
         payroll_month: selectedMonth,
       });
-      const full = await getPayrollPeriod(created.id);
+      const full = await getPayrollPeriod(created.id, { summaryOnly: true });
+      resetOnDemandLines();
       setPayrollPeriod(full);
       setSuccessMessage(`Monthly payroll draft created successfully for ${selectedYear}-${String(selectedMonth).padStart(2, "0")}.`);
     } catch (err: any) {
@@ -212,7 +257,8 @@ export default function MonthlyPayrollManagement({
     setErrorMessage("");
     try {
       const recalculated = await recalculateDraftPayroll(payrollPeriod.id, recalculateReason.trim());
-      const full = await getPayrollPeriod(recalculated.id);
+      const full = await getPayrollPeriod(recalculated.id, { summaryOnly: true });
+      resetOnDemandLines();
       setPayrollPeriod(full);
       setShowRecalculateModal(false);
       setSuccessMessage(`Draft recalculated to Revision ${full.current_revision}.`);
@@ -234,7 +280,8 @@ export default function MonthlyPayrollManagement({
     setErrorMessage("");
     try {
       const submitted = await submitDepartmentPayroll(payrollPeriod.id, submissionNotes.trim());
-      const full = await getPayrollPeriod(submitted.id);
+      const full = await getPayrollPeriod(submitted.id, { summaryOnly: true });
+      resetOnDemandLines();
       setPayrollPeriod(full);
       setShowSubmitModal(false);
       setSuccessMessage("Payroll successfully submitted for review. Direct monetary editing is now locked.");
@@ -264,7 +311,8 @@ export default function MonthlyPayrollManagement({
         reason: correctionReason.trim(),
         correction_scope: correctionScope.trim(),
       });
-      const full = await getPayrollPeriod(payrollPeriod.id);
+      const full = await getPayrollPeriod(payrollPeriod.id, { summaryOnly: true });
+      resetOnDemandLines();
       setPayrollPeriod(full);
       setShowCorrectionModal(false);
       setSuccessMessage("Return-for-correction request submitted. Payroll remains locked until approved by Institution/Super Admin.");
@@ -293,11 +341,42 @@ export default function MonthlyPayrollManagement({
     }
   };
 
-  const toggleTeacherExpanded = (teacherId: number) => {
+  const fetchTeacherLines = useCallback(async (teacherPayrollId: number, page = 1) => {
+    setLoadingLinesTeacherPayrollId(teacherPayrollId);
+    setTeacherLinesError((prev) => ({ ...prev, [teacherPayrollId]: "" }));
+    try {
+      const res = await getTeacherPayrollEarningLines(teacherPayrollId, {
+        page,
+        page_size: 100,
+      });
+      setTeacherLinesMap((prev) => ({ ...prev, [teacherPayrollId]: res.results }));
+      setTeacherLinesMeta((prev) => ({
+        ...prev,
+        [teacherPayrollId]: {
+          count: res.count,
+          page: res.page,
+          totalPages: res.total_pages,
+        },
+      }));
+    } catch (err: any) {
+      setTeacherLinesError((prev) => ({
+        ...prev,
+        [teacherPayrollId]: err?.message || "Failed to load earning lines.",
+      }));
+    } finally {
+      setLoadingLinesTeacherPayrollId((curr) => (curr === teacherPayrollId ? null : curr));
+    }
+  }, []);
+
+  const toggleTeacherExpanded = (tp: TeacherPayroll) => {
+    const willExpand = !expandedTeacherIds[tp.teacher_id];
     setExpandedTeacherIds((prev) => ({
       ...prev,
-      [teacherId]: !prev[teacherId],
+      [tp.teacher_id]: willExpand,
     }));
+    if (willExpand && !teacherLinesMap[tp.id] && !(tp.earning_lines && tp.earning_lines.length > 0)) {
+      void fetchTeacherLines(tp.id, 1);
+    }
   };
 
   const filteredTeacherPayrolls = useMemo(() => {
@@ -607,7 +686,11 @@ export default function MonthlyPayrollManagement({
                 <tbody className="divide-y divide-slate-100">
                   {filteredTeacherPayrolls.map((tp) => {
                     const isExpanded = Boolean(expandedTeacherIds[tp.teacher_id]);
-                    const lines = tp.earning_lines || [];
+                    const lines = teacherLinesMap[tp.id] || tp.earning_lines || [];
+                    const linesMeta = teacherLinesMeta[tp.id];
+                    const lineCount = tp.earning_lines_count ?? linesMeta?.count ?? lines.length;
+                    const isLoadingLines = loadingLinesTeacherPayrollId === tp.id;
+                    const linesError = teacherLinesError[tp.id];
 
                     return (
                       <React.Fragment key={tp.id}>
@@ -672,10 +755,10 @@ export default function MonthlyPayrollManagement({
                           <td className="py-3.5 px-3 text-center">
                             <button
                               type="button"
-                              onClick={() => toggleTeacherExpanded(tp.teacher_id)}
+                              onClick={() => toggleTeacherExpanded(tp)}
                               className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1 text-[10px] font-bold text-slate-600 hover:bg-slate-100 transition"
                             >
-                              <span>{lines.length}</span>
+                              <span>{lineCount}</span>
                               <ChevronDown size={12} className={`transition ${isExpanded ? "rotate-180" : ""}`} />
                             </button>
                           </td>
@@ -686,12 +769,53 @@ export default function MonthlyPayrollManagement({
                           <tr className="bg-slate-50/80">
                             <td colSpan={12} className="p-4 pl-6">
                               <div className="space-y-3">
-                                <div className="text-[11px] font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                                  <Layers size={13} className="text-indigo-600" />
-                                  Itemized Earning Lines & Evidence ({lines.length})
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="text-[11px] font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                                    <Layers size={13} className="text-indigo-600" />
+                                    Itemized Earning Lines & Evidence ({lineCount})
+                                  </div>
+                                  {linesMeta && linesMeta.totalPages > 1 && (
+                                    <div className="flex items-center gap-2 text-[11px] text-slate-600">
+                                      <button
+                                        type="button"
+                                        disabled={isLoadingLines || linesMeta.page <= 1}
+                                        onClick={() => void fetchTeacherLines(tp.id, linesMeta.page - 1)}
+                                        className="rounded border border-slate-200 bg-white px-2 py-0.5 font-semibold hover:bg-slate-100 disabled:opacity-40"
+                                      >
+                                        Prev
+                                      </button>
+                                      <span className="font-bold">
+                                        Page {linesMeta.page} / {linesMeta.totalPages}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        disabled={isLoadingLines || linesMeta.page >= linesMeta.totalPages}
+                                        onClick={() => void fetchTeacherLines(tp.id, linesMeta.page + 1)}
+                                        className="rounded border border-slate-200 bg-white px-2 py-0.5 font-semibold hover:bg-slate-100 disabled:opacity-40"
+                                      >
+                                        Next
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
 
-                                {lines.length === 0 ? (
+                                {isLoadingLines ? (
+                                  <div className="flex items-center gap-2 text-xs text-slate-500 py-3">
+                                    <Loader2 size={14} className="animate-spin text-indigo-600" />
+                                    Loading itemized earning lines...
+                                  </div>
+                                ) : linesError ? (
+                                  <div className="text-xs text-rose-600 font-semibold flex items-center gap-2">
+                                    <span>{linesError}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => void fetchTeacherLines(tp.id, linesMeta?.page ?? 1)}
+                                      className="underline font-bold"
+                                    >
+                                      Retry
+                                    </button>
+                                  </div>
+                                ) : lines.length === 0 ? (
                                   <div className="text-xs text-slate-400 italic">No itemized earning lines recorded.</div>
                                 ) : (
                                   <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">

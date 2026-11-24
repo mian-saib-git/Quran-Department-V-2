@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Table,
   Settings2,
@@ -184,22 +184,29 @@ export default function SalaryPolicyWorkspace({
     }
   };
 
+  const policyLoadSeqRef = useRef<number>(0);
+
   // Load policies
   const loadPolicies = async () => {
+    const seq = ++policyLoadSeqRef.current;
     setLoadingPolicies(true);
     setError(null);
     setSelectedPolicy(null);
     setCurrentVersion(null);
     try {
       const data = await fetchSalaryPolicies(departmentId);
+      if (seq !== policyLoadSeqRef.current) return;
       setPolicies(data);
       if (data.length > 0) {
         handleSelectPolicy(data[0]);
       }
     } catch (err: any) {
+      if (seq !== policyLoadSeqRef.current) return;
       setError(err?.message || "Failed to load salary policies.");
     } finally {
-      setLoadingPolicies(false);
+      if (seq === policyLoadSeqRef.current) {
+        setLoadingPolicies(false);
+      }
     }
   };
 

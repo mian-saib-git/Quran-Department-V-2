@@ -241,19 +241,37 @@ def tuition_account_payload(
     except ObjectDoesNotExist:
         pass
 
-    role_link = (
-        UserDepartmentRole.objects
-        .filter(
-            user=user,
-            department=department,
-            role=user.role,
+    if hasattr(user, "_prefetched_role_link"):
+        role_link = user._prefetched_role_link
+    else:
+        role_link = (
+            UserDepartmentRole.objects
+            .filter(
+                user=user,
+                department=department,
+                role=user.role,
+            )
+            .first()
         )
-        .first()
-    )
 
     capability_rows = []
 
     if teacher:
+        if hasattr(user, "_prefetched_capabilities"):
+            cap_items = user._prefetched_capabilities
+        else:
+            cap_items = (
+                TuitionTeacherCapability.objects
+                .filter(
+                    department=department,
+                    teacher=teacher,
+                )
+                .select_related("subject")
+                .order_by(
+                    "subject__sort_order",
+                    "subject__name",
+                )
+            )
         capability_rows = [
             {
                 "id": item.id,
@@ -267,23 +285,14 @@ def tuition_account_payload(
                 "notes":
                     item.notes,
             }
-            for item in (
-                TuitionTeacherCapability.objects
-                .filter(
-                    department=department,
-                    teacher=teacher,
-                )
-                .select_related("subject")
-                .order_by(
-                    "subject__sort_order",
-                    "subject__name",
-                )
-            )
+            for item in cap_items
         ]
 
     active_enrollment_count = 0
 
-    if teacher:
+    if hasattr(user, "_prefetched_active_enrollment_count"):
+        active_enrollment_count = user._prefetched_active_enrollment_count
+    elif teacher:
         active_enrollment_count = (
             TuitionEnrollment.objects
             .filter(
@@ -293,8 +302,7 @@ def tuition_account_payload(
             )
             .count()
         )
-
-    if student:
+    elif student:
         active_enrollment_count = (
             TuitionEnrollment.objects
             .filter(
@@ -304,6 +312,8 @@ def tuition_account_payload(
             )
             .count()
         )
+
+    prefetched_enrollments = getattr(user, "_prefetched_active_enrollments", None)
 
     return {
         "id": user.id,
@@ -361,10 +371,12 @@ def tuition_account_payload(
                     display_name(
                         student.teacher.user
                     ),
+                **({"enrollments": prefetched_enrollments} if prefetched_enrollments is not None else {}),
             }
             if student
             else None
         ),
+        **({"active_enrollments": prefetched_enrollments} if prefetched_enrollments is not None else {}),
         "active_enrollment_count":
             active_enrollment_count,
     }
@@ -383,12 +395,16 @@ def enrollment_payload(enrollment):
     )
 
     active_schedules = []
-    try:
-        active_schedules = list(
-            enrollment.schedules.filter(is_active=True).order_by("weekday", "start_time")
-        )
-    except Exception:
-        active_schedules = []
+    prefetched_schedules = getattr(enrollment, "prefetched_active_schedules", None)
+    if prefetched_schedules is not None:
+        active_schedules = list(prefetched_schedules)
+    else:
+        try:
+            active_schedules = list(
+                enrollment.schedules.filter(is_active=True).order_by("weekday", "start_time")
+            )
+        except Exception:
+            active_schedules = []
 
     schedule_days = [item.weekday for item in active_schedules]
 

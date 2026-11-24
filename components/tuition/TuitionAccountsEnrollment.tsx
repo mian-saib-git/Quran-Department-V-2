@@ -1,5 +1,5 @@
 // IVS_LIVE_CLASS_ACCOUNT_LINKS_V15
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   BookOpen,
@@ -24,14 +24,12 @@ import {
   createTuitionAccount,
   createTuitionStudentBundle,
   getTuitionAccounts,
-  getTuitionEnrollments,
   getTuitionOptions,
   getTuitionSchedulingMatrix,
   removeTuitionAccount,
   updateTuitionAccount,
   updateTuitionStudentBundle,
   type TuitionAccount,
-  type TuitionEnrollment,
   type TuitionOptions,
   type TuitionStudentBundleInput,
 } from "../../services/tuitionApiService";
@@ -308,13 +306,27 @@ export default function TuitionAccountsEnrollment({
     "department_admin",
   ].includes(String(currentUserRole || "").toLowerCase());
 
+  const PAGE_SIZE = 25;
+
   const [view, setView] = useState<View>(() =>
     canManageCoordinators ? "managers" : "teachers"
   );
+  const [loadedView, setLoadedView] = useState<View | null>(null);
   const [managerCount, setManagerCount] = useState(0);
   const [teachers, setTeachers] = useState<TuitionAccount[]>([]);
   const [students, setStudents] = useState<TuitionAccount[]>([]);
-  const [enrollments, setEnrollments] = useState<TuitionEnrollment[]>([]);
+  const [counts, setCounts] = useState({
+    teachers: 0,
+    students: 0,
+    active_enrollments: 0,
+  });
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    page_size: PAGE_SIZE,
+    total_items: 0,
+    total_pages: 1,
+  });
   const [options, setOptions] = useState<TuitionOptions>({
     teachers: [],
     students: [],
@@ -323,6 +335,7 @@ export default function TuitionAccountsEnrollment({
   });
   const [schedulingMatrix, setSchedulingMatrix] = useState<any>(null);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [accountsLoaded, setAccountsLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -338,55 +351,175 @@ export default function TuitionAccountsEnrollment({
   const canBulkImport = features.tuition_bulk_import === true;
   const canDeleteAccounts = features.tuition_delete_accounts === true;
 
+  const requestSeqRef = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const optionsLoadedDeptRef = useRef<number | null>(null);
+  const matrixLoadedDeptRef = useRef<number | null>(null);
+  const countsLoadedRef = useRef(false);
+
+  useEffect(() => {
+    optionsLoadedDeptRef.current = null;
+    matrixLoadedDeptRef.current = null;
+    countsLoadedRef.current = false;
+  }, [departmentId]);
+
+  useEffect(() => {
+    const trimmed = search.trim();
+    if (!trimmed) {
+      setDebouncedSearch("");
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(trimmed);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
   useEffect(() => {
     if (!canManageCoordinators && view === "managers") {
       setView("teachers");
     }
   }, [canManageCoordinators, view]);
 
-  const loadAll = useCallback(async () => {
+  const ensureOptions = useCallback(async (force = false) => {
+    if (!force && optionsLoadedDeptRef.current === departmentId) {
+      return;
+    }
+    try {
+      const optionResponse = await getTuitionOptions(departmentId);
+      setOptions(optionResponse);
+      optionsLoadedDeptRef.current = departmentId;
+    } catch {
+      // Keep existing options if fetch fails
+    }
+  }, [departmentId]);
+
+  const ensureSchedulingMatrix = useCallback(async (force = false) => {
+    if (!force && matrixLoadedDeptRef.current === departmentId) {
+      return;
+    }
+    try {
+      const matrixResponse = await getTuitionSchedulingMatrix({ department_id: departmentId });
+      setSchedulingMatrix(matrixResponse);
+      matrixLoadedDeptRef.current = departmentId;
+    } catch {
+      setSchedulingMatrix(null);
+    }
+  }, [departmentId]);
+
+  const load = useCallback(async () => {
+    const reqSeq = ++requestSeqRef.current;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    const targetView = view;
+
+    if (targetView === "managers") {
+      if (countsLoadedRef.current) {
+        setLoading(false);
+        setLoadedView("managers");
+        setAccountsLoaded(true);
+        return;
+      }
+      try {
+        setLoading(true);
+        const countRes = await getTuitionAccounts({
+          department_id: departmentId,
+          role: "teacher",
+          page: 1,
+          page_size: 1,
+          signal: controller.signal,
+        });
+        if (requestSeqRef.current !== reqSeq || controller.signal.aborted) return;
+        if (countRes.counts) {
+          setCounts({
+            teachers: Number(countRes.counts.teachers || 0),
+            students: Number(countRes.counts.students || 0),
+            active_enrollments: Number(countRes.counts.active_enrollments || 0),
+          });
+          countsLoadedRef.current = true;
+        }
+        setLoadedView("managers");
+        setAccountsLoaded(true);
+      } catch (error: any) {
+        if (error?.name === "AbortError" || controller.signal.aborted || requestSeqRef.current !== reqSeq) return;
+        setMessage(error?.message || "Could not load Tuition account counts.");
+      } finally {
+        if (requestSeqRef.current === reqSeq) {
+          setLoading(false);
+        }
+      }
+      return;
+    }
+
+    const role: "teacher" | "student" = targetView === "students" ? "student" : "teacher";
+
     try {
       setLoading(true);
       setMessage("");
 
-      const [teacherResponse, studentResponse, enrollmentResponse, optionResponse, matrixResponse] =
-        await Promise.all([
-          getTuitionAccounts({
-            department_id: departmentId,
-            role: "teacher",
-            page_size: 100,
-          }),
-          getTuitionAccounts({
-            department_id: departmentId,
-            role: "student",
-            page_size: 100,
-          }),
-          getTuitionEnrollments({
-            department_id: departmentId,
-            page_size: 500,
-          }),
-          getTuitionOptions(departmentId),
-          getTuitionSchedulingMatrix({ department_id: departmentId }).catch(() => null),
-        ]);
+      const response = await getTuitionAccounts({
+        department_id: departmentId,
+        role,
+        page,
+        page_size: PAGE_SIZE,
+        search: debouncedSearch || undefined,
+        signal: controller.signal,
+      });
 
-      setTeachers(teacherResponse.results || []);
-      setStudents(studentResponse.results || []);
-      setEnrollments(enrollmentResponse.results || []);
-      setOptions(optionResponse);
-      setSchedulingMatrix(matrixResponse);
+      if (requestSeqRef.current !== reqSeq || controller.signal.aborted) return;
+
+      if (role === "teacher") {
+        setTeachers(response.results || []);
+      } else {
+        setStudents(response.results || []);
+      }
+
+      if (response.counts) {
+        setCounts({
+          teachers: Number(response.counts.teachers || 0),
+          students: Number(response.counts.students || 0),
+          active_enrollments: Number(response.counts.active_enrollments || 0),
+        });
+        countsLoadedRef.current = true;
+      }
+      if (response.pagination) {
+        setPagination({
+          page: Number(response.pagination.page || 1),
+          page_size: Number(response.pagination.page_size || PAGE_SIZE),
+          total_items: Number(response.pagination.total_items || 0),
+          total_pages: Number(response.pagination.total_pages || 1),
+        });
+      }
+      setLoadedView(targetView);
       setAccountsLoaded(true);
     } catch (error: any) {
+      if (error?.name === "AbortError" || controller.signal.aborted || requestSeqRef.current !== reqSeq) {
+        return;
+      }
       setMessage(
         error?.message || "Could not load Tuition accounts and enrollments."
       );
     } finally {
-      setLoading(false);
+      if (requestSeqRef.current === reqSeq) {
+        setLoading(false);
+      }
     }
-  }, [departmentId]);
+  }, [departmentId, view, page, debouncedSearch]);
 
   useEffect(() => {
-    void loadAll();
-  }, [loadAll]);
+    void load();
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, [load]);
+
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  const wsRefreshTimerRef = useRef<number | null>(null);
 
   useAcademyWS(
     useCallback(
@@ -398,58 +531,36 @@ export default function TuitionAccountsEnrollment({
           event.startsWith("tuition_enrollment_") ||
           event === "tuition_student_workspace_updated"
         ) {
-          window.setTimeout(() => void loadAll(), 300);
+          optionsLoadedDeptRef.current = null;
+          matrixLoadedDeptRef.current = null;
+          countsLoadedRef.current = false;
+          if (wsRefreshTimerRef.current) {
+            window.clearTimeout(wsRefreshTimerRef.current);
+          }
+          wsRefreshTimerRef.current = window.setTimeout(() => {
+            void loadRef.current();
+          }, 350);
         }
       },
-      [loadAll]
+      []
     )
   );
 
-  const filteredTeachers = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    if (!term) return teachers;
-
-    return teachers.filter((item) =>
-      `${item.full_name} ${item.username} ${item.email}`
-        .toLowerCase()
-        .includes(term)
-    );
-  }, [teachers, search]);
-
-  const filteredStudents = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    if (!term) return students;
-
-    return students.filter((item) => {
-      const profileId = item.student_profile?.id;
-      const userId = item.id;
-      const studentEnrollments = enrollments.filter((enrollment: any) => {
-        if (!enrollment?.is_active) return false;
-        return enrollment.student_id === profileId || enrollment.student_user_id === userId;
-      });
-
-      return `${item.full_name} ${item.username} ${item.email} ${studentEnrollments
-        .map(
-          (enrollment) =>
-            `${enrollment.class_name} ${enrollment.subject_name} ${enrollment.teacher_name}`
-        )
-        .join(" ")}`
-        .toLowerCase()
-        .includes(term);
-    });
-  }, [students, enrollments, search]);
+  useEffect(() => {
+    return () => {
+      if (wsRefreshTimerRef.current) {
+        window.clearTimeout(wsRefreshTimerRef.current);
+      }
+    };
+  }, []);
 
   const studentEnrollments = useCallback(
     (student: TuitionAccount) => {
-      const profileId = student.student_profile?.id;
-      const userId = student.id;
-
-      return enrollments.filter((item: any) => {
-        if (!item?.is_active) return false;
-        return item.student_id === profileId || item.student_user_id === userId;
-      });
+      const row = student as any;
+      const list = (row.active_enrollments || row.enrollments || (student.student_profile as any)?.enrollments || []) as any[];
+      return Array.isArray(list) ? list.filter((item: any) => item?.is_active !== false) : [];
     },
-    [enrollments]
+    []
   );
 
 
@@ -490,6 +601,7 @@ export default function TuitionAccountsEnrollment({
       return;
     }
 
+    void ensureOptions();
     setTeacherForm(emptyTeacher());
     setMessage("");
   };
@@ -517,6 +629,7 @@ export default function TuitionAccountsEnrollment({
     form.zoom_link = item.teacher_profile?.zoom_link || "";
     form.available_schedule_slots = item.teacher_profile?.available_schedule_slots?.length ? item.teacher_profile.available_schedule_slots : allTuitionScheduleSlotCodes();
     form.tuition_access_active = item.tuition_access_active;
+    void ensureOptions();
     setTeacherForm(form);
     setMessage("");
   };
@@ -530,6 +643,8 @@ export default function TuitionAccountsEnrollment({
       return;
     }
 
+    void ensureOptions();
+    void ensureSchedulingMatrix();
     setStudentForm(emptyStudent());
     setMessage("");
   };
@@ -578,6 +693,8 @@ export default function TuitionAccountsEnrollment({
       }));
     }
 
+    void ensureOptions();
+    void ensureSchedulingMatrix();
     setStudentForm(form);
     setMessage("");
   };
@@ -596,35 +713,63 @@ export default function TuitionAccountsEnrollment({
     }
 
     const targetId = String(editTarget.profileId || "");
-    const source = editTarget.role === "teacher" ? teachers : students;
-    const account = source.find((item) => {
-      const profileId =
-        editTarget.role === "teacher"
-          ? item.teacher_profile?.id
-          : item.student_profile?.id;
+    let cancelled = false;
 
-      return String(profileId || "") === targetId || String(item.id) === targetId;
-    });
+    const resolveAndOpen = async () => {
+      const source = editTarget.role === "teacher" ? teachers : students;
+      let account = source.find((item) => {
+        const profileId =
+          editTarget.role === "teacher"
+            ? item.teacher_profile?.id
+            : item.student_profile?.id;
 
-    if (!account) {
-      setMessage(
-        editTarget.role === "teacher"
-          ? "The selected teacher account could not be found."
-          : "The selected student account could not be found.",
-      );
+        return String(profileId || "") === targetId || String(item.id) === targetId;
+      });
+
+      if (!account && targetId) {
+        try {
+          const res = await getTuitionAccounts({
+            department_id: departmentId,
+            role: editTarget.role,
+            profile_id: targetId,
+            page: 1,
+            page_size: 1,
+          });
+          account = (res.results || [])[0];
+        } catch {
+          account = undefined;
+        }
+      }
+
+      if (cancelled) return;
+
+      if (!account) {
+        setMessage(
+          editTarget.role === "teacher"
+            ? "The selected teacher account could not be found."
+            : "The selected student account could not be found.",
+        );
+        onEditTargetHandled?.();
+        return;
+      }
+
+      setSearch("");
+      setPage(1);
+
+      if (editTarget.role === "teacher") {
+        setView("teachers");
+        openEditTeacher(account);
+      } else {
+        setView("students");
+        openEditStudent(account);
+      }
       onEditTargetHandled?.();
-      return;
-    }
+    };
 
-    setSearch("");
-
-    if (editTarget.role === "teacher") {
-      setView("teachers");
-      openEditTeacher(account);
-    } else {
-      setView("students");
-      openEditStudent(account);
-    }
+    void resolveAndOpen();
+    return () => {
+      cancelled = true;
+    };
 
     onEditTargetHandled?.();
   }, [
@@ -678,7 +823,10 @@ export default function TuitionAccountsEnrollment({
           ? "Teacher account updated successfully."
           : "Teacher account created successfully."
       );
-      await loadAll();
+      optionsLoadedDeptRef.current = null;
+      matrixLoadedDeptRef.current = null;
+      countsLoadedRef.current = false;
+      await load();
     } catch (error: any) {
       setMessage(error?.message || "Could not save the teacher account.");
     } finally {
@@ -926,7 +1074,10 @@ export default function TuitionAccountsEnrollment({
           ? "Student account and enrollment updated successfully."
           : "Student account and enrollment created successfully."
       );
-      await loadAll();
+      optionsLoadedDeptRef.current = null;
+      matrixLoadedDeptRef.current = null;
+      countsLoadedRef.current = false;
+      await load();
     } catch (error: any) {
       setMessage(error?.message || "Could not save the student account.");
     } finally {
@@ -955,7 +1106,10 @@ export default function TuitionAccountsEnrollment({
       setMessage("");
       await removeTuitionAccount(item.id, departmentId, true);
       setMessage("Tuition account deleted permanently.");
-      await loadAll();
+      optionsLoadedDeptRef.current = null;
+      matrixLoadedDeptRef.current = null;
+      countsLoadedRef.current = false;
+      await load();
     } catch (error: any) {
       setMessage(error?.message || "Could not delete the Tuition account.");
     }
@@ -1005,8 +1159,8 @@ export default function TuitionAccountsEnrollment({
 
   const tuitionActiveAccountsCount =
     (canManageCoordinators ? managerCount : 0) +
-    teachers.filter((item: any) => item?.tuition_access_active !== false && item?.is_active !== false).length +
-    students.filter((item: any) => item?.tuition_access_active !== false && item?.is_active !== false).length;
+    counts.teachers +
+    counts.students;
 
   return (
     <div className="tuition-accounts-responsive space-y-5">
@@ -1038,7 +1192,10 @@ export default function TuitionAccountsEnrollment({
                 if (refreshing) return;
                 setRefreshing(true);
                 try {
-                  await loadAll();
+                  optionsLoadedDeptRef.current = null;
+      matrixLoadedDeptRef.current = null;
+      countsLoadedRef.current = false;
+      await load();
                 } finally {
                   window.setTimeout(() => setRefreshing(false), 750);
                 }
@@ -1116,7 +1273,7 @@ export default function TuitionAccountsEnrollment({
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-xs font-black text-slate-500">Teachers</div>
-                <div className="mt-2 text-3xl font-black tracking-tight text-slate-950">{teachers.length}</div>
+                <div className="mt-2 text-3xl font-black tracking-tight text-slate-950">{counts.teachers}</div>
               </div>
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-700">
                 <Users size={21} />
@@ -1128,7 +1285,7 @@ export default function TuitionAccountsEnrollment({
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-xs font-black text-slate-500">Students</div>
-                <div className="mt-2 text-3xl font-black tracking-tight text-slate-950">{students.length}</div>
+                <div className="mt-2 text-3xl font-black tracking-tight text-slate-950">{counts.students}</div>
               </div>
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
                 <GraduationCap size={21} />
@@ -1161,6 +1318,7 @@ export default function TuitionAccountsEnrollment({
                 onClick={() => {
                   setView("managers");
                   setSearch("");
+                  setPage(1);
                 }}
                 className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-black transition ${
                   view === "managers"
@@ -1177,6 +1335,7 @@ export default function TuitionAccountsEnrollment({
               onClick={() => {
                 setView("teachers");
                 setSearch("");
+                setPage(1);
               }}
               className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-black transition ${
                 view === "teachers"
@@ -1192,6 +1351,7 @@ export default function TuitionAccountsEnrollment({
               onClick={() => {
                 setView("students");
                 setSearch("");
+                setPage(1);
               }}
               className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-black transition ${
                 view === "students"
@@ -1213,6 +1373,7 @@ export default function TuitionAccountsEnrollment({
               onChange={(event) => {
                 const value = event.target.value;
                 setSearch(value);
+                setPage(1);
                 if (view === "managers") {
                   window.dispatchEvent(new CustomEvent("ivs-tuition-manager-search", { detail: value }));
                 }
@@ -1229,7 +1390,7 @@ export default function TuitionAccountsEnrollment({
         </div>
       </section>
 
-      {loading ? (
+      {loading && (loadedView !== view || (view === "teachers" && teachers.length === 0) || (view === "students" && students.length === 0)) ? (
         <PageSkeleton variant="accounts" rows={7} compact label="Loading Tuition accounts" />
       ) : view === "managers" && canManageCoordinators ? (
         <TuitionManagersPanel
@@ -1254,7 +1415,7 @@ export default function TuitionAccountsEnrollment({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredTeachers.map((item) => (
+                {teachers.map((item) => (
                   <tr key={item.id} className="transition hover:bg-slate-50/70">
                     <td className="px-5 py-4">
                       <div className="flex min-w-[240px] items-center gap-3">
@@ -1308,7 +1469,7 @@ export default function TuitionAccountsEnrollment({
                   </tr>
                 ))}
 
-                {!filteredTeachers.length && (
+                {!teachers.length && (
                   <tr>
                     <td colSpan={6} className="px-5 py-12 text-center">
                       <Users className="mx-auto text-slate-300" size={38} />
@@ -1336,7 +1497,7 @@ export default function TuitionAccountsEnrollment({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredStudents.map((item) => {
+                {students.map((item) => {
                   const row = item as any;
                   const linkedEnrollments = studentEnrollments(item) as any[];
                   const rowEnrollments = (row.enrollments || row.active_enrollments || row.student_profile?.enrollments || []) as any[];
@@ -1422,7 +1583,7 @@ export default function TuitionAccountsEnrollment({
                   );
                 })}
 
-                {!filteredStudents.length && (
+                {!students.length && (
                   <tr>
                     <td colSpan={7} className="px-5 py-12 text-center">
                       <Users className="mx-auto text-slate-300" size={38} />
@@ -1436,6 +1597,34 @@ export default function TuitionAccountsEnrollment({
         </section>
       )}
 
+      {view !== "managers" && pagination.total_items > PAGE_SIZE && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[22px] border border-slate-200 bg-white px-5 py-3.5 shadow-sm">
+          <div className="text-xs font-bold text-slate-500">
+            Page <span className="text-slate-900">{pagination.page}</span> of{" "}
+            <span className="text-slate-900">{pagination.total_pages}</span> ·{" "}
+            <span className="text-slate-900">{pagination.total_items}</span> total
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={pagination.page <= 1 || loading}
+              className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(pagination.total_pages, p + 1))}
+              disabled={pagination.page >= pagination.total_pages || loading}
+              className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
       {csvImportOpen && (
         <TuitionCsvImportModal
           departmentId={departmentId}
@@ -1445,7 +1634,10 @@ export default function TuitionAccountsEnrollment({
           onImported={async (detail) => {
             setCsvImportOpen(false);
             setMessage(detail);
-            await loadAll();
+            optionsLoadedDeptRef.current = null;
+      matrixLoadedDeptRef.current = null;
+      countsLoadedRef.current = false;
+      await load();
           }}
         />
       )}

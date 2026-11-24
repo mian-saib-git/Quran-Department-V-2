@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   SalaryPayrollPeriod,
   TeacherPayroll,
@@ -78,44 +78,87 @@ export const PayrollApprovalsAndPayments: React.FC<Props> = ({
   const [slipLoading, setSlipLoading] = useState<boolean>(false);
   const [selectedTeacherPayrollId, setSelectedTeacherPayrollId] = useState<number | null>(null);
 
-  // Load periods
+  const loadSeqRef = useRef<number>(0);
+  const loadAbortRef = useRef<AbortController | null>(null);
+
+  // Load periods (summary only, no eager earning lines)
   const loadPeriods = async () => {
+    if (loadAbortRef.current) {
+      loadAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
+    const seq = ++loadSeqRef.current;
+
     setLoading(true);
     setError(null);
     try {
-      const data = await getPayrollPeriods({
-        department_id: departmentId,
-        payroll_year: year,
-        payroll_month: month,
-      });
+      const data = await getPayrollPeriods(
+        {
+          department_id: departmentId,
+          payroll_year: year,
+          payroll_month: month,
+        },
+        { signal: controller.signal }
+      );
+      if (seq !== loadSeqRef.current || controller.signal.aborted) return;
       setPeriods(data);
       if (data.length > 0) {
-        // Automatically fetch details of first period
-        const full = await getPayrollPeriod(data[0].id);
+        const full = await getPayrollPeriod(data[0].id, {
+          summaryOnly: true,
+          signal: controller.signal,
+        });
+        if (seq !== loadSeqRef.current || controller.signal.aborted) return;
         setSelectedPeriod(full);
       } else {
         setSelectedPeriod(null);
       }
     } catch (err: any) {
-      setError(err?.message || "Failed to load payroll periods.");
+      if (err?.name === "AbortError" || controller.signal.aborted) return;
+      if (seq === loadSeqRef.current) {
+        setError(err?.message || "Failed to load payroll periods.");
+      }
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current && !controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    loadPeriods();
+    void loadPeriods();
+    return () => {
+      if (loadAbortRef.current) {
+        loadAbortRef.current.abort();
+      }
+    };
   }, [departmentId, year, month]);
 
   const selectPeriodById = async (id: number) => {
+    if (loadAbortRef.current) {
+      loadAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
+    const seq = ++loadSeqRef.current;
+
     setLoading(true);
     try {
-      const full = await getPayrollPeriod(id);
+      const full = await getPayrollPeriod(id, {
+        summaryOnly: true,
+        signal: controller.signal,
+      });
+      if (seq !== loadSeqRef.current || controller.signal.aborted) return;
       setSelectedPeriod(full);
     } catch (err: any) {
-      setError(err?.message || "Failed to fetch payroll period details.");
+      if (err?.name === "AbortError" || controller.signal.aborted) return;
+      if (seq === loadSeqRef.current) {
+        setError(err?.message || "Failed to fetch payroll period details.");
+      }
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current && !controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   };
 
@@ -211,9 +254,9 @@ export const PayrollApprovalsAndPayments: React.FC<Props> = ({
       );
       setPaymentTeacher(null);
       setSuccessMsg(`External payment of PKR ${paymentAmount} recorded for teacher #${paymentTeacher.teacher_id}.`);
-      const updated = await getPayrollPeriod(selectedPeriod.id);
+      const updated = await getPayrollPeriod(selectedPeriod.id, { summaryOnly: true });
       setSelectedPeriod(updated);
-      loadPeriods();
+      void loadPeriods();
     } catch (err: any) {
       setError(err?.message || "Payment recording failed.");
     } finally {

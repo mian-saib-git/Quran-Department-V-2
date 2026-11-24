@@ -1745,10 +1745,40 @@ export type CoordinatorStudentAccount = {
   } | null;
 };
 
+export type CoordinatorAccountsCounts = {
+  coordinators: number;
+  teachers: number;
+  students: number;
+  active_accounts: number;
+};
+
+export type CoordinatorAccountsPagination = {
+  role: "coordinator" | "teacher" | "student";
+  page: number;
+  page_size: number;
+  total_items: number;
+  total_pages: number;
+};
+
 export type CoordinatorAccountsResponse = {
   coordinators: CoordinatorCoordinatorAccount[];
   teachers: CoordinatorTeacherAccount[];
   students: CoordinatorStudentAccount[];
+  counts?: CoordinatorAccountsCounts;
+  pagination?: CoordinatorAccountsPagination;
+};
+
+export type GetCoordinatorAccountsParams = {
+  role?: "coordinator" | "teacher" | "student";
+  page?: number;
+  page_size?: number;
+  search?: string;
+  time_from?: string;
+  time_to?: string;
+  profile_id?: number | string;
+  include_teachers?: boolean;
+  export?: boolean;
+  signal?: AbortSignal;
 };
 
 export type CreateAccountInput = {
@@ -1831,8 +1861,29 @@ export async function getTeacherSpecialCaseContext(
   return request<SpecialCaseContextResponse>(`/api/salary/special-case-context/${qs}`);
 }
 
-export async function getCoordinatorAccounts(): Promise<CoordinatorAccountsResponse> {
-  return request<CoordinatorAccountsResponse>("/api/auth/accounts/");
+export async function getCoordinatorAccounts(
+  params?: GetCoordinatorAccountsParams
+): Promise<CoordinatorAccountsResponse> {
+  const qs = new URLSearchParams();
+  if (params?.role) qs.set("role", params.role);
+  if (params?.page) qs.set("page", String(params.page));
+  if (params?.page_size) qs.set("page_size", String(params.page_size));
+  if (params?.search) qs.set("search", params.search);
+  if (params?.time_from) qs.set("time_from", params.time_from);
+  if (params?.time_to) qs.set("time_to", params.time_to);
+  if (params?.profile_id !== undefined && params?.profile_id !== "") {
+    qs.set("profile_id", String(params.profile_id));
+  }
+  if (params?.include_teachers !== undefined) {
+    qs.set("include_teachers", params.include_teachers ? "1" : "0");
+  }
+  if (params?.export) qs.set("export", "1");
+
+  const query = qs.toString();
+  return request<CoordinatorAccountsResponse>(
+    `/api/auth/accounts/${query ? `?${query}` : ""}`,
+    params?.signal ? { signal: params.signal } : {}
+  );
 }
 
 export async function createCoordinatorAccount(input: CreateAccountInput) {

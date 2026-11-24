@@ -28,7 +28,7 @@ import {
   bulkResolveVerifications,
   BulkResolutionResult,
   fetchApprovalReadiness,
-  fetchVerifications,
+  fetchVerificationsPage,
   previewReconciliation,
   ResolutionType,
   resolveVerification,
@@ -71,13 +71,17 @@ export default function SalaryAttendanceVerificationWorkspace({
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [teacherFilter, setTeacherFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>("");
 
-  // Pagination
+  // Pagination (Server-side)
   const [currentPage, setCurrentPage] = useState<number>(1);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [totalPages, setTotalPages] = useState<number>(1);
   const pageSize = 50;
 
-  // Stale request race condition prevention
+  // Stale request race condition prevention & cancellation
   const activeRequestIdRef = useRef<number>(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Modals
   const [resolvingItem, setResolvingItem] = useState<IVerification | null>(null);
@@ -99,73 +103,111 @@ export default function SalaryAttendanceVerificationWorkspace({
   const [isSubmittingBulk, setIsSubmittingBulk] = useState<boolean>(false);
   const [bulkResolutionError, setBulkResolutionError] = useState<string>("");
 
+  // Debounce search query for server-side filtering
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery.trim());
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
   // Clear selections when scope or filters change
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [departmentId, selectedYear, selectedMonth, statusFilter, teacherFilter]);
+  }, [departmentId, selectedYear, selectedMonth, statusFilter, teacherFilter, debouncedSearchQuery]);
 
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [statusFilter, teacherFilter, searchQuery, selectedYear, selectedMonth]);
+  }, [departmentId, statusFilter, teacherFilter, debouncedSearchQuery, selectedYear, selectedMonth]);
 
-  // Load summary and verifications
+  // Load department teachers once per department
+  useEffect(() => {
+    let isMounted = true;
+    fetchDepartmentTeachers(departmentId)
+      .then((tList) => {
+        if (isMounted) setTeachers(tList);
+      })
+      .catch(() => {
+        if (isMounted) setTeachers([]);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [departmentId]);
+
+  // Load summary and paginated verifications
   const loadWorkspaceData = useCallback(async () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     const requestId = ++activeRequestIdRef.current;
     setIsLoading(true);
     setErrorMessage("");
     try {
-      const [sumRes, verifRes, teacherRes] = await Promise.all([
+      const [sumRes, pageRes] = await Promise.all([
         fetchApprovalReadiness(departmentId, selectedYear, selectedMonth).catch((err) => {
           console.warn("Readiness check warning:", err);
           return null;
         }),
-        fetchVerifications({
+        fetchVerificationsPage({
           department_id: departmentId,
           year: selectedYear,
           month: selectedMonth,
           status: statusFilter !== "all" ? statusFilter : undefined,
           teacher_id: teacherFilter !== "all" ? Number(teacherFilter) : undefined,
-        }).catch((err) => {
-          console.warn("Verifications fetch warning:", err);
-          return [];
+          search: debouncedSearchQuery || undefined,
+          page: currentPage,
+          page_size: pageSize,
+          signal: controller.signal,
         }),
-        fetchDepartmentTeachers(departmentId).catch(() => []),
       ]);
 
-      if (activeRequestIdRef.current !== requestId) return;
+      if (activeRequestIdRef.current !== requestId || controller.signal.aborted) return;
 
+      const verifRes = pageRes.results;
       setSummary(sumRes);
       setVerifications(verifRes);
-      setTeachers(teacherRes);
+      setTotalCount(pageRes.count);
+      setTotalPages(pageRes.total_pages);
 
-      // Prune any selected IDs that are no longer pending
+      // Prune any selected IDs on the current page that are no longer pending
       setSelectedIds((prev) => {
         if (prev.size === 0) return prev;
-        const validPendingIds = new Set(
+        const nonPendingOnPage = new Set(
           verifRes
-            .filter((v: IVerification) => v.verification_status === "pending")
+            .filter((v: IVerification) => v.verification_status !== "pending")
             .map((v: IVerification) => v.id)
         );
+        if (nonPendingOnPage.size === 0) return prev;
         const next = new Set<number>();
         prev.forEach((id) => {
-          if (validPendingIds.has(id)) next.add(id);
+          if (!nonPendingOnPage.has(id)) next.add(id);
         });
         return next;
       });
     } catch (err: any) {
+      if (err?.name === "AbortError" || controller.signal.aborted) return;
       if (activeRequestIdRef.current === requestId) {
         setErrorMessage(err.message || "Failed to load attendance verification data.");
       }
     } finally {
-      if (activeRequestIdRef.current === requestId) {
+      if (activeRequestIdRef.current === requestId && !controller.signal.aborted) {
         setIsLoading(false);
       }
     }
-  }, [departmentId, selectedYear, selectedMonth, statusFilter, teacherFilter]);
+  }, [departmentId, selectedYear, selectedMonth, statusFilter, teacherFilter, debouncedSearchQuery, currentPage, pageSize]);
 
   useEffect(() => {
     loadWorkspaceData();
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
   }, [loadWorkspaceData]);
 
   // Execute automated reconciliation scan
@@ -254,27 +296,7 @@ export default function SalaryAttendanceVerificationWorkspace({
     }
   };
 
-  // Filtered occurrences
-  const filteredVerifications = useMemo(() => {
-    return verifications.filter((v) => {
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const tMatch = (v.teacher_name || "").toLowerCase().includes(q);
-        const sMatch = (v.student_name || "").toLowerCase().includes(q);
-        const kMatch = (v.occurrence_key || "").toLowerCase().includes(q);
-        if (!tMatch && !sMatch && !kMatch) return false;
-      }
-      return true;
-    });
-  }, [verifications, searchQuery]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredVerifications.length / pageSize));
-  const paginatedVerifications = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredVerifications.slice(start, start + pageSize);
-  }, [filteredVerifications, currentPage, pageSize]);
-
-  // Selected records summary details
+  // Selected records summary details (from currently loaded page items)
   const selectedRecords = useMemo(() => {
     return verifications.filter((v) => selectedIds.has(v.id));
   }, [verifications, selectedIds]);
@@ -296,8 +318,8 @@ export default function SalaryAttendanceVerificationWorkspace({
 
   // Page-level selection helpers
   const pageEligibleItems = useMemo(() => {
-    return paginatedVerifications.filter((v) => v.verification_status === "pending");
-  }, [paginatedVerifications]);
+    return verifications.filter((v) => v.verification_status === "pending");
+  }, [verifications]);
 
   const isAllPageSelected = pageEligibleItems.length > 0 && pageEligibleItems.every((item) => selectedIds.has(item.id));
   const isSomePageSelected = pageEligibleItems.some((item) => selectedIds.has(item.id)) && !isAllPageSelected;
@@ -643,7 +665,7 @@ export default function SalaryAttendanceVerificationWorkspace({
                     Loading attendance occurrences...
                   </td>
                 </tr>
-              ) : filteredVerifications.length === 0 ? (
+              ) : verifications.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-12 text-center text-slate-400">
                     <CheckCircle2 size={24} className="mx-auto mb-2 text-slate-300" />
@@ -656,7 +678,7 @@ export default function SalaryAttendanceVerificationWorkspace({
                   </td>
                 </tr>
               ) : (
-                paginatedVerifications.map((item) => {
+                verifications.map((item) => {
                   const isPending = item.verification_status === "pending";
                   const isResolved = item.verification_status === "resolved";
                   const isVerified = item.verification_status === "verified";
@@ -813,14 +835,14 @@ export default function SalaryAttendanceVerificationWorkspace({
         </div>
 
         {/* Pagination controls */}
-        {filteredVerifications.length > pageSize && (
+        {totalCount > pageSize && (
           <div className="px-4 py-3 border-t border-slate-200/70 bg-slate-50 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-600">
             <div>
               Showing <span className="font-bold text-slate-900">{(currentPage - 1) * pageSize + 1}</span> to{" "}
               <span className="font-bold text-slate-900">
-                {Math.min(currentPage * pageSize, filteredVerifications.length)}
+                {Math.min(currentPage * pageSize, totalCount)}
               </span>{" "}
-              of <span className="font-bold text-slate-900">{filteredVerifications.length}</span> occurrences
+              of <span className="font-bold text-slate-900">{totalCount}</span> occurrences
             </div>
             <div className="flex items-center gap-1.5">
               <button

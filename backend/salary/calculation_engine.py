@@ -221,7 +221,7 @@ def build_calculation_prefetch_context(
             substitute_teacher_id__in=teacher_ids,
             class_date__gte=first_date,
             class_date__lte=last_date,
-        ).only(*ver_fields).select_related("teacher")
+        ).only(*ver_fields).select_related("teacher", "teacher__user")
         .order_by("class_date", "scheduled_time", "id")
     )
     # Fast load substitute teachers only for those with substitute_teacher_id
@@ -273,7 +273,7 @@ def build_calculation_prefetch_context(
                 Q(effective_from__isnull=True) | Q(effective_from__lte=last_date)
             ).filter(
                 Q(effective_to__isnull=True) | Q(effective_to__gte=first_date)
-            ).only(*sched_fields).select_related("student")
+            ).only(*sched_fields).select_related("student", "student__user")
         )
         for s in schedules:
             ctx.schedules_by_teacher[s.teacher_id].append(s)
@@ -382,7 +382,7 @@ def build_calculation_prefetch_context(
             is_active=True,
             effective_from__lte=last_date,
         ).filter(Q(effective_to__isnull=True) | Q(effective_to__gte=first_date))
-        .select_related("student", "teaching_plan", "salary_policy")
+        .select_related("student", "student__user", "teaching_plan", "salary_policy")
         .order_by("-effective_from")
     )
     overrides_by_teacher = defaultdict(list)

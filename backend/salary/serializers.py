@@ -189,16 +189,16 @@ class SalaryPolicyVersionSerializer(serializers.ModelSerializer):
         return obj.published_by.get_full_name() or obj.published_by.username
 
     def get_tiers_count(self, obj):
-        return obj.rate_tiers.count()
+        return len(obj.rate_tiers.all())
 
     def get_plans_count(self, obj):
-        return obj.teaching_plans.count()
+        return len(obj.teaching_plans.all())
 
     def get_rates_count(self, obj):
-        return obj.plan_tier_rates.count()
+        return len(obj.plan_tier_rates.all())
 
     def get_basic_salaries_count(self, obj):
-        return obj.plan_tier_basic_salaries.count()
+        return len(obj.plan_tier_basic_salaries.all())
 
     def validate(self, attrs):
         eff_from = attrs.get("effective_from") or (self.instance.effective_from if self.instance else None)
@@ -1094,6 +1094,11 @@ class PayrollAdjustmentSerializer(serializers.ModelSerializer):
         return ""
 
     def get_category_name(self, obj):
+        cat_map = self.context.get("category_name_map")
+        if cat_map is not None:
+            if obj.category in cat_map:
+                return cat_map[obj.category]
+            return obj.category.replace("_", " ").title()
         cat = SalaryAdjustmentCategory.objects.filter(code=obj.category).first()
         return cat.name if cat else obj.category.replace("_", " ").title()
 
@@ -1403,6 +1408,68 @@ class PayrollEarningLineSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class TeacherPayrollSummarySerializer(serializers.ModelSerializer):
+    """Lightweight teacher payroll summary without eager earning_lines serialization."""
+
+    teacher_name = serializers.SerializerMethodField()
+    applied_policy_name = serializers.SerializerMethodField()
+    applied_policy_code = serializers.SerializerMethodField()
+    earning_lines_count = serializers.SerializerMethodField()
+    payment_status_display = serializers.CharField(source="get_payment_status_display", read_only=True)
+
+    class Meta:
+        model = TeacherPayroll
+        fields = [
+            "id",
+            "payroll_period",
+            "teacher",
+            "teacher_name",
+            "applied_policy",
+            "applied_policy_name",
+            "applied_policy_code",
+            "applied_policy_version",
+            "basic_salary",
+            "regular_class_earnings",
+            "lesson_bonuses",
+            "substitute_earnings",
+            "cancellation_earnings",
+            "positive_adjustments",
+            "cuttings",
+            "gross_salary",
+            "net_salary",
+            "paid_amount",
+            "payment_status",
+            "payment_status_display",
+            "paid_at",
+            "is_calculation_complete",
+            "completeness_notes",
+            "revision",
+            "created_at",
+            "updated_at",
+            "earning_lines_count",
+        ]
+        read_only_fields = fields
+
+    def get_teacher_name(self, obj):
+        if obj.teacher:
+            return getattr(obj.teacher, "historical_name", None) or (
+                obj.teacher.user.get_full_name() if obj.teacher.user else f"Teacher #{obj.teacher.id}"
+            )
+        return ""
+
+    def get_applied_policy_name(self, obj):
+        return obj.applied_policy.name if obj.applied_policy else ""
+
+    def get_applied_policy_code(self, obj):
+        return obj.applied_policy.code if obj.applied_policy else ""
+
+    def get_earning_lines_count(self, obj):
+        annotated = getattr(obj, "earning_lines_count", None)
+        if annotated is not None:
+            return int(annotated)
+        return obj.earning_lines.count()
+
+
 class TeacherPayrollSerializer(serializers.ModelSerializer):
     teacher_name = serializers.SerializerMethodField()
     applied_policy_name = serializers.SerializerMethodField()
@@ -1517,6 +1584,12 @@ class SalaryPayrollPeriodSerializer(serializers.ModelSerializer):
         if obj.created_by:
             return obj.created_by.get_full_name() or obj.created_by.username
         return ""
+
+
+class SalaryPayrollPeriodSummarySerializer(SalaryPayrollPeriodSerializer):
+    """Lightweight payroll period detail with teacher summary rows and deferred earning lines."""
+
+    teacher_payrolls = TeacherPayrollSummarySerializer(many=True, read_only=True)
 
 
 class SalaryPayrollPeriodListSerializer(serializers.ModelSerializer):

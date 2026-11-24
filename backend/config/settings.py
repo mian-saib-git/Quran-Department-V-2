@@ -197,6 +197,27 @@ else:
         },
     }
 
+# Shared cross-worker cache: use Redis when configured, with safe LocMemCache fallback in local dev.
+_CACHE_BACKEND_MODE = os.getenv("DJANGO_CACHE_BACKEND", "").strip().lower()
+_REDIS_CACHE_URL = (os.getenv("REDIS_CACHE_URL") or os.getenv("REDIS_URL") or "").strip()
+
+if _CACHE_BACKEND_MODE == "redis" or _REDIS_CACHE_URL or CHANNEL_LAYER_MODE == "redis":
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": _REDIS_CACHE_URL or "redis://127.0.0.1:6379/1",
+            "KEY_PREFIX": os.getenv("DJANGO_CACHE_KEY_PREFIX", "ivs"),
+            "TIMEOUT": 300,
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "ivs-local-cache",
+        }
+    }
+
 
 # ============================================================
 # Production Security Settings

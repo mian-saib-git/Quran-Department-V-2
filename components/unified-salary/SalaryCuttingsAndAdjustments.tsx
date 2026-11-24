@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -173,8 +173,11 @@ export default function SalaryCuttingsAndAdjustments({
   const [advanceReason, setAdvanceReason] = useState<string>("");
   const [advanceRef, setAdvanceRef] = useState<string>("");
 
+  const loadSeqRef = useRef<number>(0);
+
   // Load all initial data
   const loadData = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setIsLoading(true);
     setFeedback(null);
     try {
@@ -188,6 +191,7 @@ export default function SalaryCuttingsAndAdjustments({
         fetchSalaryCalculationPreview({ department_id: departmentId, year: selectedYear, month: selectedMonth, summary_only: true }),
       ]);
 
+      if (seq !== loadSeqRef.current) return;
       setTeachers(tList);
       setCategories(cats);
       setAdjustments(adjs);
@@ -196,12 +200,15 @@ export default function SalaryCuttingsAndAdjustments({
       setAdvancesList(advances);
       setCalculationPreview(calc);
     } catch (err: any) {
+      if (seq !== loadSeqRef.current) return;
       setFeedback({
         type: "error",
         message: err.message || "Failed to load salary adjustment data.",
       });
     } finally {
-      setIsLoading(false);
+      if (seq === loadSeqRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [departmentId, selectedYear, selectedMonth]);
 

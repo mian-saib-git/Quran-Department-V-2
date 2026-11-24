@@ -2,7 +2,7 @@ import { beginImport, isImportActive } from "../services/importActivity";
 import { runSequentialImport, importSummaryText } from "../services/importWorkflow";
 import { ApiRequestError } from "../services/authenticatedRequest";
 // IVS_LIVE_CLASS_ACCOUNT_LINKS_V15
-import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 const TeacherDetailsModal = lazy(() => import("./TeacherDetailsModal"));
 import {
   AlertTriangle,
@@ -302,46 +302,6 @@ function getStudentTime(item: CoordinatorStudentAccount) {
     profile.classTime ||
     ""
   );
-}
-
-/** Read 24-hour clock values returned by the Accounts API. */
-function classStartMinutes(value: unknown): number | null {
-  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
-  if (!match) return null;
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  if (hours > 23 || minutes > 59) return null;
-  return hours * 60 + minutes;
-}
-
-/** Match any of a student's scheduled class start times, not just the first one. */
-function studentMatchesClassTime(
-  student: CoordinatorStudentAccount,
-  fromTime: string,
-  toTime: string,
-): boolean {
-  if (!fromTime && !toTime) return true;
-
-  const profile = student.student_profile;
-  const times = Array.isArray(profile?.schedules)
-    ? profile.schedules
-        .filter((schedule) => schedule && schedule.is_active !== false)
-        .map((schedule) => schedule.time_slot)
-    : [];
-  // Legacy records may have one top-level time_slot but no schedules array.
-  if (!times.length) times.push(getStudentTime(student));
-
-  const from = fromTime ? classStartMinutes(fromTime) : null;
-  const to = toTime ? classStartMinutes(toTime) : null;
-  return times.some((value) => {
-    const minutes = classStartMinutes(value);
-    if (minutes === null) return false;
-    if (from !== null && to !== null && from > to) {
-      // Example: 22:00 through 02:00 crosses midnight.
-      return minutes >= from || minutes <= to;
-    }
-    return (from === null || minutes >= from) && (to === null || minutes <= to);
-  });
 }
 
 function getStudentDays(item: CoordinatorStudentAccount): string[] {
@@ -668,18 +628,6 @@ const parseAccountsCsv = (csvText: string) => {
 
 const PAGE_SIZE = 25;
 
-function getPagedItems<T>(items: T[], page: number, pageSize: number) {
-  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
-  const safePage = Math.min(Math.max(1, page), totalPages);
-  const startIndex = (safePage - 1) * pageSize;
-
-  return {
-    items: items.slice(startIndex, startIndex + pageSize),
-    totalPages,
-    safePage,
-  };
-}
-
 function statusBadge(active: boolean) {
   return active ? (
     <span
@@ -764,6 +712,19 @@ export default function CoordinatorAccounts({
     teachers: [],
     students: [],
   });
+  const [counts, setCounts] = useState({
+    coordinators: 0,
+    teachers: 0,
+    students: 0,
+    active_accounts: 0,
+  });
+  const [pagination, setPagination] = useState({
+    page: 1,
+    page_size: PAGE_SIZE,
+    total_items: 0,
+    total_pages: 1,
+  });
+  const [teacherOptions, setTeacherOptions] = useState<CoordinatorTeacherAccount[]>([]);
   const [selectedTeacherDetailsId, setSelectedTeacherDetailsId] = useState<number | null>(null);
 
   const session = loadSession();
@@ -776,7 +737,9 @@ export default function CoordinatorAccounts({
   const canManageDepartmentAccounts = canManageCoordinators || isCoordinatorRole(sessionRole);
 
   const [activeMode, setActiveMode] = useState<AccountsTab>("teacher");
+  const [loadedMode, setLoadedMode] = useState<AccountsTab | null>(null);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [classTimeFrom, setClassTimeFrom] = useState("");
   const [classTimeTo, setClassTimeTo] = useState("");
   const [loading, setLoading] = useState(false);
@@ -805,41 +768,127 @@ export default function CoordinatorAccounts({
   const [csvImporting, setCsvImporting] = useState(false);
   const [csvFileName, setCsvFileName] = useState("");
 
-  const load = async () => {
+  const requestSeqRef = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const teacherOptionsRef = useRef<CoordinatorTeacherAccount[]>([]);
+  teacherOptionsRef.current = teacherOptions;
+  const editingStudentRef = useRef<CoordinatorStudentAccount | null>(null);
+
+  useEffect(() => {
+    const trimmed = search.trim();
+    if (!trimmed) {
+      setDebouncedSearch("");
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(trimmed);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  const ensureTeacherOptions = useCallback(async (force = false) => {
+    if (!force && teacherOptionsRef.current.length > 0) {
+      return teacherOptionsRef.current;
+    }
+    try {
+      const res = await getCoordinatorAccounts({
+        role: "student",
+        page: 1,
+        page_size: 1,
+        include_teachers: true,
+      });
+      const list = res.teachers || [];
+      setTeacherOptions(list);
+      return list;
+    } catch {
+      return teacherOptionsRef.current;
+    }
+  }, []);
+
+  const load = useCallback(async (opts?: { refreshTeachers?: boolean }) => {
+    const reqSeq = ++requestSeqRef.current;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    const targetMode = activeMode;
     setLoading(true);
     setMessage("");
 
     try {
-      const accountsRes = await getCoordinatorAccounts();
+      const needTeachers =
+        targetMode === "student" &&
+        (Boolean(opts?.refreshTeachers) || teacherOptionsRef.current.length === 0);
+
+      const accountsRes = await getCoordinatorAccounts({
+        role: targetMode,
+        page,
+        page_size: PAGE_SIZE,
+        search: debouncedSearch || undefined,
+        time_from: targetMode === "student" && classTimeFrom ? classTimeFrom : undefined,
+        time_to: targetMode === "student" && classTimeTo ? classTimeTo : undefined,
+        include_teachers: targetMode === "student" ? needTeachers : undefined,
+        signal: controller.signal,
+      });
+
+      if (requestSeqRef.current !== reqSeq || controller.signal.aborted) return;
+
+      if (targetMode === "student" && needTeachers) {
+        setTeacherOptions(accountsRes.teachers || []);
+      }
 
       setData({
-        coordinators: accountsRes.coordinators || [],
-        teachers: accountsRes.teachers || [],
-        students: accountsRes.students || [],
+        coordinators: targetMode === "coordinator" ? (accountsRes.coordinators || []) : [],
+        teachers: targetMode === "teacher" ? (accountsRes.teachers || []) : [],
+        students: targetMode === "student" ? (accountsRes.students || []) : [],
       });
+      if (accountsRes.counts) {
+        setCounts(accountsRes.counts);
+      }
+      if (accountsRes.pagination) {
+        setPagination(accountsRes.pagination);
+      }
+      setLoadedMode(targetMode);
       setAccountsLoaded(true);
     } catch (err: any) {
+      if (err?.name === "AbortError" || controller.signal.aborted || requestSeqRef.current !== reqSeq) {
+        return;
+      }
       setMessage(err?.message || "Failed to load accounts.");
     } finally {
-      setLoading(false);
+      if (requestSeqRef.current === reqSeq) {
+        setLoading(false);
+      }
     }
-  };
+  }, [activeMode, page, debouncedSearch, classTimeFrom, classTimeTo]);
 
   useEffect(() => {
     void load();
-  }, []);
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, [load]);
+
+  const loadRef = useRef(load);
+  loadRef.current = load;
 
   const accountRefreshTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const accountRefreshRunning = React.useRef(false);
-  const scheduleAccountRefresh = () => {
+  const scheduleAccountRefresh = useCallback(() => {
     if (isImportActive()) return;
     if (accountRefreshTimer.current) clearTimeout(accountRefreshTimer.current);
     accountRefreshTimer.current = setTimeout(async () => {
       if (isImportActive() || accountRefreshRunning.current) return;
       accountRefreshRunning.current = true;
-      try { await load(); } finally { accountRefreshRunning.current = false; }
+      try {
+        await loadRef.current();
+      } finally {
+        accountRefreshRunning.current = false;
+      }
     }, 500);
-  };
+  }, []);
   useEffect(() => {
     window.addEventListener("ivs-import-finished", scheduleAccountRefresh);
     window.addEventListener("ivs-refresh-state", scheduleAccountRefresh);
@@ -848,16 +897,16 @@ export default function CoordinatorAccounts({
       window.removeEventListener("ivs-refresh-state", scheduleAccountRefresh);
       if (accountRefreshTimer.current) clearTimeout(accountRefreshTimer.current);
     };
-  }, []);
+  }, [scheduleAccountRefresh]);
   useAcademyWS((event) => {
-    const type = String(event?.type || "");
     const name = String((event as any)?.event || "");
 
     if (
-      type === "academy_update" ||
       name === "account_created" ||
       name === "account_updated" ||
-      name === "account_deleted"
+      name === "account_deleted" ||
+      name === "teacher_retired" ||
+      name === "student_status_updated"
     ) {
       scheduleAccountRefresh();
     }
@@ -869,80 +918,15 @@ export default function CoordinatorAccounts({
     }
   }, [canManageCoordinators, activeMode]);
 
-  const filteredCoordinators = useMemo(() => {
-    const q = search.trim().toLowerCase();
-
-    return (data.coordinators || []).filter((item) => {
-      if (!q) return true;
-
-      return [
-        item.username,
-        item.email,
-        item.full_name,
-        item.first_name,
-        item.last_name,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(q);
-    });
-  }, [data.coordinators, search]);
-
-  const filteredTeachers = useMemo(() => {
-    const q = search.trim().toLowerCase();
-
-    return data.teachers.filter((item) => {
-      if (!q) return true;
-
-      return [
-        item.username,
-        item.email,
-        item.full_name,
-        item.first_name,
-        item.last_name,
-        item.teacher_profile?.phone,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(q);
-    });
-  }, [data.teachers, search]);
-
-  const filteredStudents = useMemo(() => {
-    const q = search.trim().toLowerCase();
-
-    return data.students.filter((item) => {
-      if (!studentMatchesClassTime(item, classTimeFrom, classTimeTo)) return false;
-      if (!q) return true;
-
-      const profile = item.student_profile;
-      const scheduleText = [
-        profile?.time_slot,
-        ...(profile?.class_days || []),
-      ].join(" ");
-
-      return [
-        item.username,
-        item.email,
-        item.full_name,
-        item.first_name,
-        item.last_name,
-        profile?.phone,
-        profile?.teacher_name,
-        scheduleText,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(q);
-    });
-  }, [data.students, search, classTimeFrom, classTimeTo]);
-
-
-  const exportStudentsCsv = () => {
-    const students = data.students || [];
+  const exportStudentsCsv = async () => {
+    let students: CoordinatorStudentAccount[] = [];
+    try {
+      const res = await getCoordinatorAccounts({ role: "student", export: true });
+      students = res.students || [];
+    } catch (err: any) {
+      setMessage(err?.message || "Failed to export student records.");
+      return;
+    }
 
     if (!students.length) {
       setMessage("No student records are available to export.");
@@ -1132,6 +1116,8 @@ export default function CoordinatorAccounts({
     }
 
     if (role === "student") {
+      void ensureTeacherOptions();
+      editingStudentRef.current = null;
       setModalMode("create-student");
     }
   };
@@ -1210,6 +1196,8 @@ export default function CoordinatorAccounts({
   };
 
   const openEditStudent = (student: CoordinatorStudentAccount) => {
+    void ensureTeacherOptions();
+    editingStudentRef.current = student;
     setShowPassword(false);
     const profile: any = student.student_profile || {};
     setForm({
@@ -1258,44 +1246,89 @@ export default function CoordinatorAccounts({
       return;
     }
 
-    if (editTarget.role === "teacher") {
-      const teacher = data.teachers.find(
-        (item) =>
-          String(item.teacher_profile?.id || "") === targetId ||
-          String(item.id) === targetId,
-      );
+    let cancelled = false;
 
-      if (!teacher) {
-        setMessage("The selected teacher account could not be found.");
+    const resolveAndOpen = async () => {
+      if (editTarget.role === "teacher") {
+        let teacher = data.teachers.find(
+          (item) =>
+            String(item.teacher_profile?.id || "") === targetId ||
+            String(item.id) === targetId,
+        );
+
+        if (!teacher) {
+          try {
+            const res = await getCoordinatorAccounts({
+              role: "teacher",
+              profile_id: targetId,
+              page: 1,
+              page_size: 1,
+            });
+            teacher = (res.teachers || [])[0];
+          } catch {
+            teacher = undefined;
+          }
+        }
+
+        if (cancelled) return;
+
+        if (!teacher) {
+          setMessage("The selected teacher account could not be found.");
+          onEditTargetHandled?.();
+          return;
+        }
+
+        setActiveMode("teacher");
+        setSearch("");
+        setPage(1);
+        openEditTeacher(teacher);
         onEditTargetHandled?.();
         return;
       }
 
-      setActiveMode("teacher");
+      let student = data.students.find(
+        (item) =>
+          String(item.student_profile?.id || "") === targetId ||
+          String(item.id) === targetId,
+      );
+
+      if (!student) {
+        try {
+          const res = await getCoordinatorAccounts({
+            role: "student",
+            profile_id: targetId,
+            page: 1,
+            page_size: 1,
+            include_teachers: teacherOptionsRef.current.length === 0,
+          });
+          if (res.teachers && res.teachers.length > 0 && teacherOptionsRef.current.length === 0) {
+            setTeacherOptions(res.teachers);
+          }
+          student = (res.students || [])[0];
+        } catch {
+          student = undefined;
+        }
+      }
+
+      if (cancelled) return;
+
+      if (!student) {
+        setMessage("The selected student account could not be found.");
+        onEditTargetHandled?.();
+        return;
+      }
+
+      setActiveMode("student");
       setSearch("");
       setPage(1);
-      openEditTeacher(teacher);
+      openEditStudent(student);
       onEditTargetHandled?.();
-      return;
-    }
+    };
 
-    const student = data.students.find(
-      (item) =>
-        String(item.student_profile?.id || "") === targetId ||
-        String(item.id) === targetId,
-    );
-
-    if (!student) {
-      setMessage("The selected student account could not be found.");
-      onEditTargetHandled?.();
-      return;
-    }
-
-    setActiveMode("student");
-    setSearch("");
-    setPage(1);
-    openEditStudent(student);
-    onEditTargetHandled?.();
+    void resolveAndOpen();
+    return () => {
+      cancelled = true;
+    };
   }, [
     editTarget,
     loading,
@@ -1499,7 +1532,9 @@ export default function CoordinatorAccounts({
       let savedAccount: any;
       if (isEdit && form.userId) {
         if (form.role === "student") {
-          const existingStudent = data.students.find((s) => s.id === form.userId);
+          const existingStudent =
+            (editingStudentRef.current?.id === form.userId ? editingStudentRef.current : null) ||
+            data.students.find((s) => s.id === form.userId);
           const normalizeDayKey = (days: string[] | undefined) =>
             Array.from(
               new Set((days || []).map((d) => String(d || "").trim().toLowerCase()).filter(Boolean))
@@ -1646,41 +1681,30 @@ export default function CoordinatorAccounts({
       window.dispatchEvent(new CustomEvent("ivs-refresh-state"));
       if (form.role === "teacher") {
         clearSalaryPreviewModuleCache();
+        await load({ refreshTeachers: true });
+      } else {
+        await load();
       }
-      await load();
     } catch (err: any) {
       setMessage(String(err?.message || "Could not archive account."));
       await load();
     }
   };
 
-  const activeCount = [
-    ...(canManageCoordinators ? data.coordinators : []),
-    ...data.teachers,
-    ...data.students,
-  ].filter((x) => x.is_active).length;
-
   useEffect(() => {
     setPage(1);
-  }, [activeMode, search, classTimeFrom, classTimeTo]);
+  }, [activeMode, debouncedSearch, classTimeFrom, classTimeTo]);
 
-  const pagedCoordinators = getPagedItems(filteredCoordinators, page, PAGE_SIZE);
-  const pagedTeachers = getPagedItems(filteredTeachers, page, PAGE_SIZE);
-  const pagedStudents = getPagedItems(filteredStudents, page, PAGE_SIZE);
-
-  const currentTotalItems =
+  const currentTotalItems = pagination.total_items;
+  const currentTotalPages = pagination.total_pages;
+  const currentPage = pagination.page;
+  const activeTabItems =
     activeMode === "coordinator"
-      ? filteredCoordinators.length
+      ? data.coordinators
       : activeMode === "teacher"
-      ? filteredTeachers.length
-      : filteredStudents.length;
-
-  const currentPageData =
-    activeMode === "coordinator"
-      ? pagedCoordinators
-      : activeMode === "teacher"
-      ? pagedTeachers
-      : pagedStudents;
+      ? data.teachers
+      : data.students;
+  const isTabSwitching = loading && loadedMode !== activeMode;
 
   if (!canManageDepartmentAccounts) {
     return (
@@ -1766,7 +1790,7 @@ export default function CoordinatorAccounts({
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-xs font-bold text-slate-500">Coordinators</div>
-                    <div className="mt-1 text-3xl font-extrabold text-slate-950">{data.coordinators.length}</div>
+                    <div className="mt-1 text-3xl font-extrabold text-slate-950">{counts.coordinators}</div>
                   </div>
                   <div className="h-10 w-10 rounded-xl bg-slate-900 text-white flex items-center justify-center">
                     <ShieldCheck size={22} />
@@ -1779,7 +1803,7 @@ export default function CoordinatorAccounts({
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-xs font-bold text-slate-500">Teachers</div>
-                  <div className="mt-1 text-3xl font-extrabold text-slate-950">{data.teachers.length}</div>
+                  <div className="mt-1 text-3xl font-extrabold text-slate-950">{counts.teachers}</div>
                 </div>
                 <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
                   <Users size={22} />
@@ -1791,7 +1815,7 @@ export default function CoordinatorAccounts({
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-xs font-bold text-slate-500">Students</div>
-                  <div className="mt-1 text-3xl font-extrabold text-slate-950">{data.students.length}</div>
+                  <div className="mt-1 text-3xl font-extrabold text-slate-950">{counts.students}</div>
                 </div>
                 <div className="h-10 w-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
                   <GraduationCap size={22} />
@@ -1803,7 +1827,7 @@ export default function CoordinatorAccounts({
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-xs font-bold text-slate-500">Active Accounts</div>
-                  <div className="mt-1 text-3xl font-extrabold text-slate-950">{activeCount}</div>
+                  <div className="mt-1 text-3xl font-extrabold text-slate-950">{counts.active_accounts}</div>
                 </div>
                 <div className="h-10 w-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
                   <ShieldCheck size={22} />
@@ -1895,7 +1919,7 @@ export default function CoordinatorAccounts({
                 Clear
               </button>
               <span className="sr-only" aria-live="polite">
-                Showing {filteredStudents.length} of {data.students.length} students
+                Showing {data.students.length} of {counts.students} students
               </span>
             </div>
           )}
@@ -1913,13 +1937,13 @@ export default function CoordinatorAccounts({
           </div>
         </div>
 
-        {loading && !data.teachers.length && !data.students.length ? (
+        {isTabSwitching || (loading && activeTabItems.length === 0) ? (
           <div className="p-3 sm:p-5">
             <PageSkeleton variant="accounts" rows={7} compact label="Loading accounts" />
           </div>
         ) : activeMode === "coordinator" && canManageCoordinators ? (
           <CoordinatorTable
-            items={filteredCoordinators}
+            items={data.coordinators}
             copiedUsername={copiedUsername}
             onCopyUsername={handleCopyUsername}
             onEdit={openEditCoordinator}
@@ -1928,7 +1952,7 @@ export default function CoordinatorAccounts({
           />
         ) : activeMode === "teacher" ? (
           <TeacherTable
-            items={pagedTeachers.items}
+            items={data.teachers}
             copiedUsername={copiedUsername}
             onCopyUsername={handleCopyUsername}
             onViewTeacher={(teacher) => {
@@ -1943,8 +1967,8 @@ export default function CoordinatorAccounts({
           />
         ) : (
           <StudentTable
-            items={pagedStudents.items}
-            hasActiveFilter={Boolean(search.trim() || classTimeFrom || classTimeTo)}
+            items={data.students}
+            hasActiveFilter={Boolean(debouncedSearch || classTimeFrom || classTimeTo)}
             copiedUsername={copiedUsername}
             onCopyUsername={handleCopyUsername}
             onEdit={openEditStudent}
@@ -1953,10 +1977,10 @@ export default function CoordinatorAccounts({
           />
         )}
 
-        {!loading && currentTotalItems > PAGE_SIZE && (
+        {!isTabSwitching && currentTotalItems > PAGE_SIZE && (
           <PaginationBar
-            page={currentPageData.safePage}
-            totalPages={currentPageData.totalPages}
+            page={currentPage}
+            totalPages={currentTotalPages}
             totalItems={currentTotalItems}
             onPageChange={setPage}
           />
@@ -2718,7 +2742,7 @@ export default function CoordinatorAccounts({
                         className="input-premium disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
                       >
                         <option value="">Select teacher</option>
-                        {data.teachers.map((teacher) => (
+                        {teacherOptions.map((teacher) => (
                           <option key={teacher.id} value={teacher.teacher_profile?.id || ""}>
                             {teacher.full_name || teacher.username}
                           </option>
@@ -2837,7 +2861,7 @@ export default function CoordinatorAccounts({
                       <Field label="Transferred From Teacher">
                         <select value={form.previous_teacher_id} onChange={(e) => setForm({ ...form, previous_teacher_id: e.target.value })} className="input-premium">
                           <option value="">Select previous teacher</option>
-                          {data.teachers
+                          {teacherOptions
                             .filter((teacher) => String(teacher.teacher_profile?.id || "") !== form.teacher_id)
                             .map((teacher) => <option key={teacher.id} value={teacher.teacher_profile?.id || ""}>{teacher.full_name || teacher.username}</option>)}
                         </select>
@@ -2848,7 +2872,7 @@ export default function CoordinatorAccounts({
                       <Field label="Transfer To Teacher">
                         <select value={form.transfer_to_teacher_id} onChange={(e) => setForm({ ...form, transfer_to_teacher_id: e.target.value })} className="input-premium">
                           <option value="">Select receiving teacher</option>
-                          {data.teachers
+                          {teacherOptions
                             .filter((teacher) => String(teacher.teacher_profile?.id || "") !== form.teacher_id)
                             .map((teacher) => <option key={teacher.id} value={teacher.teacher_profile?.id || ""}>{teacher.full_name || teacher.username}</option>)}
                         </select>

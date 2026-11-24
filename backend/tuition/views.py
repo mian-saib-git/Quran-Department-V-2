@@ -5,7 +5,7 @@ from datetime import datetime, time, timedelta
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Count, Prefetch, Q
 from django.core.paginator import Paginator
 
 from rest_framework import serializers, status
@@ -149,6 +149,11 @@ def tuition_user_queryset(
                 ),
                 department_roles__is_active=True,
             )
+        )
+        .select_related(
+            "teacher_profile",
+            "student_profile",
+            "student_profile__teacher__user",
         )
         .distinct()
         .order_by(
@@ -372,13 +377,41 @@ class TuitionAccountListCreateView(
             role,
         )
 
+        profile_id_raw = str(request.query_params.get("profile_id", "")).strip()
+        if profile_id_raw:
+            pid = safe_int(profile_id_raw, 0)
+            if pid:
+                if role == User.Role.TEACHER:
+                    queryset = queryset.filter(Q(id=pid) | Q(teacher_profile__id=pid))
+                else:
+                    queryset = queryset.filter(Q(id=pid) | Q(student_profile__id=pid))
+
         if search:
-            queryset = queryset.filter(
+            search_q = (
                 Q(username__icontains=search)
                 | Q(email__icontains=search)
                 | Q(first_name__icontains=search)
                 | Q(last_name__icontains=search)
             )
+            if role == User.Role.STUDENT:
+                search_q = search_q | Q(
+                    student_profile__tuition_enrollments__department=department,
+                    student_profile__tuition_enrollments__is_active=True,
+                    student_profile__tuition_enrollments__subject__name__icontains=search,
+                ) | Q(
+                    student_profile__tuition_enrollments__department=department,
+                    student_profile__tuition_enrollments__is_active=True,
+                    student_profile__tuition_enrollments__class_level__name__icontains=search,
+                ) | Q(
+                    student_profile__tuition_enrollments__department=department,
+                    student_profile__tuition_enrollments__is_active=True,
+                    student_profile__tuition_enrollments__teacher__user__first_name__icontains=search,
+                ) | Q(
+                    student_profile__tuition_enrollments__department=department,
+                    student_profile__tuition_enrollments__is_active=True,
+                    student_profile__tuition_enrollments__teacher__user__username__icontains=search,
+                )
+            queryset = queryset.filter(search_q).distinct()
 
         paginator = Paginator(
             queryset,
@@ -394,12 +427,96 @@ class TuitionAccountListCreateView(
             safe_page
         )
 
+        page_users = list(page_object.object_list)
+        if page_users:
+            user_ids = [u.id for u in page_users]
+            role_links_by_uid = {
+                rl.user_id: rl
+                for rl in UserDepartmentRole.objects.filter(
+                    user_id__in=user_ids,
+                    department=department,
+                    role=role,
+                )
+            }
+            for u in page_users:
+                u._prefetched_role_link = role_links_by_uid.get(u.id)
+
+            if role == User.Role.TEACHER:
+                teacher_ids = []
+                for u in page_users:
+                    try:
+                        teacher_ids.append(u.teacher_profile.id)
+                    except Exception:
+                        pass
+                caps_by_tid = {}
+                if teacher_ids:
+                    for cap in (
+                        TuitionTeacherCapability.objects
+                        .filter(department=department, teacher_id__in=teacher_ids)
+                        .select_related("subject")
+                        .order_by("subject__sort_order", "subject__name")
+                    ):
+                        caps_by_tid.setdefault(cap.teacher_id, []).append(cap)
+                    t_counts = {
+                        row["teacher_id"]: row["cnt"]
+                        for row in TuitionEnrollment.objects.filter(
+                            department=department,
+                            teacher_id__in=teacher_ids,
+                            is_active=True,
+                        ).values("teacher_id").annotate(cnt=Count("id"))
+                    }
+                else:
+                    t_counts = {}
+                for u in page_users:
+                    try:
+                        tid = u.teacher_profile.id
+                        u._prefetched_capabilities = caps_by_tid.get(tid, [])
+                        u._prefetched_active_enrollment_count = t_counts.get(tid, 0)
+                    except Exception:
+                        u._prefetched_capabilities = []
+                        u._prefetched_active_enrollment_count = 0
+            elif role == User.Role.STUDENT:
+                student_ids = []
+                for u in page_users:
+                    try:
+                        student_ids.append(u.student_profile.id)
+                    except Exception:
+                        pass
+                enrollments_by_sid = {}
+                if student_ids:
+                    active_schedules_prefetch = Prefetch(
+                        "schedules",
+                        queryset=TuitionSchedule.objects.filter(is_active=True).order_by("weekday", "start_time"),
+                        to_attr="prefetched_active_schedules",
+                    )
+                    for enr in (
+                        TuitionEnrollment.objects
+                        .filter(
+                            department=department,
+                            student_id__in=student_ids,
+                            is_active=True,
+                        )
+                        .select_related("student__user", "teacher__user", "class_level", "subject")
+                        .prefetch_related(active_schedules_prefetch)
+                        .order_by("subject__sort_order", "custom_subject_name", "id")
+                    ):
+                        enrollments_by_sid.setdefault(enr.student_id, []).append(enrollment_payload(enr))
+                for u in page_users:
+                    try:
+                        sid = u.student_profile.id
+                        enr_list = enrollments_by_sid.get(sid, [])
+                        u._prefetched_active_enrollments = enr_list
+                        u._prefetched_active_enrollment_count = len(enr_list)
+                    except Exception:
+                        u._prefetched_active_enrollments = []
+                        u._prefetched_active_enrollment_count = 0
+
         results = [
             tuition_account_payload(
                 user,
                 department,
             )
-            for user in page_object.object_list
+            for user in page_users
         ]
 
         counts = {
@@ -999,15 +1116,15 @@ class TuitionOptionsView(APIView):
         department = request.tuition_department
 
         teachers = []
-
-        for teacher in tuition_teacher_queryset(
-            department
-        ):
-            capabilities = list(
+        teacher_list = list(tuition_teacher_queryset(department))
+        teacher_ids = [t.id for t in teacher_list]
+        caps_by_tid = {}
+        if teacher_ids:
+            for row in (
                 TuitionTeacherCapability.objects
                 .filter(
                     department=department,
-                    teacher=teacher,
+                    teacher_id__in=teacher_ids,
                     is_active=True,
                 )
                 .select_related("subject")
@@ -1016,11 +1133,17 @@ class TuitionOptionsView(APIView):
                     "subject__name",
                 )
                 .values(
+                    "teacher_id",
                     "subject_id",
                     "subject__name",
                     "subject__code",
                 )
-            )
+            ):
+                tid = row.pop("teacher_id")
+                caps_by_tid.setdefault(tid, []).append(row)
+
+        for teacher in teacher_list:
+            capabilities = caps_by_tid.get(teacher.id, [])
 
             teachers.append({
                 "id": teacher.id,
@@ -1296,6 +1419,13 @@ class TuitionEnrollmentListCreateView(
                 "teacher__user",
                 "class_level",
                 "subject",
+            )
+            .prefetch_related(
+                Prefetch(
+                    "schedules",
+                    queryset=TuitionSchedule.objects.filter(is_active=True).order_by("weekday", "start_time"),
+                    to_attr="prefetched_active_schedules",
+                )
             )
             .order_by(
                 "student__user__first_name",
@@ -4085,6 +4215,13 @@ class TuitionAttendanceListCreateView(APIView):
         )
 
         try:
+            from salary.views import invalidate_salary_preview_cache
+
+            invalidate_salary_preview_cache(department.id, date_value.year, date_value.month)
+        except Exception:
+            pass
+
+        try:
             notify_tuition_update(
                 department=department,
                 event="tuition_attendance_updated",
@@ -4127,7 +4264,14 @@ class TuitionAttendanceDetailView(APIView):
             item = TuitionAttendance.objects.get(id=attendance_id, department=department)
         except TuitionAttendance.DoesNotExist:
             return Response({"detail": "Attendance record not found."}, status=status.HTTP_404_NOT_FOUND)
+        att_date = item.date
         item.delete()
+        try:
+            from salary.views import invalidate_salary_preview_cache
+
+            invalidate_salary_preview_cache(department.id, att_date.year, att_date.month)
+        except Exception:
+            pass
         return Response({"detail": "Attendance deleted successfully."})
 
 # ============================================================

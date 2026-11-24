@@ -109,6 +109,67 @@ export interface ReconciliationBatchResult {
   scanned_at: string;
 }
 
+export interface PaginatedVerificationsResponse {
+  count: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  next: string | null;
+  previous: string | null;
+  results: SalaryAttendanceVerification[];
+}
+
+export async function fetchVerificationsPage(params: {
+  department_id: number;
+  year?: number;
+  month?: number;
+  status?: string;
+  teacher_id?: number;
+  student_id?: number;
+  date?: string;
+  search?: string;
+  page?: number;
+  page_size?: number;
+  signal?: AbortSignal;
+}): Promise<PaginatedVerificationsResponse> {
+  const query = new URLSearchParams();
+  query.append("department_id", String(params.department_id));
+  if (params.year) query.append("year", String(params.year));
+  if (params.month) query.append("month", String(params.month));
+  if (params.status) query.append("status", params.status);
+  if (params.teacher_id) query.append("teacher_id", String(params.teacher_id));
+  if (params.student_id) query.append("student_id", String(params.student_id));
+  if (params.date) query.append("date", params.date);
+  if (params.search && params.search.trim()) query.append("search", params.search.trim());
+  query.append("page", String(params.page ?? 1));
+  query.append("page_size", String(params.page_size ?? 50));
+
+  const res: any = await authenticatedRequest(
+    `/api/salary/verifications/?${query.toString()}`,
+    params.signal ? { signal: params.signal } : undefined
+  );
+  if (Array.isArray(res)) {
+    return {
+      count: res.length,
+      page: 1,
+      page_size: res.length || (params.page_size ?? 50),
+      total_pages: 1,
+      next: null,
+      previous: null,
+      results: res,
+    };
+  }
+  return {
+    count: Number(res?.count ?? 0),
+    page: Number(res?.page ?? params.page ?? 1),
+    page_size: Number(res?.page_size ?? params.page_size ?? 50),
+    total_pages: Math.max(1, Number(res?.total_pages ?? 1)),
+    next: res?.next ?? null,
+    previous: res?.previous ?? null,
+    results: Array.isArray(res?.results) ? res.results : [],
+  };
+}
+
 export async function fetchVerifications(params: {
   department_id: number;
   year?: number;

@@ -8,12 +8,13 @@ logger = logging.getLogger("salary.views")
 from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import connection, models, transaction
-from django.db.models import Max, Prefetch
+from django.db.models import Count, Max, Prefetch, Q
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError as DRFValidationError
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -86,9 +87,11 @@ from salary.serializers import (
     DepartmentStudentSerializer,
     DepartmentTeacherSerializer,
     RatePreviewRequestSerializer,
+    PayrollEarningLineSerializer,
     SalaryAttendanceAuditSerializer,
     SalaryAttendanceVerificationSerializer,
     SalaryCalculationPreviewRequestSerializer,
+    SalaryPayrollPeriodSummarySerializer,
     SalaryPlanTierRateSerializer,
     SalaryPlanTierBasicSalarySerializer,
     SalaryPolicySerializer,
@@ -876,7 +879,12 @@ class SalaryPolicyVersionViewSet(viewsets.ModelViewSet):
     """
     queryset = (
         SalaryPolicyVersion.objects.select_related("policy", "policy__department", "policy__institution", "published_by")
-        .prefetch_related("rate_tiers", "teaching_plans", "plan_tier_rates")
+        .prefetch_related(
+            "rate_tiers",
+            "teaching_plans",
+            Prefetch("plan_tier_rates", queryset=SalaryPlanTierRate.objects.select_related("teaching_plan", "rate_tier")),
+            Prefetch("plan_tier_basic_salaries", queryset=SalaryPlanTierBasicSalary.objects.select_related("teaching_plan", "rate_tier")),
+        )
         .all()
     )
     serializer_class = SalaryPolicyVersionDetailSerializer
@@ -2607,6 +2615,27 @@ class RatePreviewView(APIView):
         return Response(result.to_dict(), status=status.HTTP_200_OK if result.is_resolved else status.HTTP_422_UNPROCESSABLE_ENTITY)
 
 
+class SalaryAttendanceVerificationPagination(PageNumberPagination):
+    """Bounded server-side pagination for Stage 4 Attendance Verification."""
+
+    page_size = 50
+    page_size_query_param = "page_size"
+    max_page_size = 200
+
+    def get_paginated_response(self, data):
+        return Response(
+            {
+                "count": self.page.paginator.count,
+                "page": self.page.number,
+                "page_size": self.get_page_size(self.request),
+                "total_pages": self.page.paginator.num_pages,
+                "next": self.get_next_link(),
+                "previous": self.get_previous_link(),
+                "results": data,
+            }
+        )
+
+
 class SalaryAttendanceVerificationViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Department-scoped attendance verification list, detail, and resolution endpoint.
@@ -2614,6 +2643,20 @@ class SalaryAttendanceVerificationViewSet(viewsets.ReadOnlyModelViewSet):
     """
     permission_classes = [IsAuthenticated, IsSalaryPolicyAdminOrReadOnly]
     serializer_class = SalaryAttendanceVerificationSerializer
+    pagination_class = SalaryAttendanceVerificationPagination
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        use_pagination = any(
+            k in request.query_params for k in ("page", "page_size", "paginate")
+        )
+        if use_pagination:
+            page = self.paginate_queryset(queryset)
+            if page is not None:
+                serializer = self.get_serializer(page, many=True)
+                return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def get_object(self):
         """
@@ -2647,6 +2690,7 @@ class SalaryAttendanceVerificationViewSet(viewsets.ReadOnlyModelViewSet):
             "student",
             "student__user",
             "substitute_teacher",
+            "substitute_teacher__user",
             "resolved_by",
         ).prefetch_related("audit_logs", "audit_logs__actor")
 
@@ -2695,6 +2739,24 @@ class SalaryAttendanceVerificationViewSet(viewsets.ReadOnlyModelViewSet):
         student_id = self.request.query_params.get("student_id") or self.request.query_params.get("student")
         if student_id:
             qs = qs.filter(student_id=student_id)
+
+        # Exact date filter
+        class_date = self.request.query_params.get("date") or self.request.query_params.get("class_date")
+        if class_date:
+            qs = qs.filter(class_date=class_date)
+
+        # Server-side search across teacher name, student name, or occurrence key
+        search_q = (self.request.query_params.get("search") or self.request.query_params.get("q") or "").strip()
+        if search_q:
+            qs = qs.filter(
+                Q(teacher__user__first_name__icontains=search_q)
+                | Q(teacher__user__last_name__icontains=search_q)
+                | Q(teacher__user__username__icontains=search_q)
+                | Q(student__user__first_name__icontains=search_q)
+                | Q(student__user__last_name__icontains=search_q)
+                | Q(student__user__username__icontains=search_q)
+                | Q(occurrence_key__icontains=search_q)
+            )
 
         ordered_qs = qs.order_by("-class_date", "scheduled_time", "id")
 
@@ -2802,6 +2864,7 @@ class SalaryAttendanceVerificationViewSet(viewsets.ReadOnlyModelViewSet):
                 reason=reason,
                 source_evidence_snapshot=verification.source_evidence_snapshot,
             )
+            invalidate_salary_preview_cache(dept.id, year, month, teacher_id=verification.teacher_id)
 
         return Response(
             SalaryAttendanceVerificationSerializer(verification).data,
@@ -2983,6 +3046,14 @@ class AttendanceBulkResolveView(APIView):
                 )
 
                 resolved_ids.append(vid)
+
+            if resolved_ids:
+                affected_periods = {
+                    (records_by_id[vid].class_date.year, records_by_id[vid].class_date.month)
+                    for vid in resolved_ids
+                }
+                for y, m in affected_periods:
+                    invalidate_salary_preview_cache(dept.id, y, m)
 
         return Response({
             "success": True,
@@ -3207,13 +3278,18 @@ class SalaryCalculationPreviewView(APIView):
         summary_only = serializer.validated_data.get("summary_only", False)
         force_refresh = serializer.validated_data.get("force_refresh", False)
 
-        dept_ver = cache.get(f"salary_calc_preview_dept_ver_{department.id}", 1)
-        preview_ver = cache.get(f"salary_calc_preview_ver_{department.id}_{year}_{month}", 1)
-        cache_key = f"salary_calc_preview_{department.id}_{year}_{month}_dv{dept_ver}_v{preview_ver}_{teacher_id or 'all'}_{summary_only}"
-        if not force_refresh:
-            cached_result = cache.get(cache_key)
-            if cached_result is not None:
-                return Response(cached_result, status=status.HTTP_200_OK)
+        cache_key = None
+        try:
+            dept_ver = cache.get(f"salary_calc_preview_dept_ver_{department.id}", 1)
+            preview_ver = cache.get(f"salary_calc_preview_ver_{department.id}_{year}_{month}", 1)
+            cache_key = f"salary_calc_preview_{department.id}_{year}_{month}_dv{dept_ver}_v{preview_ver}_{teacher_id or 'all'}_{summary_only}"
+            if not force_refresh:
+                cached_result = cache.get(cache_key)
+                if cached_result is not None:
+                    return Response(cached_result, status=status.HTTP_200_OK)
+        except Exception as cache_err:
+            logger.warning("Salary preview cache read skipped: %s", cache_err)
+            cache_key = None
 
         preview_result = calculate_department_salary_preview(
             department=department,
@@ -3223,7 +3299,11 @@ class SalaryCalculationPreviewView(APIView):
             summary_only=summary_only,
         )
 
-        cache.set(cache_key, preview_result, timeout=180)
+        if cache_key:
+            try:
+                cache.set(cache_key, preview_result, timeout=180)
+            except Exception as cache_err:
+                logger.warning("Salary preview cache write skipped: %s", cache_err)
         return Response(preview_result, status=status.HTTP_200_OK)
 
 
@@ -3302,37 +3382,63 @@ class SalaryAdjustmentCategoryViewSet(viewsets.ModelViewSet):
         serializer.save(department=department, institution=department.institution, is_system_default=False)
 
 
+def _atomic_bump_preview_version(ver_key: str) -> None:
+    """Atomically increment a cache version key across workers (Redis-safe)."""
+    try:
+        cache.add(ver_key, 1, timeout=None)
+        cache.incr(ver_key)
+    except Exception:
+        try:
+            current = cache.get(ver_key, 1)
+            cache.set(ver_key, int(current) + 1, timeout=None)
+        except Exception:
+            pass
+
+
 def invalidate_department_salary_preview_cache(department_id):
-    """Bump department-wide preview cache version when policies, versions, assignments, or overrides mutate."""
+    """Bump department-wide preview cache version after commit when policies, versions, assignments, or overrides mutate."""
     if not department_id:
         return
     ver_key = f"salary_calc_preview_dept_ver_{int(department_id)}"
-    try:
-        current = cache.get(ver_key, 1)
-        cache.set(ver_key, int(current) + 1, timeout=None)
-    except Exception:
-        pass
+    transaction.on_commit(lambda: _atomic_bump_preview_version(ver_key))
 
 
 def invalidate_salary_preview_cache(department_id, year, month, teacher_id=None):
-    """Invalidate calculation preview cache entries when adjustments or attendance mutate."""
-    ver_key = f"salary_calc_preview_ver_{int(department_id)}_{int(year)}_{int(month)}"
-    try:
-        current = cache.get(ver_key, 1)
-        cache.set(ver_key, int(current) + 1, timeout=None)
-    except Exception:
-        pass
-    cache.delete(f"salary_calc_preview_{department_id}_{year}_{month}_all_True")
-    cache.delete(f"salary_calc_preview_{department_id}_{year}_{month}_all_False")
-    if teacher_id:
-        cache.delete(f"salary_calc_preview_{department_id}_{year}_{month}_{teacher_id}_True")
-        cache.delete(f"salary_calc_preview_{department_id}_{year}_{month}_{teacher_id}_False")
+    """Invalidate calculation preview cache entries after commit when adjustments, attendance, or schedules mutate."""
+    if not department_id or not year or not month:
+        return
+    dept_id_int = int(department_id)
+    year_int = int(year)
+    month_int = int(month)
+    ver_key = f"salary_calc_preview_ver_{dept_id_int}_{year_int}_{month_int}"
+
+    def _do_invalidate():
+        _atomic_bump_preview_version(ver_key)
+        try:
+            cache.delete(f"salary_calc_preview_{dept_id_int}_{year_int}_{month_int}_all_True")
+            cache.delete(f"salary_calc_preview_{dept_id_int}_{year_int}_{month_int}_all_False")
+            if teacher_id:
+                cache.delete(f"salary_calc_preview_{dept_id_int}_{year_int}_{month_int}_{teacher_id}_True")
+                cache.delete(f"salary_calc_preview_{dept_id_int}_{year_int}_{month_int}_{teacher_id}_False")
+        except Exception:
+            pass
+
+    transaction.on_commit(_do_invalidate)
 
 
 class PayrollAdjustmentViewSet(viewsets.ModelViewSet):
     """CRUD operations for individual teacher salary adjustments with full audit history."""
     serializer_class = PayrollAdjustmentSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        if getattr(self, "action", None) in {"list", "retrieve"}:
+            cat_map = {}
+            for c in SalaryAdjustmentCategory.objects.only("code", "name"):
+                cat_map.setdefault(c.code, c.name)
+            ctx["category_name_map"] = cat_map
+        return ctx
 
     def get_queryset(self):
         user = self.request.user
@@ -3346,7 +3452,11 @@ class PayrollAdjustmentViewSet(viewsets.ModelViewSet):
             return PayrollAdjustment.objects.none()
         target_dept_id = auth_dept_id
 
-        qs = PayrollAdjustment.objects.all().select_related("teacher", "teacher__user", "department", "created_by", "cancelled_by")
+        qs = (
+            PayrollAdjustment.objects.all()
+            .select_related("teacher", "teacher__user", "department", "created_by", "cancelled_by")
+            .prefetch_related("audit_logs", "audit_logs__actor")
+        )
         if target_dept_id:
             qs = qs.filter(department_id=target_dept_id)
         if role == User.Role.INSTITUTION_ADMIN and user.institution_id:
@@ -4275,9 +4385,15 @@ class SalaryPayrollPeriodViewSet(viewsets.ReadOnlyModelViewSet):
         if role in {User.Role.TEACHER, User.Role.STUDENT, User.Role.COORDINATOR}:
             raise PermissionDenied("You are not authorized to view or manage department payrolls.")
 
+    def _wants_summary_only(self):
+        val = str(self.request.query_params.get("summary_only") or "").strip().lower()
+        return val in {"1", "true", "yes"}
+
     def get_serializer_class(self):
         if self.action == "list":
             return SalaryPayrollPeriodListSerializer
+        if self.action == "retrieve" and self._wants_summary_only():
+            return SalaryPayrollPeriodSummarySerializer
         return SalaryPayrollPeriodSerializer
 
     def get_queryset(self):
@@ -4288,15 +4404,20 @@ class SalaryPayrollPeriodViewSet(viewsets.ReadOnlyModelViewSet):
 
         qs = SalaryPayrollPeriod.objects.all().select_related("department", "institution", "submitted_by", "created_by", "approved_by")
         if getattr(self, "action", None) == "retrieve":
+            tp_qs = TeacherPayroll.objects.select_related(
+                "teacher",
+                "teacher__user",
+                "applied_policy",
+                "applied_policy_version",
+            ).order_by("id")
+            if self._wants_summary_only():
+                tp_qs = tp_qs.annotate(earning_lines_count=Count("earning_lines"))
+            else:
+                tp_qs = tp_qs.prefetch_related("earning_lines")
             return qs.prefetch_related(
                 Prefetch(
                     "teacher_payrolls",
-                    queryset=TeacherPayroll.objects.select_related(
-                        "teacher",
-                        "teacher__user",
-                        "applied_policy",
-                        "applied_policy_version",
-                    ).prefetch_related("earning_lines"),
+                    queryset=tp_qs,
                 )
             )
 
@@ -4338,7 +4459,7 @@ class SalaryPayrollPeriodViewSet(viewsets.ReadOnlyModelViewSet):
             if user_inst_id and period.institution_id != user_inst_id:
                 raise PermissionDenied("Cross-institution access denied.")
 
-        serializer = SalaryPayrollPeriodSerializer(period)
+        serializer = self.get_serializer(period)
         return Response(serializer.data)
 
     @action(detail=False, methods=["post"], url_path="draft")
@@ -4415,6 +4536,7 @@ class SalaryPayrollPeriodViewSet(viewsets.ReadOnlyModelViewSet):
             msg = exc.message_dict if hasattr(exc, "message_dict") else (exc.messages if hasattr(exc, "messages") else str(exc))
             return Response({"detail": msg}, status=status.HTTP_400_BAD_REQUEST)
 
+        invalidate_salary_preview_cache(period.department_id, period.payroll_year, period.payroll_month)
         return Response(SalaryPayrollPeriodSerializer(updated_period).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="submit")
@@ -4705,19 +4827,51 @@ class TeacherPayrollViewSet(viewsets.ReadOnlyModelViewSet):
 
         return qs.order_by("-payroll_period__payroll_year", "-payroll_period__payroll_month", "teacher_id")
 
-    @action(detail=True, methods=["get"], url_path="slip_pdf")
-    def slip_pdf(self, request, pk=None):
-        """Generate and stream professional itemized salary slip PDF."""
-        tp = self.get_object()
+    def _authorize_teacher_payroll_read(self, request, tp):
         user = request.user
         role = str(getattr(user, "role", "") or "").lower()
-
         if role == User.Role.TEACHER and tp.teacher.user_id != user.id:
             raise PermissionDenied("You can only access your own salary slip.")
         if role == User.Role.DEPARTMENT_ADMIN and not is_user_department_admin_for_department(user, tp.payroll_period.department_id):
             raise PermissionDenied("Cross-department access denied.")
         if role == User.Role.INSTITUTION_ADMIN and user.institution_id and tp.payroll_period.institution_id != user.institution_id:
             raise PermissionDenied("Cross-institution access denied.")
+
+    @action(detail=True, methods=["get"], url_path="earning_lines")
+    def earning_lines(self, request, pk=None):
+        """On-demand paginated/bounded retrieval of PayrollEarningLine rows for a single TeacherPayroll."""
+        tp = self.get_object()
+        self._authorize_teacher_payroll_read(request, tp)
+
+        qs = tp.earning_lines.all().order_by("effective_date", "id")
+        earning_type = request.query_params.get("earning_type")
+        if earning_type:
+            qs = qs.filter(earning_type=earning_type)
+
+        paginator = PageNumberPagination()
+        paginator.page_size = 100
+        paginator.page_size_query_param = "page_size"
+        paginator.max_page_size = 500
+        page = paginator.paginate_queryset(qs, request, view=self)
+        serializer = PayrollEarningLineSerializer(page, many=True)
+        return Response(
+            {
+                "teacher_payroll_id": tp.id,
+                "count": paginator.page.paginator.count,
+                "page": paginator.page.number,
+                "page_size": paginator.get_page_size(request),
+                "total_pages": paginator.page.paginator.num_pages,
+                "next": paginator.get_next_link(),
+                "previous": paginator.get_previous_link(),
+                "results": serializer.data,
+            }
+        )
+
+    @action(detail=True, methods=["get"], url_path="slip_pdf")
+    def slip_pdf(self, request, pk=None):
+        """Generate and stream professional itemized salary slip PDF."""
+        tp = self.get_object()
+        self._authorize_teacher_payroll_read(request, tp)
 
         pdf_bytes = generate_salary_slip_pdf(tp)
         filename = f"SalarySlip_{tp.payroll_period.payroll_year}_{tp.payroll_period.payroll_month:02d}_Teacher_{tp.teacher_id}.pdf"

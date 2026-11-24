@@ -50,6 +50,7 @@ export interface TeacherPayroll {
   is_calculation_complete: boolean;
   completeness_notes: string[];
   revision: number;
+  earning_lines_count?: number;
   earning_lines?: PayrollEarningLine[];
 }
 
@@ -155,14 +156,17 @@ export interface FinancialImpactDiff {
   }>;
 }
 
-export async function getPayrollPeriods(params?: {
-  department_id?: number;
-  payroll_year?: number;
-  payroll_month?: number;
-  year?: number;
-  month?: number;
-  status?: string;
-}): Promise<SalaryPayrollPeriod[]> {
+export async function getPayrollPeriods(
+  params?: {
+    department_id?: number;
+    payroll_year?: number;
+    payroll_month?: number;
+    year?: number;
+    month?: number;
+    status?: string;
+  },
+  opts?: { signal?: AbortSignal }
+): Promise<SalaryPayrollPeriod[]> {
   const query = new URLSearchParams();
   if (params?.department_id) query.set("department_id", String(params.department_id));
   const yearVal = params?.payroll_year ?? params?.year;
@@ -178,12 +182,52 @@ export async function getPayrollPeriods(params?: {
   if (params?.status) query.set("status", params.status);
 
   const qs = query.toString();
-  const res = (await authenticatedRequest(`/api/salary/payrolls/${qs ? `?${qs}` : ""}`)) as any;
+  const res = (await authenticatedRequest(
+    `/api/salary/payrolls/${qs ? `?${qs}` : ""}`,
+    opts?.signal ? { signal: opts.signal } : undefined
+  )) as any;
   return Array.isArray(res) ? res : res.results || [];
 }
 
-export async function getPayrollPeriod(id: number): Promise<SalaryPayrollPeriod> {
-  return await authenticatedRequest(`/api/salary/payrolls/${id}/`);
+export async function getPayrollPeriod(
+  id: number,
+  opts?: { summaryOnly?: boolean; signal?: AbortSignal }
+): Promise<SalaryPayrollPeriod> {
+  const qs = opts?.summaryOnly ? "?summary_only=true" : "";
+  return await authenticatedRequest(
+    `/api/salary/payrolls/${id}/${qs}`,
+    opts?.signal ? { signal: opts.signal } : undefined
+  );
+}
+
+export interface PaginatedPayrollEarningLinesResponse {
+  teacher_payroll_id: number;
+  count: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  next: string | null;
+  previous: string | null;
+  results: PayrollEarningLine[];
+}
+
+export async function getTeacherPayrollEarningLines(
+  teacherPayrollId: number,
+  params?: {
+    page?: number;
+    page_size?: number;
+    earning_type?: string;
+    signal?: AbortSignal;
+  }
+): Promise<PaginatedPayrollEarningLinesResponse> {
+  const query = new URLSearchParams();
+  query.set("page", String(params?.page ?? 1));
+  query.set("page_size", String(params?.page_size ?? 100));
+  if (params?.earning_type) query.set("earning_type", params.earning_type);
+  return await authenticatedRequest(
+    `/api/salary/teacher-payrolls/${teacherPayrollId}/earning_lines/?${query.toString()}`,
+    params?.signal ? { signal: params.signal } : undefined
+  );
 }
 
 export async function createDraftPayroll(payload: {

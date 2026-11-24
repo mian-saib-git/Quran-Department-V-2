@@ -1,4 +1,6 @@
-from datetime import timedelta, time
+from datetime import datetime, timedelta, time, timezone as dt_timezone
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from django.test import TestCase
 from django.utils import timezone
@@ -27,7 +29,7 @@ class TeacherRetirementWorkflowTests(TestCase):
             user=self.student_user, teacher=self.teacher, department=self.department, institution=self.institution,
             class_status=StudentProfile.ClassStatus.ON_LEAVE,
         )
-        self.today = timezone.localdate()
+        self.today = timezone.localdate(timezone=ZoneInfo("Asia/Karachi"))
         self.schedule = ClassSchedule.objects.create(
             student=self.student, teacher=self.teacher, weekday=ClassSchedule.WeekDay.MONDAY,
             time_slot=time(14, 0), is_active=True, effective_from=self.today - timedelta(days=15),
@@ -296,3 +298,14 @@ class TeacherRetirementWorkflowTests(TestCase):
         night = [{"weekday": "sunday", "time_slot": "23:45", "duration_minutes": 30}]
         monday_morning = [{"weekday": "monday", "time_slot": "00:00", "duration_minutes": 30}]
         self.assertFalse(candidate_is_available(night, monday_morning))
+
+    def test_transfer_uses_pkt_business_date_across_utc_midnight(self):
+        # 2026-11-22 20:00 UTC is 2026-11-23 01:00 PKT (next calendar day in Asia/Karachi).
+        utc_evening = datetime(2026, 11, 22, 20, 0, 0, tzinfo=dt_timezone.utc)
+        with patch("accounts.teacher_retirement_service.timezone.now", return_value=utc_evening):
+            transferred = self._transfer()
+        self.assertEqual(transferred.status_code, 200, transferred.data)
+        self.schedule.refresh_from_db()
+        self.assertEqual(self.schedule.effective_to.isoformat(), "2026-11-22")
+        new_sched = ClassSchedule.objects.get(student=self.student, teacher=self.destination, is_active=True)
+        self.assertEqual(new_sched.effective_from.isoformat(), "2026-11-23")
